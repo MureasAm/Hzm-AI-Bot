@@ -216,3 +216,19 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# 环境变量（包含你的 API Key）
+.env
+.env.prod
+*.env
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# 虚拟环境（这个文件夹很大，而且每个人的环境不同，没必要上传）
+.venv/
+venv/
+
+# NapCat 相关配置
+napcat/
