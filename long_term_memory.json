@@ -1,0 +1,24 @@
+{
+  "2891616516": {
+    "total_interactions": 13,
+    "last_seen": "2026-07-18T09:01:23.486882",
+    "relationship_level": "familiar",
+    "impressions": [
+      {
+        "tag": "喜欢催播",
+        "confidence": 0.8,
+        "last_updated": "2026-07-18T06:55:21.122580"
+      }
+    ]
+  },
+  "2903874648": {
+    "total_interactions": 12,
+    "last_seen": "2026-07-18T09:07:38.827572",
+    "relationship_level": "familiar"
+  },
+  "2375436108": {
+    "total_interactions": 1,
+    "last_seen": "2026-07-18T09:07:25.097023",
+    "relationship_level": "stranger"
+  }
+}
