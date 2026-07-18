@@ -1,7 +1,7 @@
 {
   "2891616516": {
-    "total_interactions": 13,
-    "last_seen": "2026-07-18T09:01:23.486882",
+    "total_interactions": 15,
+    "last_seen": "2026-07-18T12:31:23.192423",
     "relationship_level": "familiar",
     "impressions": [
       {
@@ -17,8 +17,18 @@
     "relationship_level": "familiar"
   },
   "2375436108": {
-    "total_interactions": 1,
-    "last_seen": "2026-07-18T09:07:25.097023",
-    "relationship_level": "stranger"
+    "total_interactions": 4,
+    "last_seen": "2026-07-18T12:22:11.669664",
+    "relationship_level": "acquaintance"
+  },
+  "2178088153": {
+    "total_interactions": 14,
+    "last_seen": "2026-07-18T12:37:14.710007",
+    "relationship_level": "familiar"
+  },
+  "1745464731": {
+    "total_interactions": 5,
+    "last_seen": "2026-07-18T12:54:03.442563",
+    "relationship_level": "acquaintance"
   }
 }
