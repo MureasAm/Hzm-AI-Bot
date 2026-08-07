@@ -1,33 +1,70 @@
 import json
 import os
 from openai import OpenAI
+from pathlib import Path
+
+# 项目根目录（scripts/ 的上一级），所有路径基于它构建
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+ENV_FILE = PROJECT_ROOT / ".env.prod"
+
+def get_deepseek_key():
+    if ENV_FILE.exists():
+        with open(ENV_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("OPENAI_API_KEY"):
+                    return line.split("=")[1].replace('"', '').strip()
+    return None
 
 # ================= 配置区（修改这里）=================
-API_KEY = "sk-9368c72e666d4afa8d4f85e3e81eeed7"
+API_KEY = get_deepseek_key()
+if not API_KEY:
+    raise ValueError("❌ 未能在 .env.prod 中找到 OPENAI_API_KEY，请检查文件！")
+
 BASE_URL = "https://api.deepseek.com"
-MODEL = "deepseek-chat"  # 或 deepseek-reasoner
+MODEL = "deepseek-v4-flash"
 
 # 输入文件路径
-TRANSCRIPT_FILE = "input_transcript.json"          # 你的转写 JSON
-OLD_SYSTEM_PROMPT = "persona/system_prompt.txt"    # 线上最新版人设提示词
+TRANSCRIPT_FILE = PROJECT_ROOT / "data" / "input_transcript.json"      # 你的转写 JSON
+OLD_SYSTEM_PROMPT = PROJECT_ROOT / "persona" / "system_prompt.txt"     # 线上最新版人设提示词
 
 # 中间产物输出路径
-QA_OUTPUT_FILE = "qa_pairs.json"
-PERSONA_ANALYSIS_FILE = "persona_analysis.md"
-NEW_SYSTEM_PROMPT_FILE = "system_prompt_suggestion.md"
-MERGED_SYSTEM_PROMPT = "persona/system_prompt_upgraded.txt"   # 升级版
+QA_OUTPUT_FILE = PROJECT_ROOT / "data" / "qa_pairs.json"
+PERSONA_ANALYSIS_FILE = PROJECT_ROOT / "outputs" / "persona_analysis.md"
+NEW_SYSTEM_PROMPT_FILE = PROJECT_ROOT / "outputs" / "system_prompt_suggestion.md"
+MERGED_SYSTEM_PROMPT = PROJECT_ROOT / "persona" / "system_prompt_upgraded.txt"   # 升级版
 
 # 提示词模板路径
-PROMPT_STEP1 = "prompt_step1.txt"
-PROMPT_STEP2 = "prompt_step2.txt"
-PROMPT_STEP3 = "prompt_step3.txt"
-PROMPT_FUSION = "prompt_fusion.txt"
+PROMPT_STEP1 = PROJECT_ROOT / "prompts" / "prompt_step1.txt"
+PROMPT_STEP2 = PROJECT_ROOT / "prompts" / "prompt_step2.txt"
+PROMPT_STEP3 = PROJECT_ROOT / "prompts" / "prompt_step3.txt"
+PROMPT_FUSION = PROJECT_ROOT / "prompts" / "prompt_fusion.txt"
 
 client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
 # ===================================================
 
+def read_file_safe(filepath):
+    """
+    安全读取文件，自动尝试常见编码：
+    UTF-8 with BOM、UTF-8、GBK、GB2312
+    若全部失败则抛出异常
+    """
+    encodings = ['utf-8-sig', 'utf-8', 'gbk', 'gb2312']
+    for enc in encodings:
+        try:
+            with open(filepath, 'r', encoding=enc) as f:
+                content = f.read()
+            # 如果读取成功，检查内容是否为空（可能是编码错误导致乱码）
+            if content.strip():  # 非空
+                return content
+        except UnicodeDecodeError:
+            continue
+        except Exception as e:
+            # 其他异常直接抛出
+            raise e
+    raise ValueError(f"无法使用任何已知编码读取文件：{filepath}，请检查文件编码是否为 UTF-8 或 GBK。")
+
 def load_transcript(filepath):
-    """加载转写 JSON"""
+    """加载转写 JSON（JSON 必须为 UTF-8，不做自动编码检测）"""
     with open(filepath, "r", encoding="utf-8") as f:
         data = json.load(f)
     if isinstance(data, list):
@@ -58,10 +95,9 @@ def extract_json_from_response(content):
 # ---------- 核心步骤 ----------
 def step1_generate_qa(transcript):
     print("[Step 1] 生成 QA 对话对...")
-    with open(PROMPT_STEP1, "r", encoding="utf-8") as f:
-        prompt = f.read()
+    prompt_template = read_file_safe(PROMPT_STEP1)
     transcript_str = json.dumps(transcript, ensure_ascii=False, indent=2)
-    full_prompt = prompt + "\n\n【转写文本】\n" + transcript_str
+    full_prompt = prompt_template + "\n\n【转写文本】\n" + transcript_str
 
     content = call_api(full_prompt)
     try:
@@ -70,14 +106,13 @@ def step1_generate_qa(transcript):
         return qa_pairs
     except json.JSONDecodeError as e:
         print(f"[Step 1] JSON 解析失败: {e}")
-        with open("step1_raw_output.txt", "w", encoding="utf-8") as f:
+        with open(PROJECT_ROOT / "outputs" / "step1_raw_output.txt", "w", encoding="utf-8") as f:
             f.write(content)
         raise
 
 def step2_analyze_persona(qa_pairs):
     print("[Step 2] 生成人格切面分析...")
-    with open(PROMPT_STEP2, "r", encoding="utf-8") as f:
-        template = f.read()
+    template = read_file_safe(PROMPT_STEP2)
     qa_json_str = json.dumps(qa_pairs, ensure_ascii=False, indent=2)
     prompt = template.replace("{qa_json}", qa_json_str)
 
@@ -87,8 +122,7 @@ def step2_analyze_persona(qa_pairs):
 
 def step3_generate_system_prompt(qa_pairs, persona_analysis):
     print("[Step 3] 生成系统提示词草案...")
-    with open(PROMPT_STEP3, "r", encoding="utf-8") as f:
-        template = f.read()
+    template = read_file_safe(PROMPT_STEP3)
     qa_json_str = json.dumps(qa_pairs, ensure_ascii=False, indent=2)
     prompt = template.replace("{qa_json}", qa_json_str).replace("{persona_analysis}", persona_analysis)
 
@@ -101,18 +135,14 @@ def step4_fusion(old_prompt_path, new_prompt_path, output_path):
     # 检查旧提示词是否存在
     if not os.path.exists(old_prompt_path):
         print(f"[Step 4] 警告：旧版提示词 {old_prompt_path} 不存在，将直接使用新草案作为最终版本。")
-        with open(new_prompt_path, "r", encoding="utf-8") as f:
-            new_content = f.read()
+        new_content = read_file_safe(new_prompt_path)
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(new_content)
         return new_content
 
-    with open(old_prompt_path, "r", encoding="utf-8") as f:
-        old_prompt = f.read()
-    with open(new_prompt_path, "r", encoding="utf-8") as f:
-        new_prompt = f.read()
-    with open(PROMPT_FUSION, "r", encoding="utf-8") as f:
-        template = f.read()
+    old_prompt = read_file_safe(old_prompt_path)
+    new_prompt = read_file_safe(new_prompt_path)
+    template = read_file_safe(PROMPT_FUSION)
 
     full_prompt = template.replace("{old_system_prompt}", old_prompt).replace("{new_system_prompt}", new_prompt)
     merged = call_api(full_prompt, max_tokens=4096)

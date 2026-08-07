@@ -1,9 +1,13 @@
 import json
+import threading
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, Any
 
-MEMORY_FILE = Path("long_term_memory.json")
+MEMORY_FILE = Path(__file__).resolve().parent / "data" / "long_term_memory.json"
+
+# 长期记忆文件锁：保证「读-改-写」原子化，防止多消息并发互相覆盖
+_memory_lock = threading.Lock()
 
 # 关系等级阈值
 RELATION_LEVELS = {
@@ -36,10 +40,9 @@ def get_user_memory(user_id: str) -> dict:
     memory = load_memory()
     return memory.get(user_id, {})
 
-def update_user_memory(user_id: str, updates: dict) -> None:
-    """增量合并更新用户记忆"""
-    memory = load_memory()
-    card = memory.get(user_id, {})
+def merge_memory_card(card: dict, updates: dict) -> dict:
+    """纯函数：将 updates 增量合并到记忆卡，返回新的卡片。不做任何 IO。"""
+    card = dict(card)  # 浅拷贝，避免污染外部引用
 
     # 基础统计
     card["total_interactions"] = card.get("total_interactions", 0) + 1
@@ -48,16 +51,19 @@ def update_user_memory(user_id: str, updates: dict) -> None:
     # 合并 impressions (标签)
     if updates.get("new_impression"):
         impressions = card.setdefault("impressions", [])
+        impressions = [dict(imp) if isinstance(imp, dict) else imp for imp in impressions]
         new_imp = updates["new_impression"]
         found = False
-        for imp in impressions:
+        for i, imp in enumerate(impressions):
             tag = imp["tag"] if isinstance(imp, dict) else imp
             if tag == new_imp:
                 if isinstance(imp, dict):
+                    imp = dict(imp)
                     imp["confidence"] = min(1.0, imp.get("confidence", 0.8) + 0.1)
                     imp["last_updated"] = datetime.now().isoformat()
+                    impressions[i] = imp
                 else:
-                    impressions[impressions.index(imp)] = {
+                    impressions[i] = {
                         "tag": new_imp,
                         "confidence": 0.9,
                         "last_updated": datetime.now().isoformat()
@@ -70,6 +76,7 @@ def update_user_memory(user_id: str, updates: dict) -> None:
                 "confidence": 0.8,
                 "last_updated": datetime.now().isoformat()
             })
+        card["impressions"] = impressions
 
     # 合并用户事实
     if updates.get("new_user_fact"):
@@ -124,8 +131,17 @@ def update_user_memory(user_id: str, updates: dict) -> None:
     else:
         card.setdefault("relationship_level", "stranger")
 
-    memory[user_id] = card
-    save_memory(memory)
+    return card
+
+
+def update_user_memory(user_id: str, updates: dict) -> None:
+    """增量合并更新用户记忆（读-改-写全程持锁）"""
+    with _memory_lock:
+        memory = load_memory()
+        card = memory.get(user_id, {})
+        card = merge_memory_card(card, updates)
+        memory[user_id] = card
+        save_memory(memory)
 
 def build_memory_context(card: dict) -> str:
     """将记忆卡转化为提示文本"""

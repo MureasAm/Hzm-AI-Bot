@@ -4,6 +4,11 @@ from pathlib import Path
 from openai import AsyncOpenAI
 import re
 
+# 项目根目录（scripts/ 的上一级），所有路径基于它构建
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+ENV_FILE = PROJECT_ROOT / ".env.prod"
+OUTPUT_VECTOR_FILE = PROJECT_ROOT / "data" / "corpus_vectors.json"
+
 def clean_timestamps(text: str) -> str:
     """
     删除场景化陈述中的时间描述杂质，并清理残留的生成痕迹。
@@ -251,9 +256,8 @@ RAW_CORPUS = [
 
 # 2. 从 .env.prod 中手动读取 ZHIPU_API_KEY
 def get_zhipu_key():
-    env_path = Path(".env.prod")
-    if env_path.exists():
-        with open(env_path, "r", encoding="utf-8") as f:
+    if ENV_FILE.exists():
+        with open(ENV_FILE, "r", encoding="utf-8") as f:
             for line in f:
                 if line.startswith("ZHIPU_API_KEY"):
                     return line.split("=")[1].replace('"', '').strip()
@@ -287,10 +291,10 @@ async def main():
             return
 
     # 保存为最终的数据库文件
-    with open("corpus_vectors.json", "w", encoding="utf-8") as f:
+    with open(OUTPUT_VECTOR_FILE, "w", encoding="utf-8") as f:
         json.dump(vectorized_db, f, ensure_ascii=False, indent=2)
-        
-    print("\n✅ 恭喜！`corpus_vectors.json` 向量数据库成功生成！小满记住这些了。")
+
+    print(f"\n✅ 恭喜！`{OUTPUT_VECTOR_FILE.name}` 向量数据库成功生成！小满记住这些了。")
 
 if __name__ == "__main__":
     asyncio.run(main())

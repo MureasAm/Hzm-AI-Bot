@@ -16,11 +16,15 @@ from generate_vectors import RAW_CORPUS
 # 配置
 # ==========================
 
-def get_deepseek_key():
-    env_path = Path(".env.prod")
+# 项目根目录（scripts/ 的上一级），所有路径基于它构建
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+ENV_FILE = PROJECT_ROOT / ".env.prod"
+PERSONA_DIR = PROJECT_ROOT / "persona"   # 人格 JSON 统一输出到 persona/
 
-    if env_path.exists():
-        with open(env_path, "r", encoding="utf-8") as f:
+
+def get_deepseek_key():
+    if ENV_FILE.exists():
+        with open(ENV_FILE, "r", encoding="utf-8") as f:
             for line in f:
                 if line.startswith("OPENAI_API_KEY"):
                     return line.split("=")[1].replace('"', '').strip()
@@ -171,7 +175,7 @@ async def analyze_persona():
 
 
     response = await client.chat.completions.create(
-        model="deepseek-chat",
+        model="deepseek-v4-flash",
 
         messages=[
             {
@@ -211,7 +215,7 @@ async def analyze_persona():
 
 
     with open(
-        "persona_traits.json",
+        PERSONA_DIR / "persona_traits.json",
         "w",
         encoding="utf-8"
     ) as f:
@@ -225,7 +229,7 @@ async def analyze_persona():
 
 
     with open(
-        "persona_styles.json",
+        PERSONA_DIR / "persona_styles.json",
         "w",
         encoding="utf-8"
     ) as f:
@@ -239,7 +243,7 @@ async def analyze_persona():
 
 
     with open(
-        "persona_behaviors.json",
+        PERSONA_DIR / "persona_behaviors.json",
         "w",
         encoding="utf-8"
     ) as f:
@@ -254,7 +258,7 @@ async def analyze_persona():
 
     print("✅ 人格拆分完成")
     print("")
-    print("生成:")
+    print(f"已写入 {PERSONA_DIR} :")
     print(" - persona_traits.json")
     print(" - persona_styles.json")
     print(" - persona_behaviors.json")
