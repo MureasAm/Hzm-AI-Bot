@@ -144,29 +144,38 @@ response:
 # 调用模型分析
 # ==========================
 
-async def analyze_persona():
+def _load_corpus(input_path):
+    """加载场景化陈述列表。input_path 为空用 generate_vectors 的内置 RAW_CORPUS。"""
+    if not input_path:
+        from generate_vectors import RAW_CORPUS  # 惰性导入，避免 run_tool 一 import 就连带拉入
+        return RAW_CORPUS
+    with open(input_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    if isinstance(data, list):
+        return data
+    raise ValueError(f"无法识别的场景化陈述结构: {input_path}")
 
-    global client
+
+async def run(input_path: str | None = None, out_dir: str | None = None):
+    """参数化入口（供 run_tool 调用）。"""
+    out = Path(out_dir) if out_dir else PERSONA_DIR
+    corpus = _load_corpus(input_path)
 
     key = get_deepseek_key()
-
     if not key:
         print("❌ 未找到 OPENAI_API_KEY")
         return
-
 
     client = AsyncOpenAI(
         api_key=key,
         base_url="https://api.deepseek.com/v1"
     )
 
-
     # 合并素材
-
     corpus_text = "\n\n".join(
         [
             f"【事件{i+1}】\n{x['statement']}"
-            for i, x in enumerate(RAW_CORPUS)
+            for i, x in enumerate(corpus)
         ]
     )
 
@@ -215,7 +224,7 @@ async def analyze_persona():
 
 
     with open(
-        PERSONA_DIR / "persona_traits.json",
+        out / "persona_traits.json",
         "w",
         encoding="utf-8"
     ) as f:
@@ -229,7 +238,7 @@ async def analyze_persona():
 
 
     with open(
-        PERSONA_DIR / "persona_styles.json",
+        out / "persona_styles.json",
         "w",
         encoding="utf-8"
     ) as f:
@@ -243,7 +252,7 @@ async def analyze_persona():
 
 
     with open(
-        PERSONA_DIR / "persona_behaviors.json",
+        out / "persona_behaviors.json",
         "w",
         encoding="utf-8"
     ) as f:
@@ -258,13 +267,15 @@ async def analyze_persona():
 
     print("✅ 人格拆分完成")
     print("")
-    print(f"已写入 {PERSONA_DIR} :")
+    print(f"已写入 {out} :")
     print(" - persona_traits.json")
     print(" - persona_styles.json")
     print(" - persona_behaviors.json")
 
 
+async def main():
+    await run()
+
 
 if __name__ == "__main__":
-
-    asyncio.run(analyze_persona())
+    asyncio.run(main())

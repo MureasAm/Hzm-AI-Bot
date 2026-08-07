@@ -15,14 +15,20 @@ from .constants import (
     DEFAULT_MODEL, THINKING_DISABLED,
     CHAT_TEMPERATURE, CHAT_MAX_TOKENS,
     MEMORY_EXTRACT_TEMPERATURE, MEMORY_EXTRACT_MAX_TOKENS,
+    VOICE_SAMPLE_REPLY_TRIM_CHARS,
 )
-from .persona import load_persona_rules, build_global_persona_context, match_behaviors_semantic
+from .persona import load_persona_rules, build_global_persona_context
 from .memory import (
     get_user_history, append_user_history,
     get_user_memory, update_user_memory, build_memory_context,
     MEMORY_EXTRACT_PROMPT,
 )
-from .rag import embed_query, retrieve_semantic_contexts
+from .rag import embed_query
+from .retrieval import (
+    retrieve_corpus, retrieve_voice_samples, retrieve_behaviors, retrieve_phrases,
+    fuse_and_truncate,
+)
+from .constants import PHRASE_PHASES_MAX
 
 # ==================== 💬 经典梗硬匹配库 ====================
 LEGENDARY_REPLIES = {
@@ -80,26 +86,59 @@ def _get_model_name() -> str:
         return DEFAULT_MODEL
 
 
-def build_message_list(user_msg: str, global_persona: str, matched_behavior: str,
-                       retrieved_context: str, memory_context: str, user_history: list) -> list:
-    """按优先级组装发送给模型的消息列表。"""
+def _trim_text(text: str, max_chars: int) -> str:
+    """裁剪长文本，超长加省略号。"""
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + "……"
+
+
+def _split_fused(fused_items):
+    """把融合结果按源分组：behavior / corpus / voice_sample / phrase。"""
+    behaviors, corpus, samples, phrases = [], [], [], []
+    for it in fused_items:
+        if it.source == "behavior":
+            behaviors.append(it)
+        elif it.source == "corpus":
+            corpus.append(it)
+        elif it.source == "voice_sample":
+            samples.append(it)
+        elif it.source == "phrase":
+            phrases.append(it)
+    return behaviors, corpus, samples, phrases
+
+
+def build_message_list(user_msg: str, global_persona: str, fused_items: list,
+                       memory_context: str, user_history: list) -> list:
+    """按优先级组装发送给模型的消息列表。
+
+    fused_items 为三路融合后的 RetrievalItem 列表，按源分组注入。
+    """
     messages = []
     base_system = SYSTEM_PROMPT
     if global_persona:
         base_system += "\n\n" + global_persona
     messages.append({"role": "system", "content": base_system})
 
-    if matched_behavior:
-        messages.append({
-            "role": "system",
-            "content": f"【当前情境下的行为指令】请严格按此模式回应：\n{matched_behavior}"
-        })
+    behaviors, corpus, samples, phrases = _split_fused(fused_items)
 
-    if retrieved_context:
-        messages.append({
-            "role": "system",
-            "content": f"【历史记忆片段（模仿语气，勿复读）】:\n{retrieved_context}"
-        })
+    # 行为指令（source=behavior）
+    if behaviors:
+        behavior_text = "\n\n".join(it.text for it in behaviors if it.text)
+        if behavior_text:
+            messages.append({
+                "role": "system",
+                "content": f"【当前情境下的行为指令】请严格按此模式回应：\n{behavior_text}"
+            })
+
+    # 直播记忆（source=corpus）
+    if corpus:
+        context = "\n".join(f"- {it.text}" for it in corpus if it.text)
+        if context:
+            messages.append({
+                "role": "system",
+                "content": f"【历史记忆片段（模仿语气，勿复读）】:\n{context}"
+            })
 
     # 长期记忆注入
     if memory_context:
@@ -122,6 +161,42 @@ def build_message_list(user_msg: str, global_persona: str, matched_behavior: str
             "role": "system",
             "content": f"{label}\n{context}"
         })
+
+    # 措辞指纹（source=phrase）：同一意思用她的真实原话锚定，不自创措辞
+    if phrases:
+        phrase_blocks = []
+        for it in phrases:
+            usage = it.extra.get("usage", "")
+            phs = it.extra.get("phrases", [])[:PHRASE_PHASES_MAX]
+            if phs:
+                block = f"· {it.extra.get('meaning', it.item_id)}：{'、'.join(phs)}"
+                if usage:
+                    block += f"（{usage}）"
+                phrase_blocks.append(block)
+        if phrase_blocks:
+            messages.append({
+                "role": "system",
+                "content": "【她的固定说法】以下情景她说这些话。表达同类意思时用这些原话组织，不要自创解释性措辞：\n" + "\n".join(phrase_blocks)
+            })
+
+    # 声音样本 few-shot（source=voice_sample）：示范灰泽满"怎么说话"
+    if samples:
+        messages.append({
+            "role": "system",
+            "content": "【灰泽满的说话方式参考】以下是她真实的对话片段。模仿其中的语气、断句、省略号和括号用法（括号只在情感强烈时用），内容要针对当前话题不要复述示例。日常回复保持短句（30字内），简短干脆。"
+        })
+        for it in samples:
+            user_part = it.extra.get("user", "")
+            reply_part = it.extra.get("reply", "")
+            if user_part and reply_part:
+                messages.append({"role": "user", "content": user_part})
+                messages.append({"role": "assistant", "content": _trim_text(reply_part, VOICE_SAMPLE_REPLY_TRIM_CHARS)})
+
+    # 极简长度提醒：一句一停，不展开
+    messages.append({
+        "role": "system",
+        "content": "【回复节奏】日常闲聊：一句话说完就停，不再补第二句。30字内。"
+    })
 
     messages.append({"role": "user", "content": user_msg})
     return messages
@@ -154,6 +229,9 @@ async def update_memory_task(user_id: str, user_msg: str, reply: str, user_memor
             user_msg=user_msg,
             reply=reply
         )
+        # V1：停用 self_fact 提取。灰泽满的"自我"应来自真人素材（voice_samples/corpus），
+        # 而不是聊天时临时编造的自我披露，防止 AI 自嗨污染长期人格。
+        prompt += "\n【本轮的强制规则】new_self_fact 一律返回 null。只提取关于用户的信息（new_impression / new_user_fact），不要从灰泽满的回复中提取任何自我披露内容。"
         resp = await deepseek_client.chat.completions.create(
             model=_get_model_name(),
             messages=[{"role": "user", "content": prompt}],
@@ -183,27 +261,27 @@ async def handle_chat(user_id: str, user_msg: str) -> str:
         if trigger in user_msg:
             return random.choice(replies)
 
-    # --- 💾 短期记忆 ---
-    user_history = get_user_history(user_id)
-
-    # --- 🎭 人格规则 + 行为匹配 ---
+    # --- 🎭 人格规则 ---
     traits, styles, behaviors = load_persona_rules()
     global_persona = build_global_persona_context(traits, styles)
-    # 一次 embedding：query 向量供行为匹配与 RAG 共用
+
+    # --- 🔍 V3 三路检索 + 融合（query 只算 1 次 embedding） ---
     _, zhipu_client = _get_clients()
     query_vector = await embed_query(zhipu_client, user_msg)
-    matched_behavior = await match_behaviors_semantic(user_msg, query_vector, behaviors)
+    corpus_items = retrieve_corpus(user_msg, query_vector)
+    sample_items = retrieve_voice_samples(user_msg, query_vector)
+    behavior_items = retrieve_behaviors(user_msg, query_vector, behaviors)
+    phrase_items = retrieve_phrases(user_msg, query_vector)
+    fused_items = fuse_and_truncate(corpus_items, sample_items, behavior_items, phrase_items)
 
-    # --- 📚 RAG 记忆 ---
-    retrieved_context = await retrieve_semantic_contexts(user_msg, query_vector)
-
-    # --- 🧠 长期记忆 ---
+    # --- 🧠 确定性两路记忆 ---
     user_memory_card = get_user_memory(user_id)
     memory_context = build_memory_context(user_memory_card)
+    user_history = get_user_history(user_id)
 
     # --- 🧩 构建消息列表 ---
     messages = build_message_list(
-        user_msg, global_persona, matched_behavior, retrieved_context, memory_context, user_history
+        user_msg, global_persona, fused_items, memory_context, user_history
     )
 
     # --- 🤖 调用大模型 ---

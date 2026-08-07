@@ -112,15 +112,20 @@ async def match_behaviors_semantic(user_query: str, query_vector, behaviors: lis
             best_rule = b
 
     if best_rule and best_sim >= threshold:
-        name = best_rule.get("name", "")
-        desc = best_rule.get("response", "")
-        trigger_desc = best_rule.get("trigger", "")
-        parts = []
-        if name:
-            parts.append(f"【{name}】")
-        if trigger_desc:
-            parts.append(f"触发情境：{trigger_desc}")
-        if desc:
-            parts.append(f"回应模式：{desc}")
-        return "\n".join(parts)
+        return _format_behavior_rule(best_rule)
     return ""
+
+
+def _format_behavior_rule(rule: dict) -> str:
+    """将一条行为规则格式化为注入文本。供 match_behaviors_semantic 与检索层共用。"""
+    name = rule.get("name", "")
+    desc = rule.get("response", "")
+    trigger_desc = rule.get("trigger", "")
+    parts = []
+    if name:
+        parts.append(f"【{name}】")
+    if trigger_desc:
+        parts.append(f"触发情境：{trigger_desc}")
+    if desc:
+        parts.append(f"回应模式：{desc}")
+    return "\n".join(parts)

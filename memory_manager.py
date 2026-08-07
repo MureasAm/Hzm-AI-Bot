@@ -9,14 +9,6 @@ MEMORY_FILE = Path(__file__).resolve().parent / "data" / "long_term_memory.json"
 # 长期记忆文件锁：保证「读-改-写」原子化，防止多消息并发互相覆盖
 _memory_lock = threading.Lock()
 
-# 关系等级阈值
-RELATION_LEVELS = {
-    "stranger": 0,
-    "acquaintance": 3,
-    "familiar": 8,
-    "close": 30
-}
-
 def load_memory() -> dict:
     """加载整个记忆文件，空文件或格式错误时返回空字典"""
     if not MEMORY_FILE.exists():
@@ -90,6 +82,8 @@ def merge_memory_card(card: dict, updates: dict) -> dict:
             user_facts.append(new_fact_obj)
 
     # 合并自我披露
+    # 注意：V1 起不再从 AI 回复提取 self_fact（防止 AI 自嗨污染真实人格）。
+    # 只保留显式传入的 self_fact（例如从真人素材蒸馏而来），提取流程在 core.py 停用。
     if updates.get("new_self_fact"):
         self_facts = card.setdefault("self_facts", [])
         new_sf = updates["new_self_fact"]
@@ -110,27 +104,6 @@ def merge_memory_card(card: dict, updates: dict) -> dict:
         if len(moments) > 5:
             moments.pop(0)
 
-    # 关系变化处理
-    if updates.get("relationship_change"):
-        change = updates["relationship_change"]
-        current_level = card.get("relationship_level", "stranger")
-        if change in ("warmed_up", "first_emotional") and current_level != "close":
-            levels = ["stranger", "acquaintance", "familiar", "close"]
-            idx = levels.index(current_level) if current_level in levels else 0
-            if idx < len(levels) - 1:
-                card["relationship_level"] = levels[idx + 1]
-
-    # 根据互动次数自动调整等级
-    interactions = card.get("total_interactions", 0)
-    if interactions >= RELATION_LEVELS["close"]:
-        card["relationship_level"] = "close"
-    elif interactions >= RELATION_LEVELS["familiar"]:
-        card["relationship_level"] = "familiar"
-    elif interactions >= RELATION_LEVELS["acquaintance"]:
-        card["relationship_level"] = "acquaintance"
-    else:
-        card.setdefault("relationship_level", "stranger")
-
     return card
 
 
@@ -148,22 +121,7 @@ def build_memory_context(card: dict) -> str:
     if not card:
         return ""
 
-    level = card.get("relationship_level", "stranger")
     parts = []
-
-    # 关系等级 → 语气提示 + 动作限制 + 心虚限制
-    if level == "close":
-        parts.append('【关系】很熟悉的老朋友。可以放松防御，少用括号，偶尔说真话，允许使用"我"自称。')
-        parts.append("【动作限制】禁止使用揉眼睛。禁止使用心虚。被催播时用自嘲代替心虚。")
-    elif level == "familiar":
-        parts.append("【关系】来过不少次的绿冻。比对新粉随意，可以少一点心虚。")
-        parts.append("【动作限制】禁止使用揉眼睛。尽量少用心虚，每3轮最多1次。")
-    elif level == "acquaintance":
-        parts.append("【关系】见过几次的绿冻，保持标准防御模式，但不用太戒备。")
-        parts.append("【动作限制】尽量不要揉眼睛，你不是刚睡醒。心虚每2轮最多1次。")
-    else:
-        parts.append("【关系】新面孔，用标准防御模式。")
-        parts.append("【动作限制】允许首次回复揉眼睛一次。被催播时可以心虚。")
 
     # 印象标签
     impressions = card.get("impressions", [])
@@ -246,7 +204,6 @@ MEMORY_EXTRACT_PROMPT = """
   "new_impression": "对用户的长期印象标签，如'上班族''学生''夜猫子'。一次性的状态不要提取，无则null",
   "new_user_fact": "用户透露的长期身份或爱好，如'做设计的''在考研'。瞬间状态不要记录，无则null",
   "new_self_fact": "你向用户新透露的关于自己的真实事实，无则null",
-  "new_moment": "如果本轮对话有特殊意义，写简短摘要，无则null",
-  "relationship_change": null 或 "warmed_up" 或 "first_emotional"
+  "new_moment": "如果本轮对话有特殊意义，写简短摘要，无则null"
 }}
 """

@@ -53,9 +53,35 @@ python bot.py
 
 语音转写（可选）
 如果你需要从直播录播生成转写文本：
-scripts/run_whisper.bat
+scripts/run_whisper.bat  （拖入音频，或用 `python scripts/run_tool.py transcribe <音频>`）
 
-> 所有离线脚本统一从项目根目录执行，例如 `python scripts/generate_vectors.py`。
+## 离线工具箱
+
+统一入口：`python scripts/run_tool.py <工具> [参数]`（旧脚本仍可直接运行，新入口为推荐用法）
+
+| 工具 | 干什么 | 常用示例 |
+|---|---|---|
+| transcribe | 音频 → 原始转写 JSON | `run_tool transcribe assets/audio/live1.mp3` |
+| clean-transcript | 原始转写 → 清洗后（合并碎片/修错字/加标点） | `run_tool clean-transcript -i outputs/transcribe/live1_raw.json` |
+| analyze-pace | 清洗后转写 → 节奏地图（可多场合并） | `run_tool analyze-pace -i outputs/transcribe/cleaned.json --session 第一场` |
+| generate-vectors | 场景化陈述 → 语料向量库 | `run_tool generate-vectors` |
+| generate-persona | 场景化陈述 → 人格三件套 | `run_tool generate-persona` |
+| precompute | 预计算 trigger/声音样本/措辞向量 | `run_tool precompute --all` |
+| pipeline | 四步人格蒸馏流水线 | `run_tool pipeline -i outputs/transcribe/live1.json` |
+| regression | 回复灵性回归测试 | `run_tool regression --ab` |
+
+**典型工作流**
+1. 转写：`run_tool transcribe assets/audio/live1.mp3`
+2. 清洗：`run_tool clean-transcript -i outputs/transcribe/live1_raw.json`
+3. 节奏地图（多场合并）：`run_tool analyze-pace -i outputs/transcribe/cleaned.json --session 第一场`，第二场加 `--merge`
+4. 向量化：`run_tool generate-vectors && run_tool precompute --all`
+5. 蒸馏：`run_tool pipeline -i outputs/transcribe/cleaned.json`
+
+**目录分工**
+- `assets/` 放你的原始素材（`audio/` 音频、`transcripts/` 转写）
+- `outputs/<工具>/` 放人读分析产物
+- `data/` 与 `persona/` 是机器人启动要读的缓存，路径固定，一般不用手动改
+- 改输入一律用 `-i / --input`，不用改源码
 
 项目结构
 ├── bot.py                     # 项目启动入口
@@ -108,18 +134,18 @@ scripts/run_whisper.bat
 └── tests/                     # 核心函数单元测试（pytest）
 
 人格蒸馏流水线
-收集素材：直播录播/动态
+收集素材：直播录播/动态 → 放 assets/audio/
 
-语音转写：scripts/run_whisper.bat → faster-whisper GPU 加速
+语音转写：run_tool transcribe 或 run_whisper.bat → faster-whisper GPU 加速
 
 生成场景化陈述：通过 DeepSeek + 专用提示词
 
-向量化入库：scripts/generate_vectors.py → data/corpus_vectors.json
+向量化入库：run_tool generate-vectors → data/corpus_vectors.json
 
-人格分析：scripts/generate_persona.py → 更新 persona/ 下三个 JSON
+人格分析：run_tool generate-persona → 更新 persona/ 下三个 JSON
 
-预计算 trigger 向量（改过 persona_behaviors.json 后需重跑）：
-scripts/precompute_trigger_vectors.py → data/trigger_vectors.json
+预计算向量缓存（改过 persona_behaviors.json / voice_samples.json / phrases.json 后需重跑）：
+run_tool precompute --all
 
 长期记忆设计
 为每位用户维护独立的记忆卡片，存储：

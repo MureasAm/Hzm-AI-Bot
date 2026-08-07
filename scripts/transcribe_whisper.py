@@ -9,14 +9,14 @@ from pathlib import Path
 # ===== 模型下载路径配置（修改此处可更改盘符）=====
 MODEL_DOWNLOAD_ROOT = "D:/my_ai_models/faster-whisper"
 
-def transcribe_audio_faster(audio_path, output_json_path):
+def transcribe_audio_faster(audio_path, output_json_path, language="zh", device="cuda", model="medium"):
     print(f"\n{'='*50}")
-    print("正在初始化 faster-whisper 模型 (medium, GPU 高精度模式)...")
-    
-    model_path = "medium"
+    print(f"正在初始化 faster-whisper 模型 ({model}, {device})...")
+
+    model_path = model
     model = WhisperModel(
         model_path,
-        device="cuda",
+        device=device,
         compute_type="float16",
         download_root=MODEL_DOWNLOAD_ROOT
     )
@@ -53,7 +53,7 @@ def transcribe_audio_faster(audio_path, output_json_path):
             chunk,
             beam_size=5,
             best_of=5,
-            language="zh",
+            language=language,
             vad_filter=True,
             vad_parameters=dict(
                 min_silence_duration_ms=500,
@@ -87,47 +87,57 @@ def transcribe_audio_faster(audio_path, output_json_path):
     print(f"\n✅ 完成！耗时 {elapsed:.1f} 秒。")
     print(f"结果已保存至：{output_json_path}")
 
-def process_folder(input_folder):
+# 支持的音频格式
+AUDIO_EXTS = (".mp3", ".wav", ".m4a", ".flac", ".ogg", ".aac")
+
+
+def process_folder(input_folder, out_dir=None, language="zh", device="cuda", model="medium"):
     folder_path = Path(input_folder)
     if not folder_path.exists():
         print(f"❌ 文件夹不存在：{input_folder}")
         return
-    
-    mp3_files = list(folder_path.glob("*.mp3"))
-    if not mp3_files:
-        print(f"❌ 文件夹中没有找到 .mp3 文件：{input_folder}")
+
+    audio_files = [f for f in folder_path.iterdir() if f.suffix.lower() in AUDIO_EXTS]
+    if not audio_files:
+        print(f"❌ 文件夹中没有找到音频文件（支持 {AUDIO_EXTS}）：{input_folder}")
         return
-    
-    output_folder = folder_path / "transcribed"
-    output_folder.mkdir(exist_ok=True)
-    
-    print(f"📁 找到 {len(mp3_files)} 个 mp3 文件，开始逐个处理...")
-    
-    for i, mp3_file in enumerate(mp3_files, 1):
+
+    output_folder = Path(out_dir) if out_dir else (folder_path / "transcribed")
+    output_folder.mkdir(parents=True, exist_ok=True)
+
+    print(f"📁 找到 {len(audio_files)} 个音频文件，开始逐个处理...")
+
+    for i, audio_file in enumerate(audio_files, 1):
         print(f"\n{'#'*50}")
-        print(f"正在处理第 {i}/{len(mp3_files)} 个文件：{mp3_file.name}")
-        output_path = output_folder / (mp3_file.stem + "_transcribed.json")
+        print(f"正在处理第 {i}/{len(audio_files)} 个文件：{audio_file.name}")
+        output_path = output_folder / (audio_file.stem + "_transcribed.json")
         try:
-            transcribe_audio_faster(str(mp3_file), str(output_path))
+            transcribe_audio_faster(str(audio_file), str(output_path),
+                                    language=language, device=device, model=model)
         except Exception as e:
             print(f"❌ 处理失败：{e}")
             continue
-    
-    print(f"\n🎉 全部完成！共处理 {len(mp3_files)} 个文件。")
+
+    print(f"\n🎉 全部完成！共处理 {len(audio_files)} 个文件。")
     print(f"结果保存在：{output_folder}")
 
+
+def run(input_path=None, out_dir=None, language="zh", device="cuda", model="medium"):
+    """参数化入口（供 run_tool 调用）。"""
+    path = Path(input_path) if input_path else Path("audio")
+    if path.is_dir():
+        process_folder(str(path), out_dir=out_dir, language=language, device=device, model=model)
+    elif path.is_file() and path.suffix.lower() in AUDIO_EXTS:
+        out_dir_p = Path(out_dir) if out_dir else path.parent
+        out_dir_p.mkdir(parents=True, exist_ok=True)
+        output_path = out_dir_p / (path.stem + "_transcribed.json")
+        transcribe_audio_faster(str(path), str(output_path),
+                                language=language, device=device, model=model)
+    else:
+        print(f"❌ 输入路径无效或不是音频文件：{path}")
+
+
 if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        input_path = sys.argv[1]
-    else:
-        input_path = "audio"
-    
-    input_path = Path(input_path)
-    
-    if input_path.is_dir():
-        process_folder(str(input_path))
-    elif input_path.is_file() and input_path.suffix.lower() == ".mp3":
-        output_path = input_path.stem + "_transcribed.json"
-        transcribe_audio_faster(str(input_path), str(output_path))
-    else:
-        print(f"❌ 输入路径无效或不是 mp3 文件：{input_path}")
+    import sys
+    input_path = sys.argv[1] if len(sys.argv) > 1 else None
+    run(input_path)

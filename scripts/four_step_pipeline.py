@@ -6,6 +6,22 @@ from pathlib import Path
 # 项目根目录（scripts/ 的上一级），所有路径基于它构建
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = PROJECT_ROOT / ".env.prod"
+BASE_URL = "https://api.deepseek.com"
+MODEL = "deepseek-v4-flash"
+
+# 输入文件路径
+TRANSCRIPT_FILE = PROJECT_ROOT / "data" / "input_transcript.json"      # 你的转写 JSON
+OLD_SYSTEM_PROMPT = PROJECT_ROOT / "persona" / "system_prompt.txt"     # 线上最新版人设提示词
+
+# 提示词模板路径
+PROMPT_STEP1 = PROJECT_ROOT / "prompts" / "prompt_step1.txt"
+PROMPT_STEP2 = PROJECT_ROOT / "prompts" / "prompt_step2.txt"
+PROMPT_STEP3 = PROJECT_ROOT / "prompts" / "prompt_step3.txt"
+PROMPT_FUSION = PROJECT_ROOT / "prompts" / "prompt_fusion.txt"
+
+# 惰性客户端：只有真正调用时才读取 key 并创建（避免 run_tool 一 import 就 raise）
+_client = None
+
 
 def get_deepseek_key():
     if ENV_FILE.exists():
@@ -15,32 +31,16 @@ def get_deepseek_key():
                     return line.split("=")[1].replace('"', '').strip()
     return None
 
-# ================= 配置区（修改这里）=================
-API_KEY = get_deepseek_key()
-if not API_KEY:
-    raise ValueError("❌ 未能在 .env.prod 中找到 OPENAI_API_KEY，请检查文件！")
 
-BASE_URL = "https://api.deepseek.com"
-MODEL = "deepseek-v4-flash"
-
-# 输入文件路径
-TRANSCRIPT_FILE = PROJECT_ROOT / "data" / "input_transcript.json"      # 你的转写 JSON
-OLD_SYSTEM_PROMPT = PROJECT_ROOT / "persona" / "system_prompt.txt"     # 线上最新版人设提示词
-
-# 中间产物输出路径
-QA_OUTPUT_FILE = PROJECT_ROOT / "data" / "qa_pairs.json"
-PERSONA_ANALYSIS_FILE = PROJECT_ROOT / "outputs" / "persona_analysis.md"
-NEW_SYSTEM_PROMPT_FILE = PROJECT_ROOT / "outputs" / "system_prompt_suggestion.md"
-MERGED_SYSTEM_PROMPT = PROJECT_ROOT / "persona" / "system_prompt_upgraded.txt"   # 升级版
-
-# 提示词模板路径
-PROMPT_STEP1 = PROJECT_ROOT / "prompts" / "prompt_step1.txt"
-PROMPT_STEP2 = PROJECT_ROOT / "prompts" / "prompt_step2.txt"
-PROMPT_STEP3 = PROJECT_ROOT / "prompts" / "prompt_step3.txt"
-PROMPT_FUSION = PROJECT_ROOT / "prompts" / "prompt_fusion.txt"
-
-client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
-# ===================================================
+def get_client():
+    global _client
+    if _client is not None:
+        return _client
+    api_key = get_deepseek_key()
+    if not api_key:
+        raise ValueError("❌ 未能在 .env.prod 中找到 OPENAI_API_KEY，请检查文件！")
+    _client = OpenAI(api_key=api_key, base_url=BASE_URL)
+    return _client
 
 def read_file_safe(filepath):
     """
@@ -76,7 +76,7 @@ def load_transcript(filepath):
 
 def call_api(prompt, temperature=0.7, max_tokens=4096):
     """统一调用 API，返回文本内容"""
-    resp = client.chat.completions.create(
+    resp = get_client().chat.completions.create(
         model=MODEL,
         messages=[{"role": "user", "content": prompt}],
         temperature=temperature,
@@ -153,45 +153,63 @@ def step4_fusion(old_prompt_path, new_prompt_path, output_path):
     return merged
 
 # ---------- 主流程 ----------
-def main():
+def run(transcript_file=None, old_prompt=None, out_dir=None, do_fusion=True):
+    """参数化入口（供 run_tool 调用）。空参数回落默认路径。"""
+    transcript_path = Path(transcript_file) if transcript_file else TRANSCRIPT_FILE
+    old_prompt_path = Path(old_prompt) if old_prompt else OLD_SYSTEM_PROMPT
+    out = Path(out_dir) if out_dir else Path("outputs/pipeline")
+
+    qa_out = out / "qa_pairs.json"
+    analysis_out = out / "persona_analysis.md"
+    draft_out = out / "system_prompt_suggestion.md"
+    merged_out = out / "system_prompt_upgraded.txt"
+    out.mkdir(parents=True, exist_ok=True)
+
     print("===== 四步人格蒸馏流水线启动 =====")
 
     # 1. 检查转写文件
-    if not os.path.exists(TRANSCRIPT_FILE):
-        print(f"错误：找不到转写文件 {TRANSCRIPT_FILE}")
+    if not os.path.exists(transcript_path):
+        print(f"错误：找不到转写文件 {transcript_path}")
         return
 
-    transcript = load_transcript(TRANSCRIPT_FILE)
+    transcript = load_transcript(transcript_path)
 
     # 第一步
     qa_pairs = step1_generate_qa(transcript)
-    with open(QA_OUTPUT_FILE, "w", encoding="utf-8") as f:
+    with open(qa_out, "w", encoding="utf-8") as f:
         json.dump(qa_pairs, f, ensure_ascii=False, indent=2)
 
     # 第二步
     persona_analysis = step2_analyze_persona(qa_pairs)
-    with open(PERSONA_ANALYSIS_FILE, "w", encoding="utf-8") as f:
+    with open(analysis_out, "w", encoding="utf-8") as f:
         f.write(persona_analysis)
 
     # 第三步
     new_system_prompt = step3_generate_system_prompt(qa_pairs, persona_analysis)
-    with open(NEW_SYSTEM_PROMPT_FILE, "w", encoding="utf-8") as f:
+    with open(draft_out, "w", encoding="utf-8") as f:
         f.write(new_system_prompt)
 
-    # 第四步
-    step4_fusion(
-        old_prompt_path=OLD_SYSTEM_PROMPT,
-        new_prompt_path=NEW_SYSTEM_PROMPT_FILE,
-        output_path=MERGED_SYSTEM_PROMPT
-    )
+    # 第四步（可选）
+    if do_fusion:
+        step4_fusion(
+            old_prompt_path=old_prompt_path,
+            new_prompt_path=draft_out,
+            output_path=merged_out
+        )
 
     print("\n===== 流水线完成 =====")
     print("生成文件：")
-    print(f"  - QA 对：{QA_OUTPUT_FILE}")
-    print(f"  - 人格分析：{PERSONA_ANALYSIS_FILE}")
-    print(f"  - 新草案：{NEW_SYSTEM_PROMPT_FILE}")
-    print(f"  - 升级版提示词：{MERGED_SYSTEM_PROMPT}")
-    print("\n建议：请人工审核升级版提示词，确认无误后覆盖 persona/system_prompt.txt。")
+    print(f"  - QA 对：{qa_out}")
+    print(f"  - 人格分析：{analysis_out}")
+    print(f"  - 新草案：{draft_out}")
+    if do_fusion:
+        print(f"  - 升级版提示词：{merged_out}")
+        print("\n建议：请人工审核升级版提示词，确认无误后覆盖 persona/system_prompt.txt。")
+
+
+def main():
+    run()
+
 
 if __name__ == "__main__":
     main()

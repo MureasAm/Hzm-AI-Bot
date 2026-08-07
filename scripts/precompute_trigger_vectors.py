@@ -30,23 +30,21 @@ def get_zhipu_key():
     return None
 
 
-async def main():
-    # Windows 控制台默认 GBK，强制 UTF-8 避免 emoji 打印报错
-    try:
-        sys.stdout.reconfigure(encoding="utf-8")
-    except Exception:
-        pass
+async def run(input_file: str | None = None, output_file: str | None = None):
+    """参数化入口（供 run_tool 调用）。空参数回落模块常量。"""
+    in_path = Path(input_file) if input_file else BEHAVIORS_FILE
+    out_path = Path(output_file) if output_file else OUTPUT_FILE
 
     zhipu_key = get_zhipu_key()
     if not zhipu_key:
         print("❌ 未能在 .env.prod 中找到 ZHIPU_API_KEY，请检查文件！")
         return
 
-    if not BEHAVIORS_FILE.exists():
-        print(f"❌ 未找到 {BEHAVIORS_FILE}")
+    if not in_path.exists():
+        print(f"❌ 未找到 {in_path}")
         return
 
-    with open(BEHAVIORS_FILE, "r", encoding="utf-8") as f:
+    with open(in_path, "r", encoding="utf-8") as f:
         behaviors = json.load(f)
 
     triggers = []
@@ -74,10 +72,19 @@ async def main():
             print(f"❌ 向量化失败（{t[:30]}...）: {e}")
             return
 
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+    with open(out_path, "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
 
-    print(f"\n✅ 已生成 {OUTPUT_FILE}（{len(result)} 个 trigger）")
+    print(f"\n✅ 已生成 {out_path}（{len(result)} 个 trigger）")
+
+
+async def main():
+    # Windows 控制台默认 GBK，强制 UTF-8 避免 emoji 打印报错
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+    await run()
 
 
 if __name__ == "__main__":

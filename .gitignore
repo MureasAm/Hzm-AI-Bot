@@ -155,3 +155,6 @@ venv/
 
 # NapCat 相关配置
 napcat/
+
+# 原始素材（音频大，不入库）
+assets/audio/

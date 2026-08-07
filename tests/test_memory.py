@@ -9,7 +9,6 @@ class TestMergeMemoryCard:
         card = merge_memory_card({}, {})
         assert card["total_interactions"] == 1
         assert "last_seen" in card
-        assert card["relationship_level"] == "stranger"
 
     def test_interaction_counter_increments(self):
         card = {"total_interactions": 5}
@@ -34,29 +33,6 @@ class TestMergeMemoryCard:
         assert len(card["user_facts"]) == 1
         card = merge_memory_card(card, {"new_user_fact": "养猫"})
         assert len(card["user_facts"]) == 2
-
-    def test_relationship_upgrade_on_interactions(self):
-        card = {}
-        for _ in range(3):
-            card = merge_memory_card(card, {})
-        assert card["relationship_level"] == "acquaintance"
-
-        for _ in range(8):
-            card = merge_memory_card(card, {})
-        assert card["relationship_level"] == "familiar"
-
-    def test_close_level_requires_30(self):
-        card = {}
-        for _ in range(29):
-            card = merge_memory_card(card, {})
-        assert card["relationship_level"] != "close"
-        card = merge_memory_card(card, {})
-        assert card["relationship_level"] == "close"
-
-    def test_explicit_relationship_change(self):
-        card = {"relationship_level": "acquaintance"}
-        card = merge_memory_card(card, {"relationship_change": "warmed_up"})
-        assert card["relationship_level"] == "familiar"
 
     def test_does_not_mutate_input(self):
         original = {"total_interactions": 0}

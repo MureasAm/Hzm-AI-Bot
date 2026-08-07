@@ -263,7 +263,22 @@ def get_zhipu_key():
                     return line.split("=")[1].replace('"', '').strip()
     return None
 
-async def main():
+def _load_corpus(input_path) -> list:
+    """加载场景化陈述列表。input_path 为空用内置 RAW_CORPUS。"""
+    if not input_path:
+        return RAW_CORPUS
+    with open(input_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    if isinstance(data, list):
+        return data
+    raise ValueError(f"无法识别的场景化陈述结构: {input_path}")
+
+
+async def run(input_path: str | None = None, output_file: str | None = None):
+    """参数化入口（供 run_tool 调用）。"""
+    out_path = Path(output_file) if output_file else OUTPUT_VECTOR_FILE
+    corpus = _load_corpus(input_path)
+
     zhipu_key = get_zhipu_key()
     if not zhipu_key:
         print("❌ 未能在 .env.prod 中找到 ZHIPU_API_KEY，请检查文件！")
@@ -271,12 +286,12 @@ async def main():
 
     print("🚀 正在连接智谱 AI 向量生成服务...")
     client = AsyncOpenAI(api_key=zhipu_key, base_url="https://open.bigmodel.cn/api/paas/v4/")
-    
+
     vectorized_db = []
-    
-    for i, item in enumerate(RAW_CORPUS):
+
+    for i, item in enumerate(corpus):
         try:
-            print(f"正在向量化第 {i+1}/{len(RAW_CORPUS)} 条场景化陈述...")
+            print(f"正在向量化第 {i+1}/{len(corpus)} 条场景化陈述...")
             response = await client.embeddings.create(
                 model="embedding-3",
                 input=item["statement"]
@@ -291,10 +306,15 @@ async def main():
             return
 
     # 保存为最终的数据库文件
-    with open(OUTPUT_VECTOR_FILE, "w", encoding="utf-8") as f:
+    with open(out_path, "w", encoding="utf-8") as f:
         json.dump(vectorized_db, f, ensure_ascii=False, indent=2)
 
-    print(f"\n✅ 恭喜！`{OUTPUT_VECTOR_FILE.name}` 向量数据库成功生成！小满记住这些了。")
+    print(f"\n✅ 恭喜！`{out_path.name}` 向量数据库成功生成！小满记住这些了。")
+
+
+async def main():
+    await run()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
