@@ -329,6 +329,42 @@ def _run_regression(args):
                         out_dir=str(out_dir))
 
 
+# ==================== 子命令：bili-check ====================
+
+def _add_bili_check(sub):
+    p = sub.add_parser("bili-check", help="验证 B站 UID 直播状态 + 最新动态（不依赖 bot 运行）")
+    p.add_argument("--uid", default=None,
+                   help="B站 UID（缺省读 .env.prod 的 BILI_UID）")
+    p.set_defaults(func=_run_bili_check)
+
+
+def _run_bili_check(args):
+    import sys
+    import subprocess
+    cmd = [sys.executable, str(SCRIPTS_DIR / "bili_check.py")]
+    if args.uid:
+        cmd += ["--uid", args.uid]
+    return subprocess.call(cmd)
+
+
+# ==================== 子命令：vision-test ====================
+
+def _add_vision_test(sub):
+    p = sub.add_parser("vision-test", help="验证 glm-4.6v 视觉描述（本地图片或 URL）")
+    p.add_argument("-u", "--image", required=True, help="本地图片路径或 http(s) 图链")
+    p.add_argument("--model", default=None, help="视觉模型（默认读 .env 或 glm-4.6v）")
+    p.set_defaults(func=_run_vision_test)
+
+
+def _run_vision_test(args):
+    import sys
+    import subprocess
+    cmd = [sys.executable, str(SCRIPTS_DIR / "vision_test.py"), "-u", args.image]
+    if args.model:
+        cmd += ["--model", args.model]
+    return subprocess.call(cmd)
+
+
 # ==================== 主入口 ====================
 
 def build_parser() -> argparse.ArgumentParser:
@@ -349,6 +385,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_regression(sub)
     _add_mine_phrases(sub)
     _add_generate_statements(sub)
+    _add_bili_check(sub)
+    _add_vision_test(sub)
     return parser
 
 

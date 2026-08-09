@@ -69,3 +69,34 @@ MAX_CONTEXT_CHARS = 8000           # 整体安全上限兜底
 
 # ==================== 短期记忆 ====================
 SHORT_MEMORY_LINES = 10  # 最近 5 轮，每轮 2 条（用户 + AI）；>3 轮可缓解承诺/借口遗忘
+
+# ==================== 读秒窗口（方案B：消息攒批） ====================
+# 静默窗口随机区间（真人打字回复普遍 5-10s；随机避免固定等长=机械感）
+READ_WINDOW_MIN_SECONDS = 5.0
+READ_WINDOW_MAX_SECONDS = 10.0
+
+# ==================== 分批发送（打字感） ====================
+SPLIT_REPLY_ENABLED = True     # 长回复拆成几句分开发送
+SPLIT_MIN_LEN = 10             # 回复短于该长度不拆（灰泽满短句多，阈值别太高）
+SPLIT_MAX_PARTS = 4            # 最多拆成几条消息，超出并入最后一条（防刷屏）
+# 句间延迟按内容长度模拟打字（基础 + 每字，夹 MIN~MAX，±15% 抖动）
+# 用户反馈 0.6~2.6s 太快"像涌出"，调大到 ~1.8~5s 还原打字过程
+SPLIT_DELAY_BASE_MS = 1500
+SPLIT_DELAY_PER_CHAR_MS = 100
+SPLIT_DELAY_MIN_MS = 1800
+SPLIT_DELAY_MAX_MS = 5000
+SPLIT_DELAY_JITTER = 0.15
+
+# ==================== 感知增强（路线B） ====================
+# 方向1 感知
+WEATHER_BASE_URL = "https://devapi.qweather.com"  # 和风 API Host 根；每项目专属域名，需在控制台查并配 WEATHER_BASE_URL
+WEATHER_CACHE_SECONDS = 3600      # 天气进程内缓存 1 小时，省免费额度
+WEATHER_GEO_CACHE_SECONDS = 86400  # 城市名→LocationID 解析缓存 1 天
+# 方向2 视觉
+VISION_MODEL = "glm-4.6v"         # 视觉理解模型（智谱 OpenAI 兼容；用户有免费 token）
+VISION_MAX_TOKENS = 512           # 视觉描述输出上限
+# 视觉调用关掉思考模式：glm-4.6v 默认会先推理（可拖到 9s+），关掉后秒出，消除"图片迟到"感
+VISION_THINKING_DISABLED = {"extra_body": {"thinking": {"type": "disabled"}}}
+# 方向3 B站联动
+PUSH_INTERVAL = 45                # B站轮询间隔（秒）
+BILI_STATE_FILE = PROJECT_ROOT / "data" / "bili_state.json"   # 开播/动态去重状态持久化

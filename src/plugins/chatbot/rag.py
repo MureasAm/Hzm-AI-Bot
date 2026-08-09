@@ -5,7 +5,10 @@ from .constants import VECTOR_FILE, RAG_THRESHOLD, RAG_TOP_K, EMBEDDING_MODEL
 
 
 async def embed_query(zhipu_client, text: str):
-    """对用户消息计算一次 embedding（供行为匹配与 RAG 共用）。失败返回 None。"""
+    """对用户消息计算一次 embedding（供行为匹配与 RAG 共用）。失败/空输入返回 None。"""
+    if not text or not str(text).strip():
+        print("⚠️ 空 query 跳过 embedding")
+        return None
     try:
         resp = await zhipu_client.embeddings.create(
             model=EMBEDDING_MODEL,

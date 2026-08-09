@@ -6,12 +6,20 @@ requires-python = ">=3.10, <4.0"
 dependencies = [
     "nonebot2[fastapi]>=2.5.0",
     "nonebot-adapter-onebot>=2.4.6",
+    "lunar-python>=1.4.8",
+    "bilibili-api-python>=17.4.2",
+    "httpx>=0.28",
+    "pillow>=10.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=9.0",
+    "pytest-asyncio>=0.24",
 ]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
 
 [tool.nonebot]
 plugin_dirs = ["src/plugins"]

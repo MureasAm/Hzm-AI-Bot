@@ -104,6 +104,12 @@ def merge_memory_card(card: dict, updates: dict) -> dict:
         if len(moments) > 5:
             moments.pop(0)
 
+    # 用户所在城市（天气感知用；保留最近一次，用户换城市则覆盖）
+    if updates.get("new_city"):
+        city = str(updates["new_city"]).strip()
+        if city:
+            card["weather_city"] = city
+
     # 合并承诺/约定（跨会话记住她答应过用户的事）
     if updates.get("new_promise"):
         promises = card.setdefault("promises", [])
@@ -140,6 +146,11 @@ def build_memory_context(card: dict) -> str:
         return ""
 
     parts = []
+
+    # 用户所在城市（天气感知用）
+    city = card.get("weather_city")
+    if city:
+        parts.append(f"这个绿冻在{city}。聊天气时可以自然提及TA那边的天气。")
 
     # 印象标签
     impressions = card.get("impressions", [])
@@ -235,12 +246,17 @@ MEMORY_EXTRACT_PROMPT = """
 - 判断标准：对用户明确承诺的、值得跨会话记住的事才记录；随口客套（"以后再说吧""有机会一起"）不记。
 - 无则 null
 
+**关于用户城市（new_city）**：
+- 从用户的话中提取用户**所在城市/地区**（如"我在广州""住深圳""人在悉尼"→"广州""深圳""悉尼"）。
+- 只记城市名或区划名，不记街道/小区。未提到城市则 null。
+
 返回 JSON（不要多余内容）：
 {{
   "new_impression": "对用户的长期印象标签，如'上班族''学生''夜猫子'。一次性的状态不要提取，无则null",
   "new_user_fact": "用户透露的长期身份或爱好，如'做设计的''在考研'。瞬间状态不要记录，无则null",
   "new_self_fact": "你向用户新透露的关于自己的真实事实，无则null",
   "new_promise": "你本轮对用户做出的承诺/约定，无则null",
-  "new_moment": "如果本轮对话有特殊意义，写简短摘要，无则null"
+  "new_moment": "如果本轮对话有特殊意义，写简短摘要，无则null",
+  "new_city": "用户所在城市/地区名（如'广州'），未提及则null"
 }}
 """

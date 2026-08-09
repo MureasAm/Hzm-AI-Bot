@@ -6,6 +6,7 @@
 import json
 import random
 import asyncio
+import re
 
 from nonebot import get_driver
 from openai import AsyncOpenAI
@@ -28,7 +29,12 @@ from .retrieval import (
     retrieve_corpus, retrieve_voice_samples, retrieve_behaviors, retrieve_phrases,
     fuse_and_truncate,
 )
-from .constants import PHRASE_PHASES_MAX
+from .constants import (
+    PHRASE_PHASES_MAX, SPLIT_MIN_LEN, SPLIT_MAX_PARTS,
+    SPLIT_DELAY_BASE_MS, SPLIT_DELAY_PER_CHAR_MS,
+    SPLIT_DELAY_MIN_MS, SPLIT_DELAY_MAX_MS, SPLIT_DELAY_JITTER,
+)
+from . import context_probe
 
 # ==================== 💬 经典梗硬匹配库 ====================
 LEGENDARY_REPLIES = {
@@ -93,6 +99,112 @@ def _trim_text(text: str, max_chars: int) -> str:
     return text[:max_chars] + "……"
 
 
+def split_reply(reply: str, min_len: int = SPLIT_MIN_LEN,
+                max_parts: int = SPLIT_MAX_PARTS) -> list:
+    """把长回复按句子断开发送（打字感）。短回复/单句不拆，返回单元素列表。
+
+    按句末标点（。！？…）切分；连续标点归并（"……"不断开）；
+    超出 max_parts 的碎片并入最后一段，避免刷屏。
+    聊天习惯不打句号：切分后去掉句尾的"。"（保留 ？！…）。
+    """
+    text = reply.strip().rstrip("。")  # 整条回复末尾的句号也去掉
+    if not text or len(text) < min_len:
+        return [text]
+
+    parts = re.findall(r'[^。！？…]*[。！？…]+', text)
+    tail = text[len(''.join(parts)):].strip()
+    if tail:
+        parts.append(tail)
+    # 去句号：聊天不打句号，其他标点保留
+    parts = [p.strip().rstrip("。") for p in parts if p and p.strip()]
+
+    if len(parts) <= 1:
+        return [text]
+
+    if len(parts) > max_parts:
+        parts = parts[:max_parts - 1] + [''.join(parts[max_parts - 1:]).strip()]
+    return parts
+
+
+def split_delay(part_text: str) -> float:
+    """句间发送延迟（秒）：按段落长度模拟打字 + ±15% 随机抖动，避免机械等长。"""
+    ms = SPLIT_DELAY_BASE_MS + SPLIT_DELAY_PER_CHAR_MS * len(part_text)
+    ms = max(SPLIT_DELAY_MIN_MS, min(ms, SPLIT_DELAY_MAX_MS))
+    ms *= random.uniform(1 - SPLIT_DELAY_JITTER, 1 + SPLIT_DELAY_JITTER)
+    return round(ms / 1000.0, 3)
+
+
+async def summarize_batch(msgs: list) -> str:
+    """把一批消息归纳成一两句话（说了什么 + 语气 + 意图），供模型理解整批。
+
+    只有攒批 ≥2 条才归纳（单条零额外延迟）；只归纳原文已有信息，不编造；
+    失败返回空串（调用方忽略，原文照旧）。
+    """
+    if len(msgs) < 2:
+        return ""
+    texts = []
+    for t, v in msgs:
+        if t.strip():
+            texts.append(t)
+        if v:
+            texts.append(f"[图片：{v}]")
+    prompt = (
+        "以下是用户刚刚连发的几条消息，请用一两句话概括：他们在说什么、什么语气、大致想表达什么。\n"
+        "要求：只归纳原文已有的信息，不要编造；不要逐条复述；如果是纯寒暄就直接说。\n\n"
+        f"消息：\n" + "\n".join(texts)
+    )
+    try:
+        deepseek_client, _ = _get_clients()
+        resp = await deepseek_client.chat.completions.create(
+            model=_get_model_name(),
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=80,
+            **THINKING_DISABLED,
+        )
+        return (resp.choices[0].message.content or "").strip()
+    except Exception as e:
+        print(f"⚠️ 批量归纳失败（忽略）: {e}")
+        return ""
+
+
+def clean_reply(reply: str) -> str:
+    """输出清洗：去掉开头（动作/情绪）括号前缀，整条至多保留 1 个括号。
+
+    人设规则是"每轮回复至多一个括号、日常通常不用"，但声音样本里带（小声）（心虚），
+    模型 few-shot 会学着用。这里做确定性过滤：剥掉开头"（咽口水）"这类前缀，
+    整条超过 1 个括号时只保留第一个（符合人设额度）。温度靠语气词/自嘲/省略号承载。
+    """
+    text = reply.strip()
+    # 去掉开头的连续括号前缀，如 （咽口水）你看...
+    while text.startswith("（"):
+        idx = text.find("）")
+        if idx == -1:
+            break
+        text = text[idx + 1:].lstrip()
+    if not text:
+        return reply  # 剥光了就回原样，避免空回复
+    # 若仍有 ≥2 个括号，只保留第一个，其余删除
+    matches = list(re.finditer(r'（[^）]*）', text))
+    if len(matches) >= 2:
+        first = matches[0]
+        before = text[:first.start()]
+        kept = first.group(0)
+        after = re.sub(r'（[^）]*）', '', text[first.end():])
+        text = before + kept + after
+    return text
+
+
+def _compose_record_msg(user_msg: str, vision_desc: str) -> str:
+    """短期记忆里记录的用户消息：纯图片用视觉描述兜底，图文都有则拼接。"""
+    text = user_msg.strip()
+    if not vision_desc:
+        return user_msg
+    if text:
+        return f"{text}（附图：{vision_desc}）"
+    return f"[发送图片] {vision_desc}"
+
+
 def _split_fused(fused_items):
     """把融合结果按源分组：behavior / corpus / voice_sample / phrase。"""
     behaviors, corpus, samples, phrases = [], [], [], []
@@ -109,16 +221,26 @@ def _split_fused(fused_items):
 
 
 def build_message_list(user_msg: str, global_persona: str, fused_items: list,
-                       memory_context: str, user_history: list) -> list:
+                       memory_context: str, user_history: list,
+                       vision_desc: str = "", weather_city: str = "",
+                       batch_summary: str = "") -> list:
     """按优先级组装发送给模型的消息列表。
 
     fused_items 为三路融合后的 RetrievalItem 列表，按源分组注入。
+    vision_desc 为用户消息附带的图片视觉描述（可选）。
+    weather_city 为该用户所在城市（空则用全局默认天气城市）。
+    batch_summary 为一批消息的智能归纳（可选，提示层）。
     """
     messages = []
     base_system = SYSTEM_PROMPT
     if global_persona:
         base_system += "\n\n" + global_persona
     messages.append({"role": "system", "content": base_system})
+
+    # 感知源①：当前时间/农历/天气（始终注入，占预算极少；天气按该用户所在城市）
+    now_context = context_probe.get_now_context(city=weather_city)
+    if now_context:
+        messages.append({"role": "system", "content": now_context})
 
     behaviors, corpus, samples, phrases = _split_fused(fused_items)
 
@@ -198,7 +320,19 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
         "content": "【回复节奏】日常闲聊：一句话说完就停，不再补第二句。30字内。"
     })
 
-    messages.append({"role": "user", "content": user_msg})
+    # 感知源②：图片消息——把视觉描述并入用户消息，避免空消息让模型以为"对方没说话"
+    final_user = user_msg
+    if vision_desc:
+        final_user = f"{user_msg}\n[图片：{vision_desc}]" if user_msg.strip() else f"[图片：{vision_desc}]"
+
+    # 感知源③：批量归纳（用户连发多条时，作为理解整批的提示层，原文仍完整保留）
+    if batch_summary:
+        messages.append({
+            "role": "system",
+            "content": f"【这批消息的归纳】{batch_summary}"
+        })
+
+    messages.append({"role": "user", "content": final_user})
     return messages
 
 
@@ -255,8 +389,9 @@ async def update_memory_task(user_id: str, user_msg: str, reply: str, user_memor
         traceback.print_exc()
 
 
-async def handle_chat(user_id: str, user_msg: str) -> str:
-    """处理一条用户消息，返回机器人回复。"""
+async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
+                      batch_summary: str = "") -> str:
+    """处理一条用户消息，返回机器人回复。vision_desc 为图片描述；batch_summary 为批量归纳。"""
     # --- 🃏 经典梗硬匹配 ---
     for trigger, replies in LEGENDARY_REPLIES.items():
         if trigger in user_msg:
@@ -266,32 +401,40 @@ async def handle_chat(user_id: str, user_msg: str) -> str:
     traits, styles, behaviors = load_persona_rules()
     global_persona = build_global_persona_context(traits, styles)
 
-    # --- 🔍 V3 三路检索 + 融合（query 只算 1 次 embedding） ---
+    # --- 🔍 检索 + 融合（query 只算 1 次 embedding） ---
+    # 纯图片消息（无文字）不做检索：让灰泽满直接评价图片，避免语料/行为劫持图片内容
+    query_text = user_msg.strip()
     _, zhipu_client = _get_clients()
-    query_vector = await embed_query(zhipu_client, user_msg)
-    corpus_items = retrieve_corpus(user_msg, query_vector)
-    sample_items = retrieve_voice_samples(user_msg, query_vector)
-    behavior_items = retrieve_behaviors(user_msg, query_vector, behaviors)
-    phrase_items = retrieve_phrases(user_msg, query_vector)
-    fused_items = fuse_and_truncate(corpus_items, sample_items, behavior_items, phrase_items)
+    if query_text:
+        query_vector = await embed_query(zhipu_client, query_text)
+        corpus_items = retrieve_corpus(query_text, query_vector)
+        sample_items = retrieve_voice_samples(query_text, query_vector)
+        behavior_items = retrieve_behaviors(query_text, query_vector, behaviors)
+        phrase_items = retrieve_phrases(query_text, query_vector)
+        fused_items = fuse_and_truncate(corpus_items, sample_items, behavior_items, phrase_items)
+    else:
+        fused_items = []
 
     # --- 🧠 确定性两路记忆 ---
     user_memory_card = get_user_memory(user_id)
     memory_context = build_memory_context(user_memory_card)
     user_history = get_user_history(user_id)
+    weather_city = (user_memory_card or {}).get("weather_city", "") or ""
 
     # --- 🧩 构建消息列表 ---
     messages = build_message_list(
-        user_msg, global_persona, fused_items, memory_context, user_history
+        user_msg, global_persona, fused_items, memory_context, user_history,
+        vision_desc=vision_desc, weather_city=weather_city, batch_summary=batch_summary,
     )
 
     # --- 🤖 调用大模型 ---
     reply = await generate_reply(messages)
 
-    # --- 💾 更新短期记忆（带锁） ---
-    append_user_history(user_id, user_msg, reply)
+    # --- 💾 更新短期记忆（带锁）：图片消息把视觉描述记进去，后续才记得聊过什么图 ---
+    record_msg = _compose_record_msg(user_msg, vision_desc)
+    append_user_history(user_id, record_msg, reply)
 
     # --- 📝 异步更新长期记忆 ---
-    asyncio.create_task(update_memory_task(user_id, user_msg, reply, user_memory_card))
+    asyncio.create_task(update_memory_task(user_id, record_msg, reply, user_memory_card))
 
     return reply

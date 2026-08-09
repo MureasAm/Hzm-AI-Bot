@@ -39,6 +39,14 @@
 - **记忆增强**：长期记忆加"承诺/约定"（`new_promise`）跨会话记忆；短期记忆一致性规则修复
 - **参数定稿**（见第三部分）：`CHAT_TEMPERATURE=0.85`、`CHAT_FREQUENCY_PENALTY=0.3`、`CORPUS_TOP_N=2`、`SHORT_MEMORY_LINES=10`
 
+### V5（2026-08-10）：感知增强 + 节奏系统（路线B第一弹）
+- **感知**：`context_probe.py` 时间/农历/节气/天气（lunar-python 本地 + 和风专属域名，默认墨尔本=灰泽满所在地，**按用户记城市**——对话提"我在广州"→ 长期记忆 `weather_city` → 注入该用户城市天气）
+- **视觉**：`vision.py` glm-4.6v 图片理解（Pillow 统一转 JPEG 兼容 WEBP/透明图 + `thinking:disabled` 提速 ~9s→1.7s；QQ 图链带 UA 下载）
+- **B站联动**：`bili_bridge.py` 开播翻转检测 + 动态 ID 去重 → **结构化通知推送**（开播带直播间网址、动态带原文+个人空间链接+配图），白名单过滤，状态存 `data/bili_state.json`
+- **节奏**：`chat_window.py` 读秒窗口（攒批，静默 5~10s 随机）+ 分批发送（`split_reply` 按句拆 + `split_delay` 按长度随机延迟）+ 智能归纳（`summarize_batch` 攒批先理解整体）
+- **括号根治**：样本去滥用括号（留 3 条情绪顶点示范）+ `clean_reply` 输出清洗（剥开头前缀、至多 1 个、拆段后再清）
+- 测试：117 个单测全过
+
 ---
 
 ## 第三部分：回复生成链路剖析（每一层在决定什么）
@@ -65,7 +73,7 @@
 
 **data/**：`corpus_vectors.json`（直播记忆 RAG）/ `trigger_vectors.json` / `voice_sample_vectors.json` / `phrase_vectors.json` / `memory.json`（短期）/ `long_term_memory.json`（长期）
 
-**src/plugins/chatbot/**：`core.py`（主循环组装）/ `persona.py` / `memory.py`（短期读写带锁）/ `rag.py`（embedding+余弦）/ `retrieval.py`（四路融合+预算）/ `constants.py`（所有可调参数）
+**src/plugins/chatbot/**：`core.py`（主循环组装）/ `persona.py` / `memory.py`（短期读写带锁）/ `rag.py`（embedding+余弦）/ `retrieval.py`（四路融合+预算）/ `constants.py`（所有可调参数）/ `config.py`（配置读取）/ `context_probe.py`（时间/天气感知）/ `vision.py`（glm-4.6v 视觉）/ `chat_window.py`（读秒窗口+分批发送+智能归纳）/ `bili_bridge.py`（B站联动推送）
 
 **memory_manager.py**：长期记忆卡 merge + build_memory_context + 记忆提取 prompt
 
@@ -152,12 +160,14 @@ VOICE_SAMPLE_TOP_N = 3         # few-shot 甜蜜点 2-5
 
 ## 第八部分：终极愿景（路线 B：Agent 化）
 
+> **V5 已落地"感知"部分**：时间/天气（context_probe）、看图（vision）、B站开播/动态联动（bili_bridge）+ 真人节奏（读秒窗口/分批发送/智能归纳）。剩余的是"行动/主动性"。
+
 让"灰泽满"成长为**能行动、能感知、能联动的虚拟主播 Agent**：
-- **联网**：search_web 了解事件，动态回应时事
-- **多模态**：send_image 看图、识别图片内容
-- **主动性**：主动发消息、set_reminder 提醒、check_bilibili 联动她发动态/直播
-- 架构：工具集（send_message/search_web/send_image/set_reminder/check_bilibili）+ ReAct 循环 + 意图区分 + 主动性
-- 当前人格系统（素材驱动 + 融合检索）是 Agent 化的地基——**建议进入此阶段时开新会话**（新会话读本文件接上）
+- **联网**：search_web 了解事件，动态回应时事（轻量探针已有：天气/时间/B站状态，缺通用搜索）
+- **主动性**：主动发消息、set_reminder 提醒、check_bilibili 联动她发动态/直播（B站感知已有，缺"主动发送"与"触发判断"）
+- **多模态生成**：send_image 发图（现有识图，缺生成）
+- 架构：工具集 + ReAct 循环 + 意图区分 + 主动性 + 节制（防骚扰）
+- 当前人格系统（素材驱动 + 融合检索 + 感知增强 + 真人节奏）是 Agent 化的地基——**建议进入此阶段时开新会话**（新会话读本文件接上）
 
 ---
 

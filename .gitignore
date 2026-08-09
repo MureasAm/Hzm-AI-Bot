@@ -158,3 +158,6 @@ napcat/
 
 # 原始素材（音频大，不入库）
 assets/audio/
+
+# B站联动去重状态（运行时生成，不入库）
+data/bili_state.json

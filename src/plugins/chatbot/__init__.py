@@ -2,24 +2,57 @@
 
 模块结构：
 - constants.py  路径 / API / 阈值常量
+- config.py     NoneBot 配置读取助手
+- context_probe.py  时间/农历/天气感知
 - persona.py    人格加载与语义行为匹配（trigger 向量缓存）
 - memory.py     短期记忆（带锁）+ 长期记忆封装
 - rag.py        直播记忆检索（余弦相似度）
+- vision.py     视觉理解（glm-4.6v）
 - core.py       消息处理主循环
+- chat_window.py  读秒窗口（方案B：消息攒批，回复前统一读图+归纳）
+- bili_bridge.py  B站直播/动态监听 + 私聊广播（启动时注册后台任务）
 """
 from nonebot import on_message
-from nonebot.adapters.onebot.v11 import Bot, Event, Message
-from nonebot.params import EventPlainText
+from nonebot.adapters.onebot.v11 import Bot, Event
 
-from .core import handle_chat
+from . import bili_bridge  # noqa: F401  导入即注册启动时的后台监听任务
+from . import chat_window
 
 chat = on_message(priority=10, block=True)
 
 
-@chat.handle()
-async def _handle_chat(bot: Bot, event: Event, user_msg: str = EventPlainText()):
-    user_id = event.get_user_id()
-    print(f"[收到消息] user={user_id}, msg={user_msg}")
+def _extract_image_source(msg) -> str:
+    """取消息第一张图的源：优先 url，否则 file（NapCat 缓存名），无图返回空串。
 
-    reply = await handle_chat(user_id, user_msg)
-    await chat.finish(Message(reply))
+    只取源不解析——真正的视觉解析推迟到回复前（chat_window._flush），
+    这样"读图"是读整批的一部分，而不是消息一到就秒解析。
+    """
+    for seg in msg:
+        if seg.type == "image":
+            url = seg.data.get("url") or ""
+            if url:
+                return url
+            file_ = seg.data.get("file") or ""
+            if file_:
+                return file_
+            print(f"⚠️ 图片段既无 url 也无 file: {seg.data}")
+            return ""
+    return ""
+
+
+@chat.handle()
+async def _handle_chat(bot: Bot, event: Event):
+    msg = event.get_message()
+    user_msg = msg.extract_plain_text().strip()
+    image_source = _extract_image_source(msg)
+
+    if not user_msg and not image_source:
+        return  # 真正空消息（无文字无图片），不回复
+
+    user_id = event.get_user_id()
+    is_private = getattr(event, "message_type", "private") == "private"
+    target_id = str(user_id if is_private else getattr(event, "group_id", ""))
+    print(f"[收到消息] user={user_id}, msg={user_msg[:40]!r}, img={'有' if image_source else '无'}")
+
+    # 读秒窗口（方案B）：攒批 + 静默后统一回复（含读图/归纳/分批发送）
+    chat_window.enqueue(user_id, user_msg, image_source, bot, is_private, target_id)
