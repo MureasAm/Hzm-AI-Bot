@@ -1,0 +1,2682 @@
+{
+  "sessions": [
+    "睡前电台0608"
+  ],
+  "summary": {
+    "total_turns": 70,
+    "raw_turns": 223,
+    "noise_turns": 153,
+    "avg_len": 86,
+    "scene_overview": {
+      "其他": {
+        "count": 47,
+        "main_length_tier": "long",
+        "tier_distribution": {
+          "short": 8,
+          "long": 31,
+          "medium": 8
+        },
+        "main_emotion": "low"
+      },
+      "立Flag/承诺": {
+        "count": 13,
+        "main_length_tier": "medium",
+        "tier_distribution": {
+          "medium": 6,
+          "short": 1,
+          "long": 6
+        },
+        "main_emotion": "medium"
+      },
+      "感性流露/孤独": {
+        "count": 3,
+        "main_length_tier": "medium",
+        "tier_distribution": {
+          "short": 1,
+          "medium": 2
+        },
+        "main_emotion": "medium"
+      },
+      "被夸时": {
+        "count": 2,
+        "main_length_tier": "medium",
+        "tier_distribution": {
+          "medium": 2
+        },
+        "main_emotion": "low"
+      },
+      "日常闲聊": {
+        "count": 3,
+        "main_length_tier": "long",
+        "tier_distribution": {
+          "long": 2,
+          "short": 1
+        },
+        "main_emotion": "low"
+      },
+      "分享倒霉事": {
+        "count": 2,
+        "main_length_tier": "long",
+        "tier_distribution": {
+          "long": 2
+        },
+        "main_emotion": "medium"
+      }
+    },
+    "top_phrases": [
+      {
+        "phrase": "行吧",
+        "count": 2
+      },
+      {
+        "phrase": "好绝望",
+        "count": 2
+      },
+      {
+        "phrase": "真的吗？",
+        "count": 2
+      },
+      {
+        "phrase": "爽",
+        "count": 1
+      },
+      {
+        "phrase": "终于教完了",
+        "count": 1
+      },
+      {
+        "phrase": "不过还有些东西没写完",
+        "count": 1
+      },
+      {
+        "phrase": "长书一口气",
+        "count": 1
+      },
+      {
+        "phrase": "可惜可惜",
+        "count": 1
+      },
+      {
+        "phrase": "我的大小姐",
+        "count": 1
+      },
+      {
+        "phrase": "延期三天",
+        "count": 1
+      },
+      {
+        "phrase": "只剩最后三天",
+        "count": 1
+      },
+      {
+        "phrase": "三天后我教了",
+        "count": 1
+      },
+      {
+        "phrase": "无语了",
+        "count": 1
+      },
+      {
+        "phrase": "行了",
+        "count": 1
+      },
+      {
+        "phrase": "家产都留给儿子了",
+        "count": 1
+      },
+      {
+        "phrase": "更觉得",
+        "count": 1
+      },
+      {
+        "phrase": "凄凉",
+        "count": 1
+      },
+      {
+        "phrase": "这倒也是",
+        "count": 1
+      },
+      {
+        "phrase": "是这样的",
+        "count": 1
+      },
+      {
+        "phrase": "这个能说吗？",
+        "count": 1
+      },
+      {
+        "phrase": "别到时候又爆了",
+        "count": 1
+      },
+      {
+        "phrase": "这里是个大号监狱",
+        "count": 1
+      },
+      {
+        "phrase": "是的",
+        "count": 1
+      },
+      {
+        "phrase": "还早着呢",
+        "count": 1
+      },
+      {
+        "phrase": "再也没有开口说话的机会了",
+        "count": 1
+      },
+      {
+        "phrase": "绝望真的是希望",
+        "count": 1
+      },
+      {
+        "phrase": "别抬举了",
+        "count": 1
+      },
+      {
+        "phrase": "真别抬举灰泽满了",
+        "count": 1
+      },
+      {
+        "phrase": "不敢想了",
+        "count": 1
+      },
+      {
+        "phrase": "会克制一点的",
+        "count": 1
+      }
+    ]
+  },
+  "turns": [
+    {
+      "text": "晚上好，晚上好。",
+      "len": 8,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "晚上好，晚上好。",
+      "len": 8,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "爽终于教完了两个作业，不过还有些东西没写完。",
+      "len": 22,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": [
+        "爽",
+        "终于教完了",
+        "不过还有些东西没写完"
+      ]
+    },
+    {
+      "text": "长书一口气，晚上好。晚上好，也没有做完自己的正事之前都没有尽兴地玩过游戏，因为还有两个东西没写完，可惜可惜。写蓝卡，蓝卡，蓝的卡又怎么了，我的大小姐。",
+      "len": 75,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": [
+        "长书一口气",
+        "可惜可惜",
+        "我的大小姐"
+      ]
+    },
+    {
+      "text": "感谢互联网吧，不然要预告终了。延期三天，延期三天还没开始写。对，只剩最后三天，三天后我教了。",
+      "len": 46,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "立Flag/承诺",
+      "emotion_intensity": "medium",
+      "length_tier": "medium",
+      "representative_phrases": [
+        "延期三天",
+        "只剩最后三天",
+        "三天后我教了"
+      ]
+    },
+    {
+      "text": "灰泽满这个延期真的很蹬鼻子上脸，也就是拖延挣大饭的这个情况。",
+      "len": 30,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "今天还在家庭群里面看到了满季和爸妈一起出去玩，他们放假了，一家三口其乐融融地去烧烤野营。无语了。行了，写雪冬的见长，谢谢。见长哦，是的，家产都留给儿子了。是的，也没有想回去加入的欲望。",
+      "len": 92,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "medium",
+      "length_tier": "long",
+      "representative_phrases": [
+        "无语了",
+        "行了",
+        "家产都留给儿子了"
+      ]
+    },
+    {
+      "text": "所以更觉得，看到那张照片的时候，更觉得自己的凄凉。",
+      "len": 25,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "感性流露/孤独",
+      "emotion_intensity": "medium",
+      "length_tier": "short",
+      "representative_phrases": [
+        "更觉得",
+        "凄凉"
+      ]
+    },
+    {
+      "text": "没怎么吃，没有那种标准的作息。写迪奥美乃，满满搞好自己的心情最重要。你以前最喜欢的Holo主播哈恰玛吗？就是在欧洲留学搞自闭了。是的，是的，很能理解，很能理解。幸亏这次有女同学跟灰泽满一起来这里上学，不然真没了。但不是你自己要去那里上学的吗？那没有别的。",
+      "len": 127,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "这倒也是，哈恰玛是被孤立一谋的，你也是嘛。但关键的问题就是，灰泽满反正来代属国之后没有交过什么新朋友，是这样的。",
+      "len": 56,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": [
+        "这倒也是",
+        "是这样的"
+      ]
+    },
+    {
+      "text": "写周末S见长，谢谢，谢谢。",
+      "len": 13,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "宝宝，就算以后没时间写作业了，也不要走上直播赚钱找代写这条路好吗？这个灰泽满以前都是帮别人……以前都是帮别人，这个能说吗？别到时候又爆了。",
+      "len": 69,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "medium",
+      "length_tier": "long",
+      "representative_phrases": [
+        "这个能说吗？",
+        "别到时候又爆了"
+      ]
+    },
+    {
+      "text": "应该是说，这个是灰泽满的另一条坚持道路吧，懂我意思就行。",
+      "len": 28,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "这里是个大号监狱，是的。",
+      "len": 12,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": [
+        "这里是个大号监狱",
+        "是的"
+      ]
+    },
+    {
+      "text": "女同学还不回来吗？没那么快，还早着呢。除了直播以外，再也没有开口说话的机会了。",
+      "len": 39,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "感性流露/孤独",
+      "emotion_intensity": "medium",
+      "length_tier": "medium",
+      "representative_phrases": [
+        "还早着呢",
+        "再也没有开口说话的机会了"
+      ]
+    },
+    {
+      "text": "绝望真的是希望，真的是希望。",
+      "len": 14,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "medium",
+      "length_tier": "short",
+      "representative_phrases": [
+        "绝望真的是希望"
+      ]
+    },
+    {
+      "text": "再说吧。",
+      "len": 4,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "你是说，我是你见过最努力的是吗？不是说努力不努力，关键问题是在于灰泽满有点拖延症，所以很多事情都是放到很久以后才做。写本名伊丽亚，突然发现灰泽满和三毛好像，叫他家庭条件优越，前半生一事无成，热爱文学，喜欢的外国人，最后出轨的猴子。嗯，三毛是买妈很喜欢的一个作者，然后三毛灰泽满了解不多，只知道他。",
+      "len": 148,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "别首先别抬举了，真别抬举灰泽满了。三毛还是挺厉害的。什么叫半夜两点不回家？女同学都走了，都走了。",
+      "len": 48,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "被夸时",
+      "reasoning": "她先否认对方的夸奖（'别抬举了'），然后转移话题，符合被夸时的典型反应模式。",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": [
+        "别抬举了",
+        "真别抬举灰泽满了"
+      ]
+    },
+    {
+      "text": "这么寂寞，那遇到去看Twice的女同学，餐厅酒店应该要发生什么，不敢想了。",
+      "len": 37,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": [
+        "不敢想了"
+      ]
+    },
+    {
+      "text": "会克制一点的，是的，会克制一点的。说实话，灰泽满只有在互联网上说话才没什么负担，现实中还是要克制一点。前nvm的满序，我比你惨，一会12点去做实验做到三点多。这么惨吗？你这头像是慧恩爱啊，什么实验大手子。",
+      "len": 102,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": [
+        "会克制一点的",
+        "说实话",
+        "这么惨吗"
+      ]
+    },
+    {
+      "text": "那确实没事，做实验的时候想象自己是慧恩爱。",
+      "len": 21,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": [
+        "那确实没事",
+        "想象自己是慧恩爱"
+      ]
+    },
+    {
+      "text": "谢谢生产王七星。如果现在有个人趁虚而入俘获满小妹的芳心，以后还会直播吗？没有这样的人，很可惜。明天其实……但是其实多一个人也不一定是好事，有可能会更累，所以一个人也是好的。互联网就是发泄自我的，是可惜。",
+      "len": 101,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "medium",
+      "length_tier": "long",
+      "representative_phrases": [
+        "很可惜",
+        "多一个人也不一定是好事",
+        "一个人也是好的"
+      ]
+    },
+    {
+      "text": "每次我想清楚了这个什么高考，明天还能再来，你的直播就不一定了，数星数众一目了然了。高考说起来，其实感觉今年的高考热度真的比以前要少了很多。以往年的时候，感觉刷互联网会被这个刷屏，然后会有很多up主发很多跟高考相关的东西，今年好像很少了。但今天也刷到了，今天刷到一些，没问题吧？这个没问题吧？",
+      "len": 145,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "日常闲聊",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": [
+        "没问题吧？",
+        "数星数众一目了然了"
+      ]
+    },
+    {
+      "text": "不清楚。",
+      "len": 4,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "刷到一点点，刷到一点点。",
+      "len": 12,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "写评测和大学作业怎么不写？这是什么意思？写评测的灰泽满能说一句9G加油吗？9G加油！9G又是什么战队？",
+      "len": 51,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "因为那个不可能吧，至少不可能吧。好吧，大概理解了。在暗淡无光世界上面有买神，去演唱会前女同学让你剪指甲吗？",
+      "len": 53,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "灰泽满是侄女。",
+      "len": 7,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "但是。",
+      "len": 3,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "首先，就算那个女生她可能不是侄女，但她应该也不喜欢灰泽满这个类型的。就这个来说，那也是好事，坏事。",
+      "len": 49,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": [
+        "首先",
+        "就这个来说",
+        "那也是好事，坏事"
+      ]
+    },
+    {
+      "text": "不知道。",
+      "len": 4,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "刷到有人说数学乱出奇，数学好像也刷到了，好像说数学很难。但是对于灰泽满来讲，这个数学难不难都一样，因为本身就是一个对这东西想不通的。",
+      "len": 66,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": [
+        "对于灰泽满来讲",
+        "难不难都一样",
+        "想不通的"
+      ]
+    },
+    {
+      "text": "主动近乎好，哎呀，弹幕刷这么快，这个提示器都是显示两秒前的。",
+      "len": 30,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "数学你看过了吗？看过一点。灰泽满你已经小黑幕反省了一周，能放你出来吗？下次吧，下次吧。现在是手机电台不太方便放吧。放得了吗？试一下。",
+      "len": 66,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": [
+        "下次吧，下次吧",
+        "试一下"
+      ]
+    },
+    {
+      "text": "再被逮到一次就是永禁啊。",
+      "len": 12,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "立Flag/承诺",
+      "emotion_intensity": "medium",
+      "length_tier": "short",
+      "representative_phrases": [
+        "再被逮到一次",
+        "永禁"
+      ]
+    },
+    {
+      "text": "可以，可以，行了，是的。",
+      "len": 12,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "你在外国待一段时间数学就下降了，本身在数学方面的天赋就不高。其实很久以前好像说是给小孩拍过那种片，就是给这个小孩测什么天赋。就是妈妈很相信一个东西，说你脑子里有什么海绵体，就是数学，只要学习了一些东西就可以让那个海绵体变大，然后你的数学成绩就可以增长。但实际上是根本没有可能的事情。",
+      "len": 141,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": [
+        "本身在数学方面的天赋就不高",
+        "但实际上是根本没有可能的事情"
+      ]
+    },
+    {
+      "text": "真的没有，真的没有。他当时开玩笑了吧，应该是。",
+      "len": 23,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "这个也是。",
+      "len": 5,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "其实不应该信的，但是他信了，所以给灰泽满报了很多那种数学竞赛班的东西。数学竞赛班这个玩意完全没有任何的作用，只会把灰泽满劝退。",
+      "len": 63,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": [
+        "其实不应该信的",
+        "完全没有任何的作用",
+        "只会把灰泽满劝退"
+      ]
+    },
+    {
+      "text": "海麻奇、海绵奇，反正就是一个可以膨胀的东西吧，那个叫海麻奇。好吧，那没事。",
+      "len": 37,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "灰泽满昨天口语有去考试吗？什么口语，语文是吧？你说什么国语呢？我们的这个语文是不是有去考试吗？没有的。但是好像有刷到今年的那个什么扛什么语文，哦，语文的好像没刷到，刷的是数学的，对，语文的好像还没看到。",
+      "len": 101,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "你这个说对了，海绵奇确实会膨胀，但是应该是海麻奇。",
+      "len": 25,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "影会吗？海绵奇是那种不能说的东西吗？好吧，你们对生物这么了解。这个灰泽满只记得一个海和一个奇，中间那个东西不记得。不是虚拟键台播吗？应该不会播很久，虽然现在做戏简单的。",
+      "len": 84,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "这个不是专有名吗？那确实不知道。虚拟键台确实转不过去啊，反正也不会凑你一个时间就算了。能说一句高考加油吗？你不是高三的，那说个鬼呀。现在还在灰泽满直播间的高考生，那也是有点。嗯，给你内推一下吧，要不要借我们VR给你内推一下？",
+      "len": 112,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "你不是第一个记错这个的管人，好吧好吧，那知道了那知道了。哦你考完了？真的吗？今天已经考完了是吧？那好吧，那是真的假的？真的假的？这么快？天呐，不敢相信。有一种苦读十几年的东西，然后在两天内就给它画上一个句号啊，我天呐。买食用好好做未来规划吗？没有哎，没有什么未来规划，未来规划。",
+      "len": 139,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "medium",
+      "length_tier": "long",
+      "representative_phrases": [
+        "好吧好吧",
+        "真的假的？",
+        "我天呐"
+      ]
+    },
+    {
+      "text": "是。",
+      "len": 2,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "苹果发布会尼亚龙吗？谁关心苹果发布会啊。哦，没有的，分地区的，有地方还有两天好吧。",
+      "len": 41,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "还好还好，你不考好吧。",
+      "len": 11,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "黄冬民思苦想不如慧心满一句。不是这个东西，慧心满真的不知道。关键这个东西真的不知道，自己真的不知道。说起来未来规划，今天这个staff有问一件事情，他说你有没有考虑回国播3d来着。其实之前慧心满对这个是完全不是很考虑，但今天还是跟他说行吧，就是说好的，说可以。",
+      "len": 130,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "立Flag/承诺",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": [
+        "行吧",
+        "说好的",
+        "说可以"
+      ]
+    },
+    {
+      "text": "是的，把自己有空的这个月份告诉了staff。",
+      "len": 22,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "满区作业写完了。这周播播还有周表吗？没有写完，也没有写完，只是进行了一半。就是这个万里长针已经进行到一半了，还有5000米，好绝望。写bkbk大会的牛蛙，牛蛙乘100。",
+      "len": 84,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "medium",
+      "length_tier": "long",
+      "representative_phrases": [
+        "好绝望",
+        "牛蛙乘100"
+      ]
+    },
+    {
+      "text": "哦天呐，我这个没登录。",
+      "len": 11,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "3D做好了，想什么呢，肯定没做好，只是问一下灰泽满的意见啊。如果灰泽满拒绝了，那肯定就是一脚被踹飞，就说行了，那你就不用做了。你的肯定是会跟他说好的。如果既然已经有了这样的一个事情在前面，那会考虑去练习一下，让这个久走不活动的筋骨好好地疏通一下，去动一下跳一下。",
+      "len": 131,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "立Flag/承诺",
+      "emotion_intensity": "medium",
+      "length_tier": "long",
+      "representative_phrases": [
+        "想什么呢，肯定没做好",
+        "一脚被踹飞",
+        "让这个久走不活动的筋骨好好地疏通一下"
+      ]
+    },
+    {
+      "text": "能活到三季发布吗？满城不好说了，也不是不好说，但是这个应该确实有段时间挺好说的，肯定是能活到的。为了这个3D也要尽量地活。太好了，满城终于愿意办三季，回来感动落泪，期待，感觉是很有意思的事情。你米奇米奇都喜欢你，嫌礼貌，喜欢。So who's your daddy？呃，我正看能助你缩哈苹果的末日七拳啊，不怕不易，跟大律线冲天好吗？什么东西啊？苹果的这个你们搞得灰心白眼，就看了一遍。什么苹果发布会，发布了什么玩意啊？什么玩意？之前有发布一个那个VR眼镜，是灰心白很期待的，其他东西都不太了解。",
+      "len": 247,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "你三季会跳舞吗？感觉很去三季肯定要跳舞啊，边唱边跳。",
+      "len": 26,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "可以介绍下润澳的条件吗？高考后你需要跟上灰泽满的节奏。",
+      "len": 27,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "你们知道吗，有一个做留学规划的、很炒作型的那种人，叫那个什么豹叔。",
+      "len": 33,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "其实一直以为他是炒作来的，结果身边真有认识的人找他去做留学的事情。一个学霸男的，等一下，全女世界观崩塌。没有，不太认识，只是听别人说了，真不认识他。说他找了这个那个人，就是间接地跟我说，他找了这个男的，找了豹叔，我都不敢相信，亲爱的。",
+      "len": 117,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "medium",
+      "length_tier": "long",
+      "representative_phrases": [
+        "全女世界观崩塌",
+        "我都不敢相信",
+        "亲爱的"
+      ]
+    },
+    {
+      "text": "满神，你最喜欢的一位vispo主播因为生病已经好久没播了，你能祝福一下他吗？是谁？是你头像这个吗？喜娜？是这么念吗？忘记他名字了。祝他早点好。那你知道？真不认识，真不认识。因为是学霸。对弹幕说没问题，学霸，那我相信你不认识，确实是。那真是学霸，学霸圈子早就把你姐妹孤立在外了。唯一能跟学霸圈子联系在一起的只有绿肉女同学，就是绿肉女同学说了。",
+      "len": 170,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "小灰金版黑走城肯定有生之年真的能看见懒惰的可爱灰色小女孩动起来吗？真的不是画大饼吧？灰泽满肯定不帅，因为已经答应上了。",
+      "len": 59,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "立Flag/承诺",
+      "emotion_intensity": "medium",
+      "length_tier": "medium",
+      "representative_phrases": [
+        "肯定有生之年",
+        "真的不是画大饼吧",
+        "已经答应上了"
+      ]
+    },
+    {
+      "text": "小扣黑好，期待满满的三级开心，你其实确实也蛮期待的。",
+      "len": 26,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "这个真的不是画大饼啊。既然已经占用了VR的这个资源，因为已经说好了，那占用了这个东西，你要是最后还是在那里扭扭捏捏，或者是因为一些事情不去，很可惜，不是很可惜，很愧疚啊，很不要脸。还没搞懂期权，但以人数十倍杠杆做多苹果，你还好吧？你冷静一点，苹果到底在干什么不知道。",
+      "len": 133,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "立Flag/承诺",
+      "emotion_intensity": "medium",
+      "length_tier": "long",
+      "representative_phrases": [
+        "这个真的不是画大饼啊",
+        "很愧疚啊，很不要脸",
+        "你冷静一点"
+      ]
+    },
+    {
+      "text": "我看到了。",
+      "len": 5,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "哦不是，这是以前的。这以前的iPhone 18要来了，天呐，那这手机就要被淘汰了。",
+      "len": 41,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "三季可以有曲形态吧？不知道哎。",
+      "len": 15,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "没事可以跳VR，管不到你。这不是管不管的问题，这个是内心自己监督自己。写“缠心未愈的流星雨”，谢谢。",
+      "len": 50,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "这二创故创好灰泽满，你今天过生日，能给你来个说嗨嗨或者祝福吗？说嗨嗨不太行，但祝你生日快乐，祝你生日快乐，天天开心，万事如意。",
+      "len": 63,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "灰泽满区也会有传统下节节目下位吗？其实没有怎么看过别人的3D回，整个唯一看过的可能是优雅前辈的，那都是几年前了。这一分起VR确实向来不化冰记录，以前staff跟一个前辈说安排3D lab，然后就安排毕业了啊，真的吗？",
+      "len": 108,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "这个不好说。",
+      "len": 6,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "那太好了。",
+      "len": 5,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "灰泽满说，我为了妹妹在东京当陪酒女，还好遇到了一位可爱的灰毛。但她好久没来了，你该怎么办？",
+      "len": 45,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "你为了妹妹在东京当陪酒女。",
+      "len": 13,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "OK，改天去你的。行行行，忘记了，最近忘记了。",
+      "len": 23,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "是兔女啊吗？",
+      "len": 6,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "可能是吧，真的想玩游戏了。但是因为没有写完自己要做的东西，所以最近就算玩游戏也会玩得很没意思。等赶紧搞完，然后开始玩吧。",
+      "len": 60,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "立Flag/承诺",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": [
+        "等赶紧搞完",
+        "然后开始玩吧"
+      ]
+    },
+    {
+      "text": "还得下载那个商单游戏，还没下载。",
+      "len": 16,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "你要先写完才能玩。是啊，现在不搞完就是每次都是一边兴邦一边在干别的事情，比如说像现在。但是现在因为作息烂掉了，你们知道现在离灰泽满睡觉应该还剩下四个小时吧。灰泽满现在每天五六点才睡觉，然后每天作息就彻底烂完了，一天吃一顿饭，感觉寿命又要缩短。商单播几天播一天，一天播一天应该是一天吧，看那个要求是一天。",
+      "len": 151,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": [
+        "作息烂掉了",
+        "寿命又要缩短",
+        "一边兴邦一边在干别的事情"
+      ]
+    },
+    {
+      "text": "黏住5个小时。",
+      "len": 7,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "一天够了吧，一天别应该是一天吧。当时看了一点是一天，如果记错了就不知道了，可能记错了。弹幕有人说我敢论文一般一天就睡三四个小时，是的呀，就是我们都有拖延症来着，那是只能睡这么一点的。现在没上课了，是现在没上课了，确实一天就还好。能解说迁怒吗？迁怒是什么东西？算了，别问了。",
+      "len": 136,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "什么叫什么时候返场？谨慎会结满，这是什么？",
+      "len": 21,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "这些维吾尼月熬前就得狠狠地玩了，现在的玩真的很不踏实。还是喜欢那种交完作业那一瞬间整个释放了的那种，狠狠地打游戏、狠狠地熬夜，那种爽感好久没有感受到了。来点人话，这真不是人话，一边玩一边享受兴亡的贝德兰。",
+      "len": 102,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "medium",
+      "length_tier": "long",
+      "representative_phrases": [
+        "狠狠地玩",
+        "狠狠地熬夜",
+        "来点人话"
+      ]
+    },
+    {
+      "text": "你现在不是在熬夜吗？现在这个算熬夜吗？之前灰泽满跟女生连麦写作业，问那个女生说熬夜会让一个人变笨，所以很纠结要不要现在继续跟你熬夜下去。那个女生说你在想什么，你可以想想如果你现在去别的国家倒时差，那不也一样是熬夜吗？可能你现在是一个正常作息，就他用这个时差论和这个睡眠论说什么你晚睡晚起不也一样吗，来纠正灰泽满这个观念，但感觉不太正确。",
+      "len": 168,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "懂你意思，不抢苹果热炉，因为属于这种自然新苹果发布会，满神三季回到发布了。哎呀别别，话就都病了，还早呢，至少肯定是应该不可能，应该排不上今年。",
+      "len": 71,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "你如极了生物钟，就这么搞乱了，知道吗？是的，我跟他说，是熬夜是因为你不遵守这个生物钟的规律啊，这个才是问题之一。",
+      "len": 56,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "归期兼归医满神没事。刚刚我导给我发了将近十分钟的论文修改意见，而我现在正在看一条剧。这个时候不用纠结这个论文修改意见，毕竟是刚刚发的，你还有别的，你现在好好放松一下吧，好吧，然后再准备好了再去继续面临这个修改意见啥的。同志们，之前写作业当时英文是卡点最后一分钟交，当时没有降那个AI率，就有一个作业真差点就过了那个线，吓晕了，没有去查直接交上去了，几个月前。但是还好还好差一点，后面想起来去查一下，发现我去居然有17%，然后特别的焦急，因为好像要降到10%，好像要几次，好像变成十十几吧，也就这样10以下吧。",
+      "len": 254,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "分享倒霉事",
+      "emotion_intensity": "medium",
+      "length_tier": "long",
+      "representative_phrases": [
+        "吓晕了",
+        "还好还好差一点",
+        "特别的焦急"
+      ]
+    },
+    {
+      "text": "2027说做2721加20，后面老师没拐了，2727老师没拐挺好的，20以下才不行。但现在不依靠这种工具真的很难，但用GP技太明显了，降AI都不好降。",
+      "len": 75,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "灰子满有点给自己化解为劳，其实出了很多后起之秀，AI的后起之秀，但灰子满还在跟这个GP气相爱相杀。就是因为以前上学也是用这个写作业，已经习惯了跟他说话，就没有换别的AI。之后好像出了什么GME9吗，还叫GME啊，还有那个。",
+      "len": 111,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "还有那个什么Deep Sea，还有一些Club之类的，都没有用过。",
+      "len": 33,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "写两个人的卡稿，3D回回来起麻烦的话，可以看前辈的3D回，然后以此为契机跟前辈搭搭话，去去精。",
+      "len": 47,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": [
+        "写两个人的卡稿",
+        "去去精"
+      ]
+    },
+    {
+      "text": "社交能力大幅度下降了，都说了每次跟别人说话都很尴尬，不管是互联网上还是现实中。",
+      "len": 39,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "medium",
+      "length_tier": "medium",
+      "representative_phrases": [
+        "社交能力大幅度下降了",
+        "每次跟别人说话都很尴尬"
+      ]
+    },
+    {
+      "text": "原来灰泽满每晚的晚安都是骗你的。别哭，那是因为首先四五点钟如果跟你们说晚安了，有零更会收到时间不对啊，还是正常的些时间发完才行。你可以试试英文变中文再变。别搞了别搞了，你对AI怎么这么专一，你只收电缆吧，只收电缆。",
+      "len": 107,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "需要自己独处的时间，一直在独处啊。现在已经……等一下，找他日历。我天，咳嗽，找他日历。",
+      "len": 43,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "现在是六月九号，灰泽满市头。",
+      "len": 14,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "已经独处了十几天了，反正超过10天了，并且除了直播再也没有说过话。",
+      "len": 33,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "感性流露/孤独",
+      "emotion_intensity": "medium",
+      "length_tier": "medium",
+      "representative_phrases": [
+        "已经独处了十几天了",
+        "除了直播再也没有说过话"
+      ]
+    },
+    {
+      "text": "有前辈要开3D了，问一下好吧。",
+      "len": 15,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "写归形型我已经用AI检测了，AI写的不懂AI，因为太高了，于是用AI降AI率，然后读不通顺，再用AI认测。",
+      "len": 53,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "嗯。",
+      "len": 2,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": [
+        "嗯"
+      ]
+    },
+    {
+      "text": "觉得这其实也没什么好说的，现在谁做办公、写作业或者干自己的事情不用AI呢？除了高考不能用啊。对，那你这个之后总得有用的，你好好学习怎么用也是一个好事。你这时间不会没洗衣服吧？你想太多了，这个是今天刚刚洗过，今天刚洗过，别急。",
+      "len": 112,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": [
+        "没什么好说的",
+        "你想太多了",
+        "别急"
+      ]
+    },
+    {
+      "text": "艾特克罗克帮我卸载灰泽满，拆GPT。3月提出的礼物什么时候能拍完？4月的礼物差不多要发了，反正最近也闲着，就整理一下名单，明天给老师吧。",
+      "len": 68,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "如果有什么要改地址的记得说一下，应该没有吧。懒得懒懒懒，算了算了，改吧行吧，要说就说吧。今天出门了吗？明天肯定出门，今天没出门，明天肯定出门。明天要去图书馆，专心一下，给抽下凉光，不然真的完蛋了，要生气了。",
+      "len": 103,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "立Flag/承诺",
+      "emotion_intensity": "medium",
+      "length_tier": "long",
+      "representative_phrases": [
+        "明天肯定出门",
+        "不然真的完蛋了",
+        "要生气了"
+      ]
+    },
+    {
+      "text": "你放洗衣机的衣服还没拿出来。今天去我这里的洗衣机，那个洗衣机是公共的。放进去的衣服今天去烘干的时候，发现有人把洗好的衣服给灰泽满。直接就是，他是怎么知道这个洗衣机对应的是灰泽满的那个洗衣篮呢？就是他可能是想用那个洗衣机，他就直接把里面的湿衣服放到那个，还放对篮子，拿到灰泽满篮子里的，放对了，放对了。",
+      "len": 150,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "分享倒霉事",
+      "emotion_intensity": "medium",
+      "length_tier": "long",
+      "representative_phrases": [
+        "直接就是",
+        "放对了，放对了"
+      ]
+    },
+    {
+      "text": "公用的是公用的，但是会定期清洗，也比较干净。他们说放对篮子了，好奇怪，这篮子根本没有放到洗衣机旁边，但他把湿衣服确实放到那个篮子里的，旁边也有别的篮子。算了一杯特定一杯跟踪，好吧好吧，不好说了。谢谢，不要没难，我会熬夜到四五点跟你说晚安。",
+      "len": 119,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "行吧。",
+      "len": 3,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": [
+        "行吧"
+      ]
+    },
+    {
+      "text": "呛死了。人家大哥比较熬夜了，比较熬夜了，赶紧睡觉。只是现在是灰泽满的白天，因为灰泽满现在作息大概是四点钟从床上起来，然后八点钟开始干正事，八九十点钟开始干正事。妄想上了你，一起来看着你。",
+      "len": 93,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "满神，如果必要问你，这样说，满神如果必要问你要什么舞台效果，你就把Holo演唱会链接都给他。",
+      "len": 46,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "别逗我笑了，别逗我笑了。",
+      "len": 12,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "因为另外一个篮子是从那一边带过来的，好吧，行吧，破案了。我帮你把衣服收好了，你怎么不谢谢我？是谁在动灰泽满的衣服啊？",
+      "len": 58,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "今天要播到四点吗？再播一会儿就去睡觉，不然就睡不了觉了，那也是躺着刷手机去了。",
+      "len": 39,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "立Flag/承诺",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": [
+        "再播一会儿就去睡觉",
+        "不然就睡不了觉了"
+      ]
+    },
+    {
+      "text": "什么声音？三季别发了。三季可以单机吗？有谁的三季是单机进行的吗？灰泽满其实最适合的是单机，就是只有一个人，就灰泽满一个人是最好的，就永生永世在直播间里单机吧。永远的单机玩家，刷手机就不能挂直播间。同务不邀请？同其实也可以邀请一下。对，也可以邀请，务必所有人。",
+      "len": 129,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": [
+        "单机吧",
+        "永生永世",
+        "务必所有人"
+      ]
+    },
+    {
+      "text": "去别的人的三季回吗？没有，没有吃别人三季回的计划。",
+      "len": 25,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "好吧，如果有人邀请的话也不是不能去，勉为其难地去当你的这个三季嘉宾。有谁要邀请我吗？会再来吗？算了算了，确实不太方便，时间可能对不上。",
+      "len": 67,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "立Flag/承诺",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": [
+        "勉为其难",
+        "算了算了",
+        "时间可能对不上"
+      ]
+    },
+    {
+      "text": "不是水果，是冰果，谢谢。早上起来就看到灰泽满开播了，以后能一直这个作息吗？真的吗？这里是哪里的时差？居然你在那个地方的时候，看到现在的灰泽满直播了。",
+      "len": 74,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "耍曲牌了，耍曲牌了，耍曲牌了。",
+      "len": 15,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "懂什么叫二季嘉宾吗？哦也行，确实二季嘉宾也挺快的。满城，我们还有希望看到你说的灶台吧？真的很想开灶台，但最近实在作息太乱了。今天一觉醒来，打开手机看到已经三点钟了，心都在滴血。",
+      "len": 88,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "medium",
+      "length_tier": "long",
+      "representative_phrases": [
+        "心都在滴血",
+        "作息太乱了",
+        "真的很想开灶台"
+      ]
+    },
+    {
+      "text": "挂墙上去要整好的话很耗费积分，但至少是还有一年后的事情，就半年，至少大半年之后。把这段时间努力一下，攒一下三点可以早台。三点算什么早台，是舞台吧。而且为什么一觉醒来，或是马上先清醒一下，然后要给自己做饭，要写作业，要打开窗户，要感受，然后进行下光合作用，晒一下太阳。在房间里晒一下太阳，就是把窗帘都拉开。这个时候莫及莫及莫及，然后也到了晚上了，打开电脑干一下会，正式没办法一下就急透百点的来直播。",
+      "len": 198,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "立Flag/承诺",
+      "emotion_intensity": "medium",
+      "length_tier": "long",
+      "representative_phrases": [
+        "攒一下三点可以早台",
+        "努力一下",
+        "正式没办法一下就急透百点的来直播"
+      ]
+    },
+    {
+      "text": "四尾随心配，跟朋友说买神现在发周表提前开播，说休息也不好，努力被说播完烂，在做奋力时就夸，是被PV了好难过，咋反驳？PV了吧，好吧那就PV别。",
+      "len": 71,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "medium",
+      "length_tier": "long",
+      "representative_phrases": [
+        "好吧那就PV别",
+        "咋反驳？",
+        "被PV了好难过"
+      ]
+    },
+    {
+      "text": "其实说的这么多事加起来，没有刷音符的时间长。刷音符时间最近是有点长。我前天的时候分享自己的屏幕使用给同学，在群里面，就我们以前那几个女生群，我说我现在就完蛋了，我屏幕时间是每天使用12小时。我屏幕时间12小时，她没回复，就甩一张图片说她14小时。",
+      "len": 123,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "日常闲聊",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": [
+        "完蛋了",
+        "甩一张图片"
+      ]
+    },
+    {
+      "text": "不行吧，你这个确实安慰到我了。你都能刷14小时，而且是个很现充的女生。",
+      "len": 35,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "被夸时",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": [
+        "不行吧",
+        "确实安慰到我了",
+        "很现充的女生"
+      ]
+    },
+    {
+      "text": "主播的钻头什么含义吗？绿色调影看着像龙卷风，也可能是大小姐的元素，没什么含义，只是就是这样子的发型。有一说一很正常，是很正常。12小时说明睡觉睡多了，都基本十几个小时啊，还没包括会在满直播的时间呢。那天可能是没直播，所以12小时直播的话可能就要多个两两三个小时了。你们疯了，人家是在搜手，你是在网瘾，是啊是在网瘾。",
+      "len": 157,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "满神你要看好3G的模型，不然会很敷衍，给你个普通模型。行吧，那就看清楚一点。你的社交都没有社交，多久没读书了？最近还在读书呢，最近再重读这本书，这个《克拉拉与太阳》是黑英雄写的。最近还在看这本书呢，重读，之前看过一遍，要再看一遍。",
+      "len": 115,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": [
+        "行吧",
+        "最近还在读书呢",
+        "重读"
+      ]
+    },
+    {
+      "text": "就是这么喜欢看书，别太气，读书区来了。",
+      "len": 19,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": [
+        "就是这么喜欢看书",
+        "别太气",
+        "读书区来了"
+      ]
+    },
+    {
+      "text": "读一下，读一下这个书。这本书其实写得还挺好看的，声位挺好看。",
+      "len": 30,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "那背面写的是：你相信有人心这回事吗？我不仅仅是指那个器官，我说的这个词是文学的意义。人心，你相信有这样东西吧？某种让我们每个人成为独立个体的东西。哎，这本书写得蛮好的，其实蛮好看的。很多人不喜欢这本书，其实这本书写得挺好看的。讲的是克拉拉是一个专门为陪伴儿童设计的太阳能人工智能机器人。",
+      "len": 143,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "他讲得差不多吧，不剧透了不剧透了。讲得肯定是跟仿生人有关的事情，不知道。",
+      "len": 36,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "肥液早已泛滥，喜欢的唯一原因是因为小众？你太搞笑了。十黑一双的书没有小众的，这本写得挺好的。他背后这个艺者的话也写得很好，写得没问题啊。",
+      "len": 68,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "medium",
+      "length_tier": "long",
+      "representative_phrases": [
+        "你太搞笑了",
+        "写得挺好的",
+        "写得没问题啊"
+      ]
+    },
+    {
+      "text": "你不是仿生人吗？曾经有一句话叫什么，仿生人会梦见虚拟主播吗？好吧，应该叫做仿生人会梦见剑几样吗？那是第一次听到仿生热情。",
+      "len": 60,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "感觉不如无色月。你们知道会自版作梦都想写出一篇自己很满意的小说吗？但是写不出来，好绝望。什么时候可以实现一下这个作家梦。不小众了，不小众了，满城高考争气也出了，什么时候直播挑战高考。世奇直面心魔，算什么心魔啊？不知道高考节目是什么。你在番茄小说等我，不是番茄小说，是女评还是男评啊？就会在那只能写要写要写这种快销文的话，也只能写女评的。",
+      "len": 168,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "medium",
+      "length_tier": "long",
+      "representative_phrases": [
+        "好绝望",
+        "什么时候可以实现一下",
+        "算什么心魔啊"
+      ]
+    },
+    {
+      "text": "从美丽高考困扰过，还是困扰了一下。",
+      "len": 17,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "你写他刚男皮，那没办法，那可惜可惜，好多。",
+      "len": 21,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "为什么会时不时有铅笔划过纸面的声音？是在死亡笔记上写立东ID吗？为什么会有这个铅笔划过笔记的声音？是翻书的声音吧。是翻书的声音，大大方方在女评写大女书文。满城，你办个作文比赛，我们黑幕让你拿冠军。没喊尽量的东西，我觉得你应该去百合汇投考，那才是你发挥的地方。那得采访一下身边的百合小女神了。我说一句，满城是中考逃兵，真有新谋，也是广东中考。",
+      "len": 170,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "怎么没见你去投稿啊？投稿过。其实灰泽满曾经大概是在刚转学，从初中转学到别的地方上学的时候，投稿过一篇自己写的文章，还上了一个杂志，后面发现是走后门上的。",
+      "len": 76,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": [
+        "投稿过",
+        "走后门上的"
+      ]
+    },
+    {
+      "text": "投稿了一小篇文章，你们都不知道是哪个杂志，很路边。说实话应该很路边很路边的一个杂志。小满三进回前注意下体态，别像某前辈一样左背站在那里被人唠一辈子。是的，注意一下体态吧。那个，说得不会是那个语音语音吧？说的是那个实际语音吗？精简操作，反正很尴尬就对了。不是易玲吗？是易玲，是易玲就不在这直播了。是易玲，这个灰泽满出一辈子。易玲还挺好看的。",
+      "len": 169,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "medium",
+      "length_tier": "long",
+      "representative_phrases": [
+        "很路边",
+        "被人唠一辈子",
+        "出一辈子"
+      ]
+    },
+    {
+      "text": "是什么？是那种反正是个路边杂志吧，也是给小孩看的。不是读者，读者就更不可能，读者也是高攀不起的。",
+      "len": 48,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "但是其实上读者的概率比上易玲更大，至于为什么别问。行了，都说了那个专区是专门给小孩子写的，就是他其实不看你的文学水平，你随便写几句废话都能上去。",
+      "len": 72,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "故事会也很好看，但故事会的故事也站不了边。",
+      "len": 21,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "你再也不看了，好像说是国内最有名的杂志。",
+      "len": 20,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "也是一个两个字的，忘记了。儿童文学以前很喜欢看，现在不看了。那个杂志看不了，不是看不了，是已经有段时间没看了。",
+      "len": 55,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "求是肯定不是，求是文学杂志易玲不是。",
+      "len": 18,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "肯定不是求是自然收获对，应该是收获吧，是不是收获？",
+      "len": 25,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "文学最有名的是《读者》。可是以前那些杂志上面，那些作家会经常发那种。",
+      "len": 34,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "这个可以讲吗？很多人说那些上面发的东西。",
+      "len": 20,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "很踩一捧一，至于踩的是谁、捧的是谁，你就别问了。但曾经确实有老师给我们读过那些小说，就特别的踩一捧一。萌芽，萌芽也挺好的。好了好了，不说这个了。是柳叶刀，柳叶刀是我最近看的论文杂志。",
+      "len": 91,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": [
+        "踩一捧一",
+        "好了好了，不说这个了"
+      ]
+    },
+    {
+      "text": "这个真的爆了，别说了别说了。看这些其实主要是为了看故事。",
+      "len": 28,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": [
+        "这个真的爆了",
+        "别说了别说了",
+        "看这些其实主要是为了看故事"
+      ]
+    },
+    {
+      "text": "你的作家那么破裂吗？还稍微残存一点点希望。等会儿接满，其实现在是一个很好的契机。等会儿接满，太过于孤单，当一个人就是太寂寞孤单到极致的时候，这个时候可以写些东西了。等到那一瞬间再说吧。",
+      "len": 92,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "medium",
+      "length_tier": "long",
+      "representative_phrases": [
+        "等会儿接满",
+        "太过于孤单",
+        "等到那一瞬间再说吧"
+      ]
+    },
+    {
+      "text": "柳叶刀上哪里只有医学的杂志，医学做那个文献好像还有些。",
+      "len": 27,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "不是医学，首先不是医学。谢谢。至于是什么学就别说，好像……好吧，不说了。有没有可能是？",
+      "len": 43,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "你分不清海绵起海马起海绵起海马起的东西，现在能分清了，现在就能分清了。心理学慢慢动动，同舟共济，美好时刻。",
+      "len": 53,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "请同舟共济了。",
+      "len": 7,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "这么看来，地洞河你同学是成为大作家的主意，其实想多了，你们想太多了，其实不需要那些。",
+      "len": 42,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "希望早日拜读灰脑先生的大作。好的，借你们几眼。",
+      "len": 23,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "以人速搜索他的字，看孤独是创作的文拳写New Extent，见着显得见着。",
+      "len": 37,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "伦理学可以写如何成为BV的爽文。满身这个爽文，这个东西每个人心里的爽点是不一样的，这是很奇妙的事情。好吧，就曾经有一批文章，别人觉得爽，灰泽满看起来完全毫无波澜。别骂，别骂，等我给你解释，不是这个意思。",
+      "len": 101,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": [
+        "好吧",
+        "别骂，别骂",
+        "等我给你解释"
+      ]
+    },
+    {
+      "text": "灰泽满要写出百年孤独了，世界文坛即将迎来大变好。你这个大便是变化的变，好的，记得了。",
+      "len": 42,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "立Flag/承诺",
+      "emotion_intensity": "medium",
+      "length_tier": "medium",
+      "representative_phrases": [
+        "要写出百年孤独了",
+        "世界文坛即将迎来大变好",
+        "记得了"
+      ]
+    },
+    {
+      "text": "谢谢。",
+      "len": 3,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": [
+        "谢谢"
+      ]
+    },
+    {
+      "text": "当时有一些那种文章，说什么写给青春女生的毒物，然后你看完之后呢，会发现。",
+      "len": 36,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "相关有点不正吧，相关有点不正。",
+      "len": 15,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "冬季夹心巧合力的建议章，谢谢。",
+      "len": 15,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "富曲日常不是的，看过曾经看过这样一篇言情小说，上面显示青春女神B，读当时看到第30集也就看不下去了。讲的是一个女生她刚毕业，然后去到社会打工之类的，她家里很困难，所以去那个KTV。",
+      "len": 90,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "这不会其实没有那种印象，其实没有那个意涵，就是去KTV搬茶送水。",
+      "len": 32,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "好像不能再聊了，好奇怪的一篇啊。是这样子的，有一天呢，她跟她在上班的时候被同事叫过去，同事说她有点什么，就是她去送酒然后送错房间了，送到那个男主他们在那个房间。然后那个男主好像是什么有钱有势的东西之类的，然后他们以为这个女主是他们点的。你们觉得这个小说？",
+      "len": 127,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "能写成青春女生必读也太可恶了吧。",
+      "len": 16,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "medium",
+      "length_tier": "short",
+      "representative_phrases": [
+        "也太可恶了吧"
+      ]
+    },
+    {
+      "text": "也太可恶了吧，说实话也太可恶了。这种小说能写成青春女生必读，太国产剧情了。关键还在一个很公式化的书店里面上架，领会金牌还买到了，真无语，气死。给你们讲完吧，反正看到那一瞬间其实不想看了，但又想知道这个。",
+      "len": 101,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "男主那几个朋友可能是比较喜欢玩吧，就跟男主说了这个事。",
+      "len": 27,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "太甜了，不是很讲得出来。说这个女生是请来服务你的，然后这个男主就说行吧，叫他坐过来之类的。可是这个女生说，给你们端这个只是走错房间了，走错KTV包间了，她只是走错了。可是他们不相信，女性们不相信。然后这个女生就一直不肯坐下，这个女主就一直不肯过去。男主就生气了，就说你装什么，然后就把他拉过来，然后扇他一巴掌之类的。这什么玩意。",
+      "len": 164,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "我真的没瞧，我给你们到时候找一下这本书吧，应该是在购买记录里应该是有的。",
+      "len": 36,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "立Flag/承诺",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": [
+        "我真的没瞧",
+        "到时候找一下",
+        "应该是有的"
+      ]
+    },
+    {
+      "text": "好低俗，好低俗。好，掌声谢谢。一个猫咪女猫，谢谢。练的三观都看得进去，还在意这个？练的三观不一样，练是有文笔的。这个就是神经病，就是纯犯神经病。你读书会能读这个吗？真读不下去。当时给绘记本看破房了，你们要亲吗？后面还有一些，这里还没有很低，还有后面剧情，她扇的女生一巴掌，然后这个女主就只能被他们。",
+      "len": 149,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "拉过去了，但是这个女生可能哭了之类的，然后就引来动静很大，所以外面就有人进来了。",
+      "len": 40,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "就说这个女生并不是那个女生，你们搞错了，然后才把这个女生解救出来了。我不是前面提到说这个女学生她特别穷吗，她后面就打算找一份正经工作。",
+      "len": 67,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "正经工作结果她就不想因为这件事情心里阴影，想找个正经工作。结果你们猜到后续剧情了吧？正经工作就是投完简历之后，她投了个简历到一个大公司，那个大公司的老板在刷简历的时候就刷到了这个女生的简历。然后那个老板是谁呢？就是那个男主，就是那个把她误以为是小姐然后扇他一巴掌的那个男主，就说她装什么的那个男主。然后看到她简历，刷到她简历，然后就说好，这个女生很有意思，然后让她进来之类的，然后说进来做我的秘书，然后折磨她。后面真没看了，看到这里的时候已经吐血了。",
+      "len": 225,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "medium",
+      "length_tier": "long",
+      "representative_phrases": [
+        "你们猜到后续剧情了吧？",
+        "然后那个老板是谁呢？",
+        "看到这里的时候已经吐血了"
+      ]
+    },
+    {
+      "text": "这就是女频小说，这是真人节了吗？不知道。",
+      "len": 20,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "小可怜兮怕律动，你装什么好蛋疼。是的啊，好奇怪啊这个小说，会不会看到这里真看不下去。最后结尾肯定是他们两个互相折磨在一起吧，一个猜测。",
+      "len": 67,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "弹幕说人家人家错过一个弹幕，好像刚有条弹幕说什么早知道你早点讲这个故事，高考作文有素材。",
+      "len": 44,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "笑死了，这种门也有人开啦？这个文还在那个你们知道当当图书吗，里面排行前几名。那我知道为什么有人看红果短剧了，早两天前听到这个故事，高考作文就有灵感了是吧？这东西说实话挺公式化的，而且觉得前面相关有点奇怪，不知道为什么能出版，还写一个那个推荐语叫“青春青春女孩必读”之类的，读这个不完蛋了。这下知道第一回龙族的人都看的是什么了。",
+      "len": 163,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "medium",
+      "length_tier": "long",
+      "representative_phrases": [
+        "笑死了",
+        "这下知道",
+        "不完蛋了"
+      ]
+    },
+    {
+      "text": "好吧。",
+      "len": 3,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": [
+        "好吧"
+      ]
+    },
+    {
+      "text": "主播少看点，脑子要没了。看到当时30集就是这个剧情，已经看不下去了。",
+      "len": 34,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "感觉也编不出来这么恶的，太公式了。是的，靠这种书培养好女孩。",
+      "len": 30,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": [
+        "感觉也编不出来这么恶的",
+        "太公式了",
+        "靠这种书培养好女孩"
+      ]
+    },
+    {
+      "text": "行，等一下。",
+      "len": 6,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "可是觉得，所以有的时候觉得宁可你该看一些那种贵族作家写的，别看这些把你的大脑给腐蚀了。相比下龙族真神了，你别拿这个大机东西跟龙族比了。但这本书真的忘记叫什么名字了，你很喜欢是灰泽满这辈子看过最颠的剧情，就是最明目张胆的最颠的剧情，而且是正式出版的那种，所以印象很深刻。能不能看见国内的，刚刚那个不就是国内的吗？你们想要的国内的言情小说灰泽满已经讲完了。如何评价，10分给几分？",
+      "len": 188,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "medium",
+      "length_tier": "long",
+      "representative_phrases": [
+        "别拿这个大机东西跟龙族比了",
+        "最颠的剧情",
+        "灰泽满已经讲完了"
+      ]
+    },
+    {
+      "text": "我看白锦织织的好吧，0分。",
+      "len": 13,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "10分满分，100分给10分。",
+      "len": 15,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "快找出来，你要看找一下吧，找一下吧。这种书还可以卖二三十块钱呢，三四十块钱呢，也是神人了。单目说其实也还好，你史吃少了，那肯定啊。一般来讲看到苗头不对劲了就肯定会抛下那个小说，但是很可惜的就是当时。",
+      "len": 99,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "当时想看它跌到什么地步，所以又看了几天。但其实还有8分，如果是按10分制来算的话，看了十分之二吧，还有十分之八没看那本书。",
+      "len": 61,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "今天打算几点日了？明天还要高考，高考的赶紧去睡吧。选高考的建议在直播间积累一下素材。",
+      "len": 42,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "建议品尽日本小说，日本轻小说其实想直播的时候。",
+      "len": 23,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "有同步试听的，但现在可能也稍微屈服了，可能会稍微想看，但最近发现报备有点困难。",
+      "len": 39,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": [
+        "稍微屈服了",
+        "报备有点困难"
+      ]
+    },
+    {
+      "text": "风气委员有定义什么是下流的权利，所以风气委员绝对理解下流。风气委员最下流，诡辩。",
+      "len": 40,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": [
+        "风气委员最下流",
+        "诡辩"
+      ]
+    },
+    {
+      "text": "什么叫做国内的，不能这么说，没有这么想过。看败犬女主不用报备，真的吗？",
+      "len": 35,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": [
+        "不能这么说",
+        "没有这么想过",
+        "真的吗？"
+      ]
+    },
+    {
+      "text": "今天是9号，现在确实是9号。",
+      "len": 14,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "可以吗？那睡醒起来看吧，9号看吧。",
+      "len": 17,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "没版权就不需要只能看吗？晚上看吧，晚上看吧。但是如果被掐断了就可以下播了，因为当时没看，以前没看过。但是那个女主长着蓝毛，样子是看过，长得挺可爱。",
+      "len": 73,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "可以看青春片吗？最近没有看到过，很久没看青春片了。",
+      "len": 25,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "日常闲聊",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": [
+        "可以看青春片吗？",
+        "很久没看青春片了"
+      ]
+    },
+    {
+      "text": "已经对这个还好吧。就对这个还好，赶紧睡觉去吧，你们睡觉去吧。完全一点都不困，怎么回事？放点音乐听吧，有人想剪歌吗？",
+      "len": 57,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "但你剪的歌必须刚好是婚姻版歌单上有的424首中文歌，看有没有别剪八哥的吧，八哥的实在是剪太多了，现在放DJ要吵死大家了。苦瓜苦瓜宝满，我初中接触言尽小说看得津津有味，有一本《恶龙军团优等生》老沉迷了，大皮修真的不行。",
+      "len": 108,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "恶龙军团优等生？真的吗？有这样一本书吗？你搞的这个名字好神秘啊。真的有诶，延期网络小说故事，讲的是四位出身显赫的王子左野胜、金希澈、安悦幻、郑敏，四位男主角拥有优越的家世与出众外貌，直到遇见平凡却坚韧的女主蓝奕新。这些名字取得怎么这么像日本人？蓝奕新因命运预言与四位男王子产生情感纠缠，牛批。",
+      "len": 146,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "medium",
+      "length_tier": "long",
+      "representative_phrases": [
+        "真的吗？",
+        "好神秘啊",
+        "牛批"
+      ]
+    },
+    {
+      "text": "蓝奕新因命运预言与四位男王子产生情感纠缠，牛批。",
+      "len": 24,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "蓝奕新因命运预言与四位男王子产生情感纠缠，牛批。",
+      "len": 24,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "蓝奕新因命运预言与四位男王子产生情感纠缠，牛批。",
+      "len": 24,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "蓝奕新因命运预言与四位男王子产生情感纠缠，牛批。",
+      "len": 24,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "蓝奕新因命运预言与四位男王子产生情感纠缠，牛批。",
+      "len": 24,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "蓝奕新因命运预言与四位男王子产生情感纠缠，牛批。",
+      "len": 24,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "蓝奕新因命运预言与四位男王子产生情感纠缠，牛批。",
+      "len": 24,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "蓝奕新因命运预言与四位男王子产生情感纠缠，牛批。",
+      "len": 24,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "蓝奕新因命运预言与四位男王子产生情感纠缠，牛批。",
+      "len": 24,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "蓝奕新因命运预言与四位男王子产生情感纠缠，牛批。",
+      "len": 24,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "蓝奕新因命运预言与四位男王子产生情感纠缠，牛批。",
+      "len": 24,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "蓝奕新因命运预言与四位男王子产生情感纠缠，牛批。",
+      "len": 24,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "蓝奕新因命运预言与四位男王子产生情感纠缠，牛批。",
+      "len": 24,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "蓝奕新因命运预言与四位男王子产生情感纠缠，牛批。",
+      "len": 24,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "蓝奕新因命运与四位男王子产生情感纠缠，牛批。",
+      "len": 22,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "蓝奕新因命运与四位男王子产生情感纠缠，牛批。",
+      "len": 22,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "蓝奕新因命运与四位男王子产生情感纠缠，牛批。",
+      "len": 22,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "蓝奕新因命运与四位男王子产生情感纠缠，牛批。",
+      "len": 22,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "蓝奕新因命运与四位男王子产生情感纠缠，牛批。",
+      "len": 22,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "蓝奕新因命运与四位男王子产生情感纠缠，牛批。",
+      "len": 22,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "蓝奕新因命运与四位男王子产生情感纠缠，牛批。故意玩的rap，不会还是听下来的原词。",
+      "len": 41,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "嗯。",
+      "len": 2,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": [
+        "嗯"
+      ]
+    },
+    {
+      "text": "太快了吧，这个口说得也太快了。你问我五年后会变什么样，你会看到什么结果？什么玩意，怎么会有这样的歌词？",
+      "len": 51,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "一起陪你逃到小岛上，一起找什么。",
+      "len": 16,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "me see you my honey, don't you. 我是一个被你编犹豫的小丑, oh yeah. 每天都情话想不想听, just tell me. 求求你给个回应让我开心, i'm ready. on i'm not a player, 但你从不相信. 想把自己变帅只为了承托你, when you need the love, 我随时可以 call me. just call me, just call me, e e e.",
+      "len": 220,
+      "session": "睡前电台0608",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "medium",
+      "length_tier": "long",
+      "representative_phrases": [
+        "求求你给个回应让我开心",
+        "just call me",
+        "我是一个被你编犹豫的小丑"
+      ]
+    },
+    {
+      "text": "svc现在我全都好奇，难道一直以来都是麦克风的问题？确实是，可能真的是吧。换身卡去了，换身卡去了。没有，今天是今天，今天今天可能比以前可以比以前开心。你好，可能是刚教完作业的那个一瞬间的爽感出现了。好，直播到此结束了，拜拜。今天今天就此结束了，晚安大家，晚安直播见的大家，拜拜拜拜拜拜拜拜拜拜。睡觉吧睡觉吧，晚安大家，睡觉睡觉睡觉睡觉睡觉。小满觉得柜子台和动画版更喜欢打歌恶作剧之吻吗？台版的恶作剧之吻是会在买最喜欢的，因为有一种那种纪录片的感觉。",
+      "len": 224,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "写写悠运怀旭的《喜欢你》鲜血当告白话术，小马地亚斯的《喜欢你》，谁太虚的《喜欢你》，谁皮诺参三七的告白话术，写唐方七零一二七零七《喜欢你》，写new exchange《喜欢你》，写因为下次很多喜欢你，谢谢news time三七买来米奇越云夜的告白话术，谢谢谢谢谢谢圣语妙的《喜欢你》，写两个大灰泽满的《喜欢你》，写米奇越云夜的告白话术，写用英文化评要的告白话术，谢谢写圣语妙都喜欢你。好的，写灰泽满从小爱说唱，小满可以自我感情的念念你的id吗？这对说唱名很重要，希望复刻《听妈妈的话》，算了，灰泽满在说唱方面确实是没有肩负的，之后再胡验一下吧。首先没有从小就很爱说收场，呃写不是水果是冰果，南洋",
+      "len": 297,
+      "session": "睡前电台0608",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    }
+  ]
+}

@@ -1,0 +1,1794 @@
+{
+  "sessions": [
+    "夜间电台0630"
+  ],
+  "summary": {
+    "total_turns": 19,
+    "raw_turns": 151,
+    "noise_turns": 132,
+    "avg_len": 99,
+    "scene_overview": {
+      "日常闲聊": {
+        "count": 4,
+        "main_length_tier": "long",
+        "tier_distribution": {
+          "long": 4
+        },
+        "main_emotion": "medium"
+      },
+      "其他": {
+        "count": 4,
+        "main_length_tier": "medium",
+        "tier_distribution": {
+          "medium": 2,
+          "short": 2
+        },
+        "main_emotion": "low"
+      },
+      "被夸时": {
+        "count": 3,
+        "main_length_tier": "long",
+        "tier_distribution": {
+          "long": 1,
+          "medium": 1,
+          "short": 1
+        },
+        "main_emotion": "medium"
+      },
+      "被戳穿/被质疑": {
+        "count": 5,
+        "main_length_tier": "long",
+        "tier_distribution": {
+          "long": 3,
+          "medium": 2
+        },
+        "main_emotion": "medium"
+      },
+      "被催播/催更": {
+        "count": 1,
+        "main_length_tier": "long",
+        "tier_distribution": {
+          "long": 1
+        },
+        "main_emotion": "low"
+      },
+      "感性流露/孤独": {
+        "count": 1,
+        "main_length_tier": "long",
+        "tier_distribution": {
+          "long": 1
+        },
+        "main_emotion": "high"
+      },
+      "被越界/被调戏": {
+        "count": 1,
+        "main_length_tier": "medium",
+        "tier_distribution": {
+          "medium": 1
+        },
+        "main_emotion": "medium"
+      }
+    },
+    "top_phrases": [
+      {
+        "phrase": "想多了",
+        "count": 2
+      },
+      {
+        "phrase": "灰泽满很干净啊",
+        "count": 1
+      },
+      {
+        "phrase": "小朋友们还是不要学习",
+        "count": 1
+      },
+      {
+        "phrase": "太放心灰泽满了",
+        "count": 1
+      },
+      {
+        "phrase": "你们想多了",
+        "count": 1
+      },
+      {
+        "phrase": "你们就放心吧",
+        "count": 1
+      },
+      {
+        "phrase": "好吧，其实就是",
+        "count": 1
+      },
+      {
+        "phrase": "想多了吧",
+        "count": 1
+      },
+      {
+        "phrase": "应该是得洗脑吧",
+        "count": 1
+      },
+      {
+        "phrase": "希望",
+        "count": 1
+      },
+      {
+        "phrase": "没有没有",
+        "count": 1
+      },
+      {
+        "phrase": "那还真不是",
+        "count": 1
+      },
+      {
+        "phrase": "顺走",
+        "count": 1
+      },
+      {
+        "phrase": "你们确实想太多了",
+        "count": 1
+      },
+      {
+        "phrase": "真的想太多了",
+        "count": 1
+      },
+      {
+        "phrase": "确实是不能",
+        "count": 1
+      },
+      {
+        "phrase": "虽然是蚊子但是很吵",
+        "count": 1
+      },
+      {
+        "phrase": "要不要大方去客厅走一下",
+        "count": 1
+      },
+      {
+        "phrase": "不太可能吧",
+        "count": 1
+      },
+      {
+        "phrase": "可能性是比较低的",
+        "count": 1
+      },
+      {
+        "phrase": "相亲相爱",
+        "count": 1
+      },
+      {
+        "phrase": "有点忙忘了",
+        "count": 1
+      },
+      {
+        "phrase": "搬东西啊、拆桌子啥的",
+        "count": 1
+      },
+      {
+        "phrase": "开一个电台",
+        "count": 1
+      },
+      {
+        "phrase": "羞耻症",
+        "count": 1
+      },
+      {
+        "phrase": "心理阴影",
+        "count": 1
+      },
+      {
+        "phrase": "特别的崩溃",
+        "count": 1
+      },
+      {
+        "phrase": "必掰了",
+        "count": 1
+      },
+      {
+        "phrase": "说实话",
+        "count": 1
+      },
+      {
+        "phrase": "天哪",
+        "count": 1
+      }
+    ]
+  },
+  "turns": [
+    {
+      "text": "晚上好，晚上好，晚上好，晚上好，晚上好，晚上好，晚上好。听得清楚吗？听见了吗？现在有声音了，现在有声音了吗？现在有了吧。我觉得谢谢醒不过来的qwq的舰长，谢谢谢谢谢谢。没有，他在这个，你东西他在洗手。",
+      "len": 100,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "他应该在房间洗澡。",
+      "len": 9,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "晚上好，晚上好。女同学说话不可能，不行，肯定不行，肯定不行。谢谢刚大侠的见着，谢谢。",
+      "len": 42,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "现在是在新家吗？是在新家，是在新家。今天是第一次搬到这个房间。其实之前有犹豫一下，因为东西太多了，觉得没有办法一次性全部搬完。今天不应该会睡在这里，但还是来了。为什么呢？灰泽满其实当时说自己没有带睡衣，也没有带浴巾，就是很多东西都没带，感觉不太合适一次性搞不完。结果女同学说，因为只带着被子嘛，起码先把被子搬过来，不过有两床被子。结果女同学说，就是用他的睡衣，穿他的，用他的浴巾借呢。小朋友们还是不要学习，因为用别人的浴巾还是怎么讲呢，灰泽满很干净啊，所以可以，就是他干，灰泽满用他放心一点。但是如果你真给别人用浴巾，说不定你并不了解对方，就千万别这样干。只能说这个女同学可能太放心灰泽满了。",
+      "len": 296,
+      "session": "夜间电台0630",
+      "noise": false,
+      "scenario": "日常闲聊",
+      "emotion_intensity": "medium",
+      "length_tier": "long",
+      "representative_phrases": [
+        "灰泽满很干净啊",
+        "小朋友们还是不要学习",
+        "太放心灰泽满了"
+      ]
+    },
+    {
+      "text": "太变态。",
+      "len": 4,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": [
+        "太变态"
+      ]
+    },
+    {
+      "text": "谢谢谁懂灰泽满开播去就笑的喊吃的样满神今天搬家辛苦了，会认床吗？还没睡呢，还没睡呢。第一切很干净啊。今天他陪灰泽满回自己的房间拿收拾东西的时候，他当时都震惊了，就说啊你你房间原来这么干净。就是灰泽满原来的这个房间可能给他铺垫了一下，就说自己的房间很脏很乱，你进来要小心一点。结果他进来的时候看到这个房间，说你房间很干净啊，就一点都不乱。他说你房间特别干净，然后回去把你吓一跳，但其实内心暗爽了，确实很干净。但是谁谁没有，他在洗澡啊，他在洗澡。他在洗澡，有没有二次元花旗，就是阿全最喜欢的花旗。你不洗澡洗得过的呀，就是用他的雨衣和这个睡衣是吧，就这样。",
+      "len": 275,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "你等一下，没看清。不应该先把洗漱用具和睡衣拿过来吗？灰泽满就是拿了一套睡衣过来，但是当时呢，是这样子的，就是闻了一下那个睡衣，自己闻不出来那套睡衣是干净的还是脏的。",
+      "len": 82,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "这谁不能住？就是当时呢，拿了一套睡衣出来。然后当时灰泽满在那个客厅就闻到半截，就说这个睡衣是新的，但是不知道有没有过过水。他是新的睡衣，就是好像他没有过过水。然后感觉新的睡衣不过水，可能你不能一下穿上去吧。当时犹豫了一下，这个不是很正常的事情吗？",
+      "len": 123,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "等他洗完澡就要下锅了，但我也有过水暗爽姐。",
+      "len": 21,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "其实是一起洗澡，婚姻版先洗完了。没有没有没有，那倒没有，那倒没有。那就是脏的是吗？那就是脏的，那可能就是脏的，那可能就是这样的。",
+      "len": 64,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "cf长盛趁他洗澡压低声音直播，还有偷琴的感觉。其实这个房间灰泽满现在觉得他没有那么的对。现在确实压低声音，因为感觉有点尬住。感觉他不会再听了。感觉有点尬住，他别突然一下子骄傲叫我回家。买感冒药了吗？是的，最近这里很冷，所以稍微有点感冒。衣服穿没穿过是靠闻的吗？是的。",
+      "len": 133,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "灰泽满说你们说的是灰泽满声音感冒了怎么像男生声音。没有声音啊，这里面有声音，这边没有那么闷。有一个中央新风的一个窗口，就是有换气的窗口，所以不是很闷。现在会这么抬头看一眼，好像还可以。还行，然后今天去搬了很多桌，搬了一个桌子回来。浴室的话听不见，对啊，在对面。雨时在他自己房间的对面，雨时都关着两扇门呢，肯定都听不见。什么叫吃菠萝了吗？在别人面前，他其实知道会这么直播的这个声音，他其实经常看灰泽满直播。",
+      "len": 202,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "一起播就不尴尬。没有他肯定不会说话，他肯定不愿意说话，你们想多了。你以为谁都跟会这么一样细度啊？你们以为谁都有这种想在互联网上这种表现欲啊？他肯定他说话，他绝对不会说话，你们就放心吧。他自己他早就缩起来了。不过这个女同学她有一个报时器，是一个男人的声音。好吧，其实就是那个Nintendo Switch的，就是任天堂的。今天出了一个那个，一个向日葵的一个报时器，你们知道吗？当时呢，会在有一天进这个房间的时候，就听到一个男人在那里说，现在是什么什么几点钟啊，当时真的吓一跳。嗯，不过那个其实是报时器的声音。所以如果你们听到一个这个整点报时，就是那个，应该他放房间了。他刚刚本来是放客厅的，应该是放房间了。",
+      "len": 302,
+      "session": "夜间电台0630",
+      "noise": false,
+      "scenario": "日常闲聊",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": [
+        "你们想多了",
+        "你们就放心吧",
+        "好吧，其实就是"
+      ]
+    },
+    {
+      "text": "不说话偷偷摸你，没有人在身边。现在没有人在身边，或者买在自己的B座的一个小房间里，其实还好，这个房间还好，活动一下其实还可以接受，还是不错。谢谢请不足报道的舰长，谢谢谢谢爱穿球裤Z的舰长，谢谢谢谢。14k说好的本音直播呢？我求求你千万不要再破坏盛须蒙蔭的世界观。呃，这个声音他他借眼睛也不是借眼睛，但是他知道这个，他如果切他经常就是放灰泽满的直播在旁边，虽然他觉得很无聊，但是。",
+      "len": 189,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "你们不会真以为灰泽满是那一个吧？想多了吧。能从桌子下面出来吗？桌子下面没有东西啊。应该是得洗脑吧，应该是在洗脑，希望。",
+      "len": 59,
+      "session": "夜间电台0630",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": [
+        "想多了吧",
+        "应该是得洗脑吧",
+        "希望"
+      ]
+    },
+    {
+      "text": "写扣可以接光买卖房间是有新封窗口是吗？放心了。是说偷琴到底是偷谁的琴？呃，什么时候说过这次是偷情？如果是去那个韩国纪五店那才是偷情，太吓人了太吓人了。就十二月不同，黄金汇字满不让蛮早说话，看来其实是男同学。此时当时我们走在电梯里的时候，就看到很多这个公寓都是男女男女的结伴，就是发现这个公寓的情侣指数巨高。什么现实不爱情公寓，当时当时就一起感慨了一下。其实汇字满都不敢直接说，就觉得有点有点暗示，但是当时他他直接就说这个公寓的情侣指数很高。就当时汇字满就觉得，你只要不带男生回来就可以接受。行吧行吧，就这样，但这是开玩笑的。我们都不会，我们都是比较，我们都是很有鼻音界的感觉。你同学无聊，为什么还放进直播？那其实会在买直播，就是虽然无聊但有的时候放一下",
+      "len": 326,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "以前都是放自己的陶瓷杯，没有带过来。",
+      "len": 18,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "写大梦自知满神，今天晚上你最爱的法兰西之剑要踢瑞典了，你能祝他一路顺利90分钟拿下比赛吗？昨天灰泽满预测的是失败了吗？昨天是不是那个弹幕支持的队伍被拿下了，好可惜。好的，祝你支持的队伍拿下比赛吧。感觉无如陷阱啊。嗯哼，去韩国的才是正宫女同学，后面也会去。哎，但是这个现在这个女室友也会去。隔壁没有东西，无聊天天看，不是入脑了吗？肯定是觉得别的就没什么东西看了，就放个白噪音在外面吧。这样子不是你的吗？不是啊，不是。",
+      "len": 207,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "等会要被配对了，又想死了。配对啥意思？日本队输了会怎么赔命？但为什么要这么独嗨，或者蛮喜欢的这个队伍。写明显满绿，让满小说话。他肯定他绝对不会说话，他绝对会说话。他现在应该是在洗澡。好吧，你们知道灰泽满这个房间是不能锁的吗？之前跟你们说过，因为是一个比较拉垮的那种构造，所以它是个推拉门。给你们走一圈看看好吧，先站起来了。哦，这好记忆。然后就这样子，这个房间就这样子，这个门是这样子关的，太神秘了。",
+      "len": 199,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "其实没有任何的声音，因为旁边这个窗户真的完全打不开。",
+      "len": 26,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "算了，只能这样子了。",
+      "len": 10,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "手动一下看看，说话就暴露了。不是你们不会，以我去他们不会以为不说话就以为真的是他。他是叫男生的女同学吧？但为什么对灰泽满这么不信任？这不是不信任，是觉得你们会觉得在买这个会干这么风险这么高的事情啊，这也太变态了，这也太变态了。谢谢小鱼玩的见着，谢谢谢谢。360度转一圈，360度转一圈，就是一个看着还是有点那个啥。明天就可以买个台灯吧，感觉这个灯不是很足以够支撑这个在买学习最快的光源，对，还是去买个台灯比较合适。",
+      "len": 207,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "什么叫做带节奏？仔细听，什么也没听到。哎，其实但是灰泽满现在什么也没听到，真的真的真的，可能水深真的听不到，因为毕竟就隔了几扇门，中间一个客厅，然后有什么墙之类的。",
+      "len": 82,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "那就是男的，不是风险越高越有感觉哦。",
+      "len": 18,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "奶奶来了，奶奶来了。他那个报时器只要不在外面就行，先跟你们提示一下就行了。报时器不在外面就没啥大事，而且他现在应该也没及时找。怎么啊，你原来住的地方没有台灯吗？有的，但是这个台灯已经报废了，早就洗完了，早就洗完了。那肯定他是在直播间了，已经预测了，但是他肯定呢，他只是写完潜水。",
+      "len": 139,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "写一水斩棘能不能看一下满扫浴室门锁没锁，考验一下他对你的忠诚度。不是，你们真知道完了？好了，你们知道完了。好吧，我们两个都是侄女，只是关系还可以，没有虫子。其实今天检查一遍，没有什么虫子。今天不看动漫了，再说吧，再说吧，过两天再说吧。今天就是六月的最后一天了，那就每每结束吧。婚姻买下来吃饭了，呃，他打算叫婚姻买一个别的泥尘，对，就是取了一个别的泥尘，但是不到万不得已的时候应该是不会叫的，就是不到太急迫的时候是不会叫的，这是跟他说好的一个事迹。除非他真的很急，应该没有很急。其实婚姻买是说你叫我那个什么，哎，或者是什么，那一个，或者是，呃，就叫这种语气词就可以了。他说还是叫一个那个给你编，给你就是随便给你取个泥尘之类的。写婚姻买加",
+      "len": 317,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "能不能突击一下你们？别搞他，他肯定是很潜水的那种。有一些其实会比较……怎么现在身边的人都还蛮特别的，都是很低调那种，或者是他觉得很害怕，很害怕房间里还有那个……你们你们你们不要联想到那个词。它其实很多都是很低调，很不细多的一个人，很奇怪吧。叫泼猴就好了，可恶。",
+      "len": 130,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "灰子们会化妆吗？这家里肯定不会啊，想什么呢。你都用人家预期了，哇，这个用预期有点哇。肚子在叫，完蛋了完蛋了。没有没有没有，关麦，呃，现在没有，现在没有声音了。拿走手机，可能今天没有，可能今天没怎么吃饭吧，今天一直在搬东西，今天一直在搬东西。",
+      "len": 120,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "选114k，明早要考欠入试了。什么叫欠入试？满神是做体龙吗？满早是做体龙吗？能不能让他祝你顺利过关不挂科？嗯，没有第一回的意思，但其实就是刚会下来，就是各有所长吧，也就是半斤八两。但是这个女士有的是她不会正在亲吧？她不会正在亲吧？但她真的感觉她是一个富区啊，感觉他是富区。希望没事啊，这个他不会生气吧？就让富区不会生气吧？富区来了，真的是富区。",
+      "len": 172,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "应该没事吧，应该没事吧。行，当他没亲到就行了。",
+      "len": 23,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "金钱两条区，那才是能玩到一起啊，对吧。我们互相有互相擅长的东西，也没有说特别的厉害，但也不差就对了，反正还是有点东西。卧龙凤雏，卧龙凤雏这个词好像也没有那么不好。没有没有，灰泽满跟他比那还真不是啊，那还真不是，一直不是啊。就是灰泽满，其实今天跟哇塞跟这种富区一起，如果睡觉的话，不是睡觉，就是同居的话，很多东西直接咱们就是一个顺走。",
+      "len": 166,
+      "session": "夜间电台0630",
+      "noise": false,
+      "scenario": "被夸时",
+      "reasoning": "她先自谦说'没有特别厉害'，又用'卧龙凤雏'自嘲，最后否认与富区比较，属于被夸后的推辞和自贬反应。",
+      "emotion_intensity": "medium",
+      "length_tier": "long",
+      "representative_phrases": [
+        "没有没有",
+        "那还真不是",
+        "顺走"
+      ]
+    },
+    {
+      "text": "你同学别听，不是不是。比如说今天就说那一款牙膏，今天灰泽满说只有牙刷迷戴牙膏，他说这里有一款牙膏你要用吗？我去，然后看到一款非常高级的牙膏，牛了牛了牛了。",
+      "len": 77,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "谢谢灰泽满为站台离沙满草在主播节满菜的话骂你一下，但是他不知道他喜欢非常神秘的一个人，只能这么说。以前觉得他是不知道他，哎，算了，不好说。你继续怪盗吧。没有啊，今天是你请我愿的事情。你在玩动物迷沉吗？小心钱包。你们想多了吧，你们真想多了，我哭死你。我去你大爷的，婚姻办同居室我也去去，是吧，不好意思，但是也没去，去吧也没去，去也没去。同居第一天就开始低回你同学，你看见好的没机会，没机会，没机会。我们都是真的是很好的朋友。话说今天确实是婚姻版变成辉克了，今天自己把这个网络搞好了，但是应该是我们两个一起搞的，就真的是把网络搞出来了好神秘啊。当时测试出来之前一直连不上的原因是因为没有买一个合适的路由器，所以今天换了个路由器都好。",
+      "len": 314,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "有没有觉得现在网络还挺好的？因为现在是新家的网络，就好很多。你是想激怒她是吧？so free，玩到真东西了。",
+      "len": 54,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "谢谢。",
+      "len": 3,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": [
+        "谢谢"
+      ]
+    },
+    {
+      "text": "而且其实你们确实想太多了，因为身边也不是完全没有那种喜欢女生的女生。但女室友目前跟灰泽满只是一个关系很好的女同学而已，所以你们真的想太多了。",
+      "len": 70,
+      "session": "夜间电台0630",
+      "noise": false,
+      "scenario": "被戳穿/被质疑",
+      "reasoning": "她在回应观众对她和女室友关系的猜测，先否认再解释，属于被质疑后的澄清。",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": [
+        "你们确实想太多了",
+        "真的想太多了"
+      ]
+    },
+    {
+      "text": "灰泽满辉克是很厉害的，别在门房偷听。",
+      "len": 18,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "包美偷听的，但是好像听到一些。",
+      "len": 15,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "等一下，你们都别说话，听一下这里的声音。",
+      "len": 20,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "真的一点声音都没有，这个房子隔音这么好吗？",
+      "len": 21,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "没有声音，现在连底噪都响。",
+      "len": 13,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "文科P爱理工P，我们两个都是文科，我们两个都是文科，反正都是理科学得不太好。你同学听完就黑化了？那倒没有。",
+      "len": 53,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "说得好像你们能出声一样，确实是不能。但是你们这个弹幕看起来很吵，虽然是蚊子但是很吵。要不要大方去客厅走一下？",
+      "len": 54,
+      "session": "夜间电台0630",
+      "noise": false,
+      "scenario": "被戳穿/被质疑",
+      "reasoning": "她先承认对方说得对（'确实是不能'），再用'蚊子但很吵'的比喻反击弹幕，属于被戳穿后的嘴硬反应。",
+      "emotion_intensity": "medium",
+      "length_tier": "medium",
+      "representative_phrases": [
+        "确实是不能",
+        "虽然是蚊子但是很吵",
+        "要不要大方去客厅走一下"
+      ]
+    },
+    {
+      "text": "好吧，巨型炸弹扑上来。",
+      "len": 11,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "没有了，只是非常重地扑在床上而已。可以判断出灰泽满的蹲位吗？",
+      "len": 30,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "不行了，有点舒服，那就直接躺着吧。",
+      "len": 17,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "什么壁咚鸡，确实是什么壁咚鸡。对不起，吵到你的眼睛了。谢谢自罚武功的开球。",
+      "len": 37,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "三百两百说啥了。",
+      "len": 8,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "这个真的是巨型。明天要买一个螺丝刀，因为衣柜的镜子打算给它拆下来，然后换一个面上去，这是目前的一个打算。",
+      "len": 52,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "可是你同学马上就要离开了，以后真的只能自己在这个房间转悠一下。跟你们介绍一下吧，算了，现在还是别说了。几个人不在床上了，大概只是一个灰色罢了。谢某小主播，我听你的推荐看了艾卡苏，我觉得他大空鸣是最可爱的主播，你懂吗？以前不喜欢大空鸣，但你要说实在喜欢他就喜欢吧，也就不第一回了。",
+      "len": 139,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "我丝刀感觉特别佳好，今天去拆那个桌子，就是要搬一个桌子过来，不太会安装，是让别人帮忙安装一下，就是要用那种电钻的感觉。",
+      "len": 59,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "可以带人回来了，你们千万别吓了。这个房子说真的，可能是之前灰泽满住的，真的是蜗居，就是17、18平米的一个小房子。",
+      "len": 57,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "就是一个厨房、洗手间、卧室在一起的小房子，可能真的不到20平米，特别小。现在这个房间其实也很小，但比想象中大太多。请问你同学怎么评价绿动呢？你同学再次下场休息，又轮到绿动的回合了。为什么每条IC要加个恐龙，什么玩意？",
+      "len": 108,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "绿动的他有评价过吗？思考一下身边人。但是你们觉得灰泽满是那种会对着别人区区自己直播间粉丝的人吗？你们怎么想灰泽满呢，对吧？我们不是一直都跟直播间大伙相亲相爱吗？怎么会有这个区区的环节呢？怎么会在背后提到这个事情呢？不太可能吧，可能性是比较低的。",
+      "len": 122,
+      "session": "夜间电台0630",
+      "noise": false,
+      "scenario": "被戳穿/被质疑",
+      "reasoning": "她在回应关于'绿动评价过她'的质疑，用反问和否定来撇清自己不会在背后贬低粉丝，属于被质疑后的辩解。",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": [
+        "不太可能吧",
+        "可能性是比较低的",
+        "相亲相爱"
+      ]
+    },
+    {
+      "text": "别想了别想了，太湿了太湿了。",
+      "len": 14,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "其实记录太清楚了吧，感觉灰泽满还是表里如一的，就是该说什么说什么的那种，并没有说非常硬要去硬黑硬骂。等一下，充个电，把这个iPad充个电。",
+      "len": 69,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "那你知道是不是每天区区，反正不会每天要骂三次。你这个字我意识过深了，还每天要记起三次吗？但今天其实确实是有点忙忘了，因为今天搬东西啊、拆桌子啥的，就很久很累，就忘记了要提示那个直播的时间。那其实本来就是说今天弄完之后开一个电台。",
+      "len": 114,
+      "session": "夜间电台0630",
+      "noise": false,
+      "scenario": "被催播/催更",
+      "reasoning": "她在解释今天忘记提示直播时间的原因，并说明原本计划开电台，属于对被催播的回应。",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": [
+        "有点忙忘了",
+        "搬东西啊、拆桌子啥的",
+        "开一个电台"
+      ]
+    },
+    {
+      "text": "你说过没有骂得很难听。",
+      "len": 11,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "太表里如一了，当然是表里如一的一个人呢。谢谢小锦涵祝我的开一球，谢谢祖母阿维的开一球。翘了什么意思？哎呦天哪，这个弹幕也太延迟太久了吧，我也切了，这应该五秒前。其实很熟，你们知道是这样子的，前天吗还是哪天，有一天晚上。",
+      "len": 109,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "聊到什么话题，可能说得有点多了。那个女室友问你：“你是喝醉了吗？你今天疯了吗？为什么你可以完全像没有心之壁一样说这些？”其实灰泽满当时都没反应过来，觉得好像也还好吧。可是可能在他看来，会觉得不应该说那些有的没的吧。那也觉得有点认可，有点认可祭金母的开场。什么话题类似忘记了，是房子的事情吗？还是新做的事情？好像是这样。随时监控，哇塞，感觉女同学真的有点太尊重灰泽满了，同居状态完全没发出任何声音，是不是有点强迫人家了？算了，本质上应该都是很安静的两个小女生，就这样吧。",
+      "len": 234,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "她是记录，嗯，她是有点害怕吧，有点害怕。她怕这个慧琪买突然一下子说太内沙了，好像喝了很烈的酒。什么时候变成空巢老人不能跟你们说，但是只能说。",
+      "len": 70,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "基本上就是马上不能告诉你们，到时候出问题了。",
+      "len": 22,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "因为这个确实是隐私。右下角显示你的组队是葡萄牙，真的，当前主队葡萄牙可以换吗？怎么换不了啊？",
+      "len": 46,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "钱呢，居然切换不了吗？它是随机分配的吧，那没招了。难道你希望在家里开party吗？首先感觉开party这个事情是不太可能发生在慧琪买这里的，因为本身就不太喜欢太多人这么热闹的感觉。一般来讲三个人，就三四个人是最好的出去玩的状态，三四个人是差不多比较舒服的。可是超过了4个人这个数量，就会觉得有点难以应付，稍微有点累。想换哪个挑选一下都行吧，随便吧，无所谓啊，葡萄牙就葡萄牙呗，就什么了，都没有一个了解。",
+      "len": 201,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "换成但那个不是都淘汰了吗？换成别的也都淘汰了，别换了，别的都已经没了。是啊是啊是啊，都没了，那算了吧。三四个你们说的是慧琪买，说的是正规的party。",
+      "len": 75,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "下播后，我们几个还打电话聊天，有277、三个女、我妈不是说不出话了，277，还有看看前辈、明月前辈。",
+      "len": 50,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "你要支持谁吗？知道是你哥同期的原因吗？同期，哎呀，约好的。我们年底还会见吧？年底正要回去了，年底还会来。小福星支持哪队都行。嗯，那算了吧，那就都不支持，因为想支持的没劲了。不好意思，想支持的队伍没有劲。",
+      "len": 101,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "277除了你都没人发动态。277他们太甜蜜了，他们几个人太甜蜜了。三个女生，不是三个女神吗？三个女神，我们四个女神，还有明月前辈，还有看看前辈，非常熟识。",
+      "len": 77,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "你昨天太高兴，把别人送回家了，会是满足这个能量这么大吗？",
+      "len": 28,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "你不见一下小羽前辈吗？小羽前辈首先就是回去可能不会特意跑一个地方去见我。错对不起对不起，这个素质太低。现在就是感觉回去是想回老家那边，就是会跑。算了算了算了，还没定好还没定好，没事没事，这个就不说呛的。他们有和你连麦吗？有。满身明天谁先起床，100%是你同学先起床。他说他来叫我起床，我说算了吧。",
+      "len": 148,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "算了，还是别叫了，还是自己定个闹钟起来吧，这太诡异了。我靠，你弹幕延迟两分钟吗？弹幕延迟好多分钟。弹幕可以安静的，别人都在安静地听灰泽满讲话，就你要刷这么快。",
+      "len": 79,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "他不来他很鸡掉。哎呦，刚刚是要说一个什么事情还是忘记了。哦对啊，就是说为什么他比灰泽满更早起来，作息更健康。他9点钟就说自然醒，好厉害。但我可能会睡到个下午吧，所以今天会定一个12点的闹钟，12点再不起来就真的完蛋了，真的完蛋了，真的出事了。",
+      "len": 121,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "女同学第二天早上只能看到一条水肿的蛆。不光水肿，而且……我去，确实是。但今天没吃东西，应该肿不了。但今天在喝水，现在突然很渴，在喝水，那可能确实是会的。",
+      "len": 76,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "九点也还好吧，早点睡吧。以后唱歌被别人听到才是真的尴尬，说话都无所谓，唱歌这个被别人听到，真的是能不笑的都是神人，有点讲笑了。女同学死在你手机里了。九点很早吗？九点还不早？放假的时候谁会九点起床？放假的时候建议你们肯定是睡到那个叫什么，太阳落山吧，对不对？睡到六点感觉不太正常。但灰泽满现在都睡到大概四五点，但最近都起得很早，因为今天要搬东西，所以很早。事实上亲手做的饭，嗯，可以品尝一下，确实可以品尝一下。",
+      "len": 204,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "可能在隔壁，你们想太多了，他没在隔壁呕吐就行。你们不会以为这是相亲相爱的那种吧？他别在隔壁呕吐就行了。",
+      "len": 51,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "没有啦，没有开玩笑，开玩笑。太有作息了，但早上的时候我们都不吃饭，早上我们都不吃东西，应该是中午的时候再出去觅个食。然后明天去买个台灯，明天我们两个都需要台灯，去买两盏台灯。",
+      "len": 87,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "你唱歌很好听，羡慕你同学。",
+      "len": 13,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "有在别人面前唱歌的羞耻症，因为以前唱歌在别人面前破音过，所以有这种心理阴影，特别的崩溃。直播可能还好一点，直播对着屏幕还好一点，装作是一个人。但是如果真想到有个真人在旁边，还是有点尴尬。",
+      "len": 93,
+      "session": "夜间电台0630",
+      "noise": false,
+      "scenario": "日常闲聊",
+      "emotion_intensity": "medium",
+      "length_tier": "long",
+      "representative_phrases": [
+        "羞耻症",
+        "心理阴影",
+        "特别的崩溃"
+      ]
+    },
+    {
+      "text": "九点起床的确实不多。不是啊，因为你们是七点。终于看到正常的同学关系了。你同学说难听的钥匙，你同学说假的钥匙。你同学其实以前灰泽满给你同学听过，就说这个歌确实会唱得太假了。能听出是我吗？他说其实也可以，面露难色，他感觉面露难色，他说其实也可以吧，也可以吧。",
+      "len": 127,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "Coke的键台好可爱，相机慢慢唱歌。顺便一提，要好好吃饭，不然老了胃口坏。",
+      "len": 37,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "这边WIFI密码不知道是什么，完蛋了。这边这个，对不起，桌上很乱。",
+      "len": 33,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "有这种钥匙，这边iPad没加密码，所以可能登录不上GQ音乐。没有东西高琴商，其实他增高琴商。",
+      "len": 46,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "不然好好吃饭是真的，最近吃得少一点。他会说漏话吗？你们以为会是那种没有经验的小白花吗？早就已经跟他打好了，两个人早就不知道排练过多少次了，不是排练，叫什么，就是已经提醒过很多次了。",
+      "len": 90,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "密码是8个8。没有密码是挺难的一个密码，得去看一下。哇塞！",
+      "len": 29,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "这个充电线是他给棍子买的，怎么充不上电啊？什么情况，完蛋了，这个充不上电。他现在能送个充电线过来吗？你在直播间就送个充电线过来了？又在蹭别人的充电线，这充电线坏了吧。",
+      "len": 83,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "他可能就送过来，但应该不在吧。这是个测试。",
+      "len": 21,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "就是时而充得上，时而充不上，不好说。",
+      "len": 18,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "反复插一下就好了，是反复插一下好一点。谢谢姐妹，我懂你。我在学校也是下午5点起床，一天一顿饭，剩下的钱全给管家打你。谢谢，那你今天就少吃点吧。谢谢，欢迎你。这是什么易战歌？其实女同学也挺喜欢唱歌，但是灰泽满没听过她唱歌，好像没听过她歌，评比灰泽满好很多。灰泽满的中文歌单都不敢当在别人面前放，中文歌就是有点品位太差。我现在好像好登入场。",
+      "len": 168,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "给你当女仆来了。你们太想多了，你们这个真的想多了。剩的电吗？28个电肯定是够的。等一下，得找一下这个WiFi密码。",
+      "len": 57,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "是什么来着？可以共享密码，共享时出问题，那就是因为在直播所以共享不了，去找一下路由器。",
+      "len": 43,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "可以听到灰泽满在走路，我操，这个是开柜门的声音。",
+      "len": 24,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "客厅完蛋了，WiFi密码在客厅，谁敢出门？他可能真的会有声音，谁敢出门？WiFi密码在客厅，现在谁敢出去？出去不死，到时候真气闹。如果他打电话怎么办？他应该不再看灰泽满直播，他应该是要打电话。我怀疑晚上的时候可能给家人打电话，这合适吗？你说把本公主的充电线拿来，你们这样子，灰泽满早就已经不知道跟多少人切割了。灰泽满就是一个特别讨喜的小女生，所以才能维持这么长久的友谊。",
+      "len": 185,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "这个用10R充得上，10R充不上。董事姐赶紧把充电线给我拿过来，不行啊，这充不上怎么办。",
+      "len": 44,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "什么玩意。",
+      "len": 5,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "算了，真的一下就讨厌一个人了，不行了，我得必掰了，我说实话，我得必掰了。",
+      "len": 36,
+      "session": "夜间电台0630",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "medium",
+      "length_tier": "medium",
+      "representative_phrases": [
+        "必掰了",
+        "说实话"
+      ]
+    },
+    {
+      "text": "得关麦了，他肯定不想别人听到他的声音，你们放心吧。",
+      "len": 25,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "你直接发微信给他，现在手机在直播，你们在想什么？喜多的好女孩，你不会记音吗？记音吧。",
+      "len": 42,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "真的去找他要跟充电线好尴尬。去了去了去了，真记音了。她在穿衣服，灰泽满笑得要死，灰泽满根本没听，因为她在穿衣服。",
+      "len": 56,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "她倒是真有声音了，现在真有声音。",
+      "len": 16,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "看到她在洗澡的时候灰泽满悄悄进去，差点看不懂，天哪。虽然女生之间没啥，但还是不太方便吧。她在那个啥，先关门，她应该是，她说她也没穿衣服。她洗澡比较久，肯定是玩手机，肯定是光着身子玩手机。玩手机就是，你们没有洗完澡的时候会玩会儿手机吗？很正常吧。",
+      "len": 122,
+      "session": "夜间电台0630",
+      "noise": false,
+      "scenario": "日常闲聊",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": [
+        "天哪",
+        "很正常吧",
+        "肯定是"
+      ]
+    },
+    {
+      "text": "来了来了，OK OK，谢谢。",
+      "len": 14,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "你同学已经崩溃了，你同学觉得你是个神经病吧。",
+      "len": 22,
+      "session": "夜间电台0630",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": [
+        "你同学已经崩溃了",
+        "你同学觉得你是个神经病吧"
+      ]
+    },
+    {
+      "text": "OK，现在就好了，现在重新点好了，现在好了。",
+      "len": 22,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "没事没事。",
+      "len": 5,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": [
+        "没事没事"
+      ]
+    },
+    {
+      "text": "你同学在门骂人家。",
+      "len": 9,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "本音毫不谢谢偷拍超低。",
+      "len": 11,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "她刚起说话了吗？我去，被你们踢到北边了，好崩溃啊。怎么会这样，顺序世界观已经被毁了，好伤心，好伤心。你同学在，好恶心，这个有点变态。",
+      "len": 66,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "你们稍等一下。",
+      "len": 7,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "OK，她没说话。现在把这个黑盒放出去。她没说话，想多了吧？你们不会真的以为我在这里发电吧？",
+      "len": 45,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "现在可以洗多之神，色魔之神。",
+      "len": 14,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "直播之神养嘎之神，哇塞，好了，进被窝吧。神经病啊，赶紧从被窝里滚出去。不过这只是天呐，你们知道灰泽满现在是个柜子，对不起，对不起，算了算了，灰泽满素质又暴露了。",
+      "len": 80,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "一个人就现在这个柜子是镜子，这镜子也太硬了。你们真的是要每天看着自己的样子睡着吗？然后明天早上起来就是这个衣柜镜，真的太硬了。这个衣柜镜太硬了，这衣柜镜也太硬了。就每天早上起来看到自己的，就每天睡着也要看着吗？这是合适吗？这什么水星啊。",
+      "len": 118,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "好了，现在躺着。行了行了，太美小团体来了，被发现了。完蛋了完蛋了，谢谢谢谢，喜欢你。",
+      "len": 42,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "冰酒的喜欢，你喜欢你。",
+      "len": 11,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "写看到自己的样子的毫米啊，好谱呀，好谱。想多了，你同学已经困了，已经睡觉了，已经睡完了。",
+      "len": 44,
+      "session": "夜间电台0630",
+      "noise": false,
+      "scenario": "被夸时",
+      "reasoning": "她先以'好谱呀'回应夸赞，随后用'想多了'推开对方的夸奖，并转移话题到同学睡觉，符合被夸时先否认再转移的模式。",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": [
+        "好谱呀",
+        "想多了"
+      ]
+    },
+    {
+      "text": "这是最硬的配置了，是挺硬的。你还会用螺丝刀吗？会的呀，尽量钻进去研究一下，不是钻到那个衣柜的后面，研究底下的滑轮，大概就是螺丝刀只要拆完就可以了。晚安大家，谢谢。",
+      "len": 81,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "写写写写。",
+      "len": 5,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "写写写，我只会对面卸回粉丝的灯牌了，不是不卸啊，就是以前在那个直播机上看不到。",
+      "len": 39,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "呛到。",
+      "len": 3,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "写什么？今天吃什么？下班后女同学干什么？都不敢想了。你同学只会觉得这个戏多，他又在这里直播了。写的没有，但她其实觉得，她其实这样看应该已经习惯了。谢谢心间，好远哦，别扮演错牌女童的床。",
+      "len": 92,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "OK，不会的，我们想多了吧。写一声少时的谢谢。",
+      "len": 23,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "这个月OK哇，这个月居然超过了300个箭杖，但是只约了300分。箭杖以我看来得多约20分。你同学洗完澡就下播了？不是的，不饶大家了。",
+      "len": 66,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "写的小妈晚安，晚安。半夜千万别突击，说的是你同学。好的，好的，不会的，谢谢。",
+      "len": 38,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "第一首歌她听到了真的会笑死吧。写的自己拆镜子小心点，写收藏，值得收藏的收藏家祝福。跟你同学做联机梦，你在下面，你同学在上面。不是，你们这个真有点骄傲了。",
+      "len": 76,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "怎么讲呢，都不是那种关系了，只是一个非常普通的普通的关系。",
+      "len": 29,
+      "session": "夜间电台0630",
+      "noise": false,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": [
+        "怎么讲呢",
+        "都不是那种关系了",
+        "非常普通的普通的关系"
+      ]
+    },
+    {
+      "text": "谢谢有万一的告白花束，谢谢谢谢命中注定的煎饼的喜欢你，谢谢唇吃破的牛啊牛啊，谢谢唇吃破的粉丝短灯拍，谢谢鹦鹉的粉丝短灯拍，谢谢煙火龙的粉丝短灯拍，谢谢什么神猿子丸的粉丝短灯拍。",
+      "len": 88,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "无限泡影的粉丝短灯拍，熬年吃的粉丝短灯拍。你下播那现在就像你刚去找外拍密码和充电线是什么意思？本来要唱歌的，现在突然尬死了，真的尬晕了。普通朋友？普通朋友会唱这首歌吗？我给你们放一首普通朋友再下播吧。但是护士马其实不太会唱，而且已经躺下了，已经养胃了，已经躺下了，已经崩溃了，就不剩下内材了。找一下吧，搜索一下，做起来了。",
+      "len": 161,
+      "session": "夜间电台0630",
+      "noise": false,
+      "scenario": "被戳穿/被质疑",
+      "reasoning": "她回应了对方关于'普通朋友'的质疑，并自嘲'尬死了'、'养胃了'，属于被戳穿后的反应。",
+      "emotion_intensity": "medium",
+      "length_tier": "long",
+      "representative_phrases": [
+        "尬死了",
+        "养胃了",
+        "不剩下内材了"
+      ]
+    },
+    {
+      "text": "真有这首歌吗？醒了鼻涕要关麦，护士马，醒鼻涕的声音太恶心了，必须要关麦。",
+      "len": 36,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "巨声音可能是被风吹的有点感冒。谢谢新加坡首个大方来普通朋友，这个行吧。今天你多久发货？后面要搬家，五月六月的一起发。打算五月六月都是下周吧，这周整理好名单，五月六月一起整理，然后下周这几周发，一起发。",
+      "len": 100,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "你自己说的是自己说的吗？谢谢。",
+      "len": 15,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "你千万别谢，你的舰长一点都不难过，只是五二零几秒钟很急。能唱首摇篮曲吗？想多了，太恶心。",
+      "len": 44,
+      "session": "夜间电台0630",
+      "noise": false,
+      "scenario": "被戳穿/被质疑",
+      "reasoning": "她先否认对方难过（'你千万别谢'），再拒绝点歌请求（'想多了，太恶心'），属于被戳穿或质疑后的防御性回应。",
+      "emotion_intensity": "medium",
+      "length_tier": "medium",
+      "representative_phrases": [
+        "你千万别谢",
+        "想多了",
+        "太恶心"
+      ]
+    },
+    {
+      "text": "我吵他真别出来，听到一些神秘东西。",
+      "len": 17,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "真的要睡觉了，真的别吵人家了，就这样。我这唱得轻轻易易。",
+      "len": 28,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "好低啊，感觉是唱不了。",
+      "len": 11,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "每当情伤的依然。",
+      "len": 8,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "还收集，等一下确定他听不下，我得过来一下对着这个强唱。",
+      "len": 27,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "说明白。",
+      "len": 4,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "我觉得自己好失败，从天堂掉落到深渊，多无奈。我愿意改变，这真合适吗？找民室友来的，十一分到灰泽满做室友真有福了。凌晨都一两点在这里唱歌，普通朋友感情已那么深，教我怎么放手。",
+      "len": 86,
+      "session": "夜间电台0630",
+      "noise": false,
+      "scenario": "感性流露/孤独",
+      "emotion_intensity": "high",
+      "length_tier": "long",
+      "representative_phrases": [
+        "从天堂掉落到深渊",
+        "教我怎么放手",
+        "真有福了"
+      ]
+    },
+    {
+      "text": "但你说。",
+      "len": 4,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "I only。",
+      "len": 7,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "做个朋友，我在。",
+      "len": 8,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "不是亲人，我感激你对我这样的告白，但我给你的爱暂时收不回来。So I——",
+      "len": 36,
+      "session": "夜间电台0630",
+      "noise": false,
+      "scenario": "被越界/被调戏",
+      "reasoning": "对方表达爱意（告白），她明确拒绝并划清界限，属于被越界/被调戏场景。",
+      "emotion_intensity": "medium",
+      "length_tier": "medium",
+      "representative_phrases": [
+        "不是亲人",
+        "感激你对我这样的告白",
+        "爱暂时收不回来"
+      ]
+    },
+    {
+      "text": "只是比较。",
+      "len": 5,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "哎呦天啊，真有点好听吐了，好听的钥匙，男性的钥匙。",
+      "len": 25,
+      "session": "夜间电台0630",
+      "noise": false,
+      "scenario": "被夸时",
+      "reasoning": "她先以'哎呦天啊'表达惊讶，再用'好听吐了'这种夸张说法回应夸奖，属于典型的被夸时反应模式。",
+      "emotion_intensity": "medium",
+      "length_tier": "short",
+      "representative_phrases": [
+        "哎呦天啊",
+        "好听吐了"
+      ]
+    },
+    {
+      "text": "我猜你早就想要说明。",
+      "len": 10,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "short",
+      "representative_phrases": []
+    },
+    {
+      "text": "失败从天堂掉落到深渊，不会唱出来了。别唱了，出来吧，你同学已经轻度了吧。谢谢。",
+      "len": 39,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "最后一分钟结束，真的赶紧睡觉。谢谢搬家，第一件事就该给家具滴血验亲了，好害怕，好恐怖，好害怕，赶紧潤了潤了。写口味的，喜欢一些大梦自治的笔型。嗯，写了乌鲁花生油的喜欢你。拜拜，大家晚安。谢谢凯拉克，这都是你拿分大招，对的，别养了，节奏不对，早就说过分手了。好听的钥匙，谢谢，还可以吧，一般般吧，其实也没那么好听，一般般吧。晚安，大家晚安，晚安，晚安，晚安。",
+      "len": 178,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "谢谢丽茂、乔千星、训日主。七月好运，七月啊，七月确实还挺丰富的，有一些好事会发生，还蛮不错的吧。今天七月真不错，今天七月是个好日子。嗯，写。",
+      "len": 70,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "写啊，别别，这是EV啊，古拉是EV。你说的是古拉吗，还是谁呀？这谁呀，唱歌有你的影子。看错了，应该不是古拉，应该看错了，这有点太厉害了。写口号，LUP的舰长，谢谢谢谢JR。你们，我们是在偷情吗？",
+      "len": 97,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "long",
+      "representative_phrases": []
+    },
+    {
+      "text": "现在是在跟房静的老鼠说话，就这么决定了。谢谢大家，谢谢XY，爱你。",
+      "len": 33,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    },
+    {
+      "text": "晚安拜拜，那些意思看这个说过了。为什么他这个特效会变啊，好奇怪。写LF3D的舰长，谢谢谢谢谢谢舰长，是EV拿去發財了。",
+      "len": 59,
+      "session": "夜间电台0630",
+      "noise": true,
+      "scenario": "其他",
+      "emotion_intensity": "low",
+      "length_tier": "medium",
+      "representative_phrases": []
+    }
+  ]
+}

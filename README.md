@@ -1,16 +1,19 @@
 # 灰泽满 AI 聊天机器人
 
-基于 **NoneBot2** 框架构建的虚拟主播"灰泽满"QQ 聊天机器人，部署于 QQ 平台。通过**素材驱动的人格系统**（真实直播语料 → 声音样本 + 措辞指纹 → 按需检索注入），高度还原主播的语言风格、行为模式和情感表达。
+基于 **NoneBot2** 框架构建的虚拟主播"灰泽满"QQ 聊天机器人，部署于 QQ 平台。通过**素材驱动的人格系统**（真实直播语料 → 声音样本 + 措辞指纹 + 直播记忆 → 按需检索注入），高度还原主播的语言风格、行为模式和情感表达。
+
+**当前版本：V4**（样本库 56 条全场景均衡 + 措辞库 11 组 + corpus 273 条 + 记忆增强）。完整重构历程见 `ROADMAP.md`。
 
 ## 核心特性
 
-- **素材驱动人格系统（本轮最大重构）**：从真实直播语料提取声音样本（voice_samples.json）与措辞指纹（phrases.json），用"样本示范"而非"规则规定"来塑造说话方式——模型看真实对话学会怎么说话，而不是背规则
-- **五路融合检索（V3）**：直播记忆 / 声音样本 / 行为触发三路向量检索 + RRF 加权融合 + 预算截断，按用户消息情境**只注入当前相关的信息**；用户长期/短期记忆两路确定性注入。全程只调 1 次 embedding
-- **精简人设提示词**：system_prompt 从 318 行/3.2 万字精简到 3500 字（原版备份 v9），删掉数字配额规则，保留核心人格与说话节奏
-- **措辞指纹库**：同一意思 → 她的真实原话（被夸→"也没有啦"、被戳穿→"啊？没有吧"），模型表达同类意思时用她的措辞而非自创
+- **素材驱动人格系统**：从真实直播语料提取声音样本（voice_samples.json，56 条）与措辞指纹（phrases.json，11 组），用"样本示范"而非"规则规定"来塑造说话方式
+- **五路融合检索（V3）**：直播记忆 / 声音样本 / 行为触发 / 措辞指纹四路向量检索 + RRF 加权融合 + 预算截断，按用户消息情境只注入当前相关信息；用户长期/短期记忆两路确定性注入。全程只调 1 次 embedding
+- **直播记忆 RAG（corpus）**：273 条场景化陈述，作为背景记忆（仅相关时提及，不参与风格）
+- **精简人设提示词**：system_prompt 从 318 行/3.2 万字精简到 3500 字（原版备份 v9）
+- **措辞指纹库**：同一意思 → 她真实说过的原话（被夸→"也没有啦"、被戳穿→"啊？没有吧"），全部从素材提取
 - **分层人格引擎**：经典梗硬匹配 → 人设提示词 → 行为触发检索 → 直播记忆 RAG → 声音样本 few-shot
-- **长期记忆系统**：记住用户身份、印象标签与聊天历史（默认一律当熟人，不再按互动次数分关系等级）
-- **离线工具箱**：`run_tool.py` 统一入口，9 个子命令覆盖从"直播音频"到"人格数据"的完整蒸馏流程
+- **记忆系统**：短期（最近 5 轮 + 一致性规则）+ 长期（用户印象/事实/重要时刻/**承诺约定**，self_fact 停用防污染）
+- **离线工具箱**：`run_tool.py` 统一入口，11 个子命令覆盖从"直播音频"到"人格数据"的完整蒸馏流程
 
 ## 技术栈
 
@@ -27,118 +30,110 @@
 
 ### 前置要求
 - Python 3.10+
-- QQ 账号（用于 NapCatQQ 登录）
-- DeepSeek API Key
-- 智谱 AI API Key
-- 本地 GPU（可选，用于 faster-whisper 转写）
+- QQ 账号（NapCatQQ 登录）、DeepSeek API Key、智谱 AI API Key、本地 GPU（可选）
 
 ### 安装与配置
-1. 克隆仓库
 ```bash
 git clone https://github.com/MureasAm/Hzm-AI-Bot.git
 cd Hzm-AI-Bot
-```
-2. 安装依赖
-```bash
 pip install -r requirements.txt
 ```
-3. 配置环境变量：项目根目录创建 `.env.prod`
+创建 `.env.prod`：
 ```
 OPENAI_API_KEY=你的DeepSeek_API_Key
 OPENAI_API_BASE=https://api.deepseek.com/v1
 OPENAI_MODEL=deepseek-v4-flash
 ZHIPU_API_KEY=你的智谱AI_API_Key
 ```
-4. 在 NapCat 里登录机器人
-5. 启动：`python bot.py`
+NapCat 登录机器人 → `python bot.py`
 
 ## 离线工具箱
 
-统一入口：`python scripts/run_tool.py <工具> [参数]`（旧脚本仍可直接运行，新入口为推荐用法）
+统一入口：`python scripts/run_tool.py <工具> [参数]`
 
-| 工具 | 干什么 | 常用示例 |
-|---|---|---|
-| transcribe | 音频 → 原始转写 JSON | `run_tool transcribe assets/audio/live1.mp3` |
-| clean-transcript | 原始转写 → 清洗（合并碎片/修错字/加标点） | `run_tool clean-transcript -i 转写.json` |
-| convert-to-chat | 直播原文 → QQ 聊天回复（灰泽满自称+保留括号） | `run_tool convert-to-chat -i 原文.json` |
-| analyze-pace | 清洗后 → 节奏地图（可多场合并） | `run_tool analyze-pace -i cleaned.json --session 第一场` |
-| generate-vectors | 场景化陈述 → 语料向量库 | `run_tool generate-vectors` |
-| generate-persona | 场景化陈述 → 人格三件套 | `run_tool generate-persona` |
-| precompute | 预计算 trigger/声音样本/措辞向量 | `run_tool precompute --all` |
-| pipeline | 四步人格蒸馏流水线 | `run_tool pipeline -i 转写.json` |
-| regression | 回复灵性回归测试（A/B 对比） | `run_tool regression --ab` |
+| 工具 | 干什么 |
+|---|---|
+| transcribe | 音频 → 原始转写 JSON |
+| clean-transcript | 转写清洗（合并碎片/繁体转简体/固定错字表） |
+| convert-to-chat | 直播 → QQ 聊天回复（V3：分离转述/回答 → 切分 → 压缩） |
+| analyze-pace | 节奏地图（`--focus` 聚焦场景 + reasoning） |
+| mine-phrases | 从素材批量挖措辞指纹（多维度，输出待审批） |
+| generate-statements | 从素材生成场景化陈述（50-120字，供 corpus RAG） |
+| generate-vectors | 场景化陈述 → 语料向量库 |
+| generate-persona | 场景化陈述 → 人格三件套 |
+| precompute | 预计算 trigger/声音样本/措辞向量 |
+| pipeline | 四步人格蒸馏流水线 |
+| regression | 回复灵性回归测试（A/B 对比） |
 
 **典型工作流**
-1. 转写：`run_tool transcribe assets/audio/live1.mp3`
-2. 清洗：`run_tool clean-transcript -i outputs/transcribe/live1_raw.json`
-3. 转化聊天：`run_tool convert-to-chat -i 原文.json`
-4. 节奏地图（多场合并）：`run_tool analyze-pace -i outputs/transcribe/cleaned.json --session 第一场`，第二场加 `--merge`
-5. 向量化：`run_tool generate-vectors && run_tool precompute --all`
-6. 蒸馏：`run_tool pipeline -i outputs/transcribe/cleaned.json`
+1. 转写：`run_tool transcribe assets/audio/live.mp3`
+2. 清洗：`run_tool clean-transcript -i 转写.json`
+3. 节奏地图：`run_tool analyze-pace -i cleaned.json --session 第一场 --focus 被调戏,被夸`
+4. 转化聊天：`run_tool convert-to-chat -i 原文.json`
+5. 挖措辞：`run_tool mine-phrases -i cleaned.json`
+6. 生成背景记忆：`run_tool generate-statements -i cleaned.json` → `run_tool generate-vectors -i statements.json`
+7. 向量化：`run_tool precompute --all`
 
-**目录分工**
-- `assets/` 放你的原始素材（`audio/` 音频、`transcripts/` 转写）
-- `outputs/<工具>/` 放人读分析产物
-- `data/` 与 `persona/` 是机器人启动要读的缓存，路径固定，一般不用手动改
-- 改输入一律用 `-i / --input`，不用改源码
+**目录分工**：`assets/` 放素材 → `outputs/<工具>/` 放分析产物 → `data/`/`persona/` 是机器人读取的固定缓存。
 
 ## 项目结构
 
 ```
 bot.py                           # 项目启动入口
-src/plugins/chatbot/             # 核心对话逻辑（模块化）
-├── __init__.py                  # 插件入口
-├── constants.py                 # 路径 / API / 阈值 / 检索参数常量集中
-├── persona.py                   # 人格加载 + 行为触发匹配（trigger 向量缓存）
-├── memory.py                    # 短期记忆（带锁）+ 长期记忆封装
-├── rag.py                       # 直播记忆 RAG（embed_query / cosine）
-├── retrieval.py                 # V3 三路检索 + RRF 融合 + 预算截断 ★
-└── core.py                      # 消息处理主循环
+src/plugins/chatbot/             # 核心对话逻辑
+├── core.py                      # 消息处理主循环（组装 + 调模型 + 更新记忆）
+├── constants.py                 # 路径/API/阈值/预算参数 ★
+├── persona.py                   # 人格加载 + 行为匹配
+├── memory.py                    # 短期记忆（带锁）+ 长期封装
+├── rag.py                       # 直播记忆 RAG
+└── retrieval.py                 # 四路检索 + RRF 融合 + 预算截断 ★
 persona/                         # 人格数据
-├── system_prompt.txt            # 人设提示词（精简版 V2）
-├── system_prompt_v9_backup.txt  # 原 318 行完整版备份
+├── system_prompt.txt            # 人设提示词（V2 精简版）
 ├── persona_traits/styles/behaviors.json  # 人格三件套
-├── voice_samples.json           # 声音样本库（few-shot）★
-├── phrases.json                 # 措辞指纹库 ★
-data/                            # 运行数据 + 向量缓存（机器人启动要读）
-├── memory.json                  # 用户短期记忆
-├── long_term_memory.json        # 用户长期记忆
-├── corpus_vectors.json          # 直播记忆向量库
-├── trigger_vectors.json         # 行为 trigger 向量缓存
-├── voice_sample_vectors.json    # 声音样本向量缓存
-└── phrase_vectors.json          # 措辞指纹向量缓存
-assets/                          # 原始素材（audio/ 音频、transcripts/ 转写）★
-outputs/                         # 分析产物（pace/ 节奏地图、transcribe/ 转写等）
-scripts/                         # 离线工具箱（统一入口 run_tool.py）★
-prompts/                         # 提示词模板（蒸馏/清洗/描述）
-materials/                       # 素材备份
-memory_manager.py                # 长期记忆管理（带文件锁）
-tests/                           # 核心函数单元测试（pytest，46 条）
-bin/                             # ffmpeg 等二进制
+├── voice_samples.json           # 声音样本库（56 条）★
+└── phrases.json                 # 措辞指纹库（11 组）★
+data/                            # 运行数据 + 向量缓存
+├── corpus_vectors.json          # 直播记忆向量库（273 条）
+├── memory.json                  # 短期记忆
+├── long_term_memory.json        # 长期记忆（含承诺约定）
+└── *_vectors.json               # trigger/样本/措辞向量缓存
+scripts/                         # 离线工具箱（run_tool.py 统一入口）★
+tests/                           # 单元测试
+assets/                          # 原始素材
+outputs/                         # 分析产物
 ```
 
 ## 人格蒸馏流水线
 
 从直播素材到人格数据的完整流程（核心是"素材驱动"）：
-
 1. **收集素材**：直播录播 → `assets/audio/`
-2. **转写**：`run_tool transcribe` 或 `run_whisper.bat` → faster-whisper GPU
-3. **清洗**：`run_tool clean-transcript` → 合并碎片、修错字、加标点
-4. **转化聊天**：`run_tool convert-to-chat` → 直播叙述体 → QQ 聊天回复形态
-5. **节奏地图**：`run_tool analyze-pace` → 分析她的场景节奏、高频措辞
-6. **向量化**：`run_tool generate-vectors && run_tool precompute --all`
-7. **人格分析**：`run_tool generate-persona` → 更新 persona/ 下三个 JSON
+2. **转写** → **清洗** → **节奏地图**（先判噪声，再聚焦场景）
+3. **转化聊天**（convert-to-chat，分离转述/回答，切分压缩）
+4. **挖措辞**（mine-phrases）→ **生成背景记忆**（generate-statements → generate-vectors）
+5. **向量化**：`run_tool precompute --all`
+6. 补进样本库/措辞库前**人工审批**（质量优先）
 
 > 改过 `persona_behaviors.json` / `voice_samples.json` / `phrases.json` 后需重跑对应 precompute。
 
-## 长期记忆设计
+## 记忆系统设计
 
 为每位用户维护独立的记忆卡片，存储：
 - 印象标签（如"上班族"、"喜欢催播"）
 - 用户事实（如"在准备考研"）
-- 自我披露记录（避免 AI 重复自曝）
+- **承诺约定**（她答应过用户的事，跨会话记住）
+- 自我披露记录（self_fact 提取已停用，防 AI 自嗨污染真实人格）
 
-> 注：已移除"按互动次数自动升级关系等级"机制，聊天一律默认当作熟人（老朋友语气）。
+> 短期记忆保留最近 5 轮 + 一致性规则（同一件事借口一致，新问题正常回答）。
+
+## 版本演进
+
+- **V1**：样本 few-shot + 停用记忆污染
+- **V2**：提示词 318 行 → 3500 字
+- **V3**：五路融合检索（按需注入）
+- **V3.1**：措辞指纹库 + 样本分层 + 长度控制
+- **V4**：样本库 14→56 全场景均衡、措辞库从素材重建、corpus 更新 273 条、承诺记忆、参数调优（temperature 0.85 + penalty 0.3）
+
+完整重构历程、方法论与踩坑记录见 `ROADMAP.md`。
 
 ## 说明
 

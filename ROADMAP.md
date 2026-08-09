@@ -1,194 +1,174 @@
 # 灰泽满 AI 机器人 · 开发路线图 & 会话交接
 
 > 本文件由 Claude Code 在 2026-08 协作中生成，供新窗口续接。**新开会话时先读本文件**即可无缝接上。
-> 关键：本文件记录了完整的重构历程、方法论与工具链，比代码本身更能帮你快速进入状态。
+> 关键：本文件记录了完整重构历程、方法论、工具链与踩坑记录，比代码本身更能帮你快速进入状态。
 
 ---
 
-## 第一部分：会话交接摘要（本次会话做了什么）
-
-### 这个项目是什么
+## 第一部分：这个项目是什么
 
 基于 **NoneBot2 + OneBot V11 + NapCatQQ** 的虚拟主播"灰泽满"QQ 聊天机器人。核心目标不是"通用聊天"，而是**高度还原主播的语言风格、行为模式与情感表达**。用户希望做成"最好的展示"。
 
-### 本次会话的核心：人格系统三层重构（V1 → V2 → V3）
+**技术栈**：DeepSeek-V4-Flash 对话 + 智谱 embedding-3 向量 + faster-whisper 转写 + JSON 存储。
 
-这一轮从"工程化"升级到"人格系统重构"，核心是用**真实素材驱动人格**，而非靠规则堆砌。演进脉络：
+---
 
-#### V1：样本 few-shot + 停用记忆污染
-- 新建 `persona/voice_samples.json`（精选对话样本库），core.py 注入 few-shot，让模型"看样本学说话"而非"读规则学说话"
+## 第二部分：版本更迭史
+
+### V1（2026-08）：样本 few-shot + 停用记忆污染
+- 新建 `persona/voice_samples.json`（精选对话样本库），few-shot 注入，让模型"看样本学说话"而非"读规则学说话"
 - 停用长期记忆 `new_self_fact` 提取——防止 AI 自嗨内容污染真实人格
 - 建 `scripts/regression_test.py` 虚构弹幕 A/B 测试
 
-#### V2：砍提示词（318行 → 3500字）
-- `persona/system_prompt.txt` 从 318 行/3.2万字 砍到 40 行/3500 字，**原版备份在 `persona/system_prompt_v9_backup.txt`**
-- 删掉全部数字配额（揉眼睛次数/括号频率/心虚频率）与几十个语气词详解
-- 保留：核心人格 / 说话节奏 / 自我称呼 / 行为反应 / 脆弱时刻
-- **实测灵性明显提升**（V1 vs V2 对比在 `outputs/v1_full.txt`、`outputs/v2_full.txt`）
-- 顺带删除了"按对话次数决定关系等级"的机制（`RELATION_LEVELS` + 自动升级），默认一律当熟人
+### V2：砍提示词（318行 → 3500字）
+- `persona/system_prompt.txt` 从 318 行/3.2万字 砍到 40 行/3500 字（原版备份 `system_prompt_v9_backup.txt`）
+- 删掉全部数字配额与语气词详解，保留核心人格/说话节奏/自我称呼/行为反应/脆弱时刻
+- 实测灵性明显提升；删除"按互动次数分关系等级"机制，默认当熟人
 
-#### V3：五路融合检索（按需注入）
-- **背景**：V2 暴露句式重复（"你是不是又在蹲我唱歌"出现 3 次）——因为样本全量注入
-- **解法**：新增 `src/plugins/chatbot/retrieval.py`，三路向量检索（直播记忆 corpus / 风格样本 voice_sample / 行为触发 trigger）+ 加权 RRF 融合 + 字符预算截断
-- 两路确定性记忆（用户长期记忆卡 / 短期对话）不检索永远给
-- query 全程只调 1 次 embedding，三路共用
-- 新增 `scripts/precompute_voice_sample_vectors.py`、`scripts/precompute_phrase_vectors.py` 预计算向量
+### V3：五路融合检索（按需注入）
+- 新增 `retrieval.py`：corpus/voice_sample/behavior/phrase 四路向量检索 + RRF 加权融合 + 预算截断；长期/短期记忆两路确定性注入
+- query 全程只调 1 次 embedding，四路共用；预计算向量缓存
 
-#### V3.1：措辞指纹库 + 样本分层 + 长度控制
-- 新建 `persona/phrases.json`（措辞指纹库）：同一意思 → 她的真实原话（被夸→"也没有啦"、被戳穿→"啊？没有吧"等 8 组）
-- voice_samples 分层 `short/long`，短句样本优先注入控制长度
-- 新增 `scripts/analyze_pace.py` 节奏地图工具
+### V3.1：措辞指纹库 + 样本分层 + 长度控制
+- 新建 `persona/phrases.json` 措辞指纹库；voice_samples 分 `short/long` 档；新增 `analyze_pace.py` 节奏地图
 
-### 本轮最核心的方法论（反复验证后确立）
-
-1. **样本 > 规则**：用真实对话示范"怎么说话"，比用规则规定怎么说话有效得多
-2. **直播 ≠ 聊天**：直播是叙述体，QQ 聊天是对话体，必须经"转聊天"转化
-3. **先筛选后分析**：不能全量分析转写，要先过滤噪声（礼物名单/寒暄/转述），只提炼高质量对话
-4. **灰泽满永远自称"灰泽满/hzm"**，绝对不用"我"（这是她的人格标志，主语宾语都如此）
-5. **括号是"心里话标注"**，只在情感顶点用（小声/心虚/警觉），不是默认配置
-
-### 关键踩坑记录（新会话务必避免）
-
-- ❌ **全量分析转写**：把 493 个话轮全喂模型标注场景 → 55% 是噪声（礼物名单/寒暄/转述），结论不可信。正确：先判定噪声再分析
-- ❌ **"被催播"场景命名错误**：直播中不会催播，应叫"**失约被抓包**"（鸽了/迟到时）
-- ❌ **转化时把"我"改成"灰泽满"当错误**：恰恰相反，这是她的正确风格（"请灰泽满吃饭"没错）
-- ❌ **prompt 里点名口癖**：说"必须保留好吧" → 模型每条都加"好吧……"。应该"原文有什么就保留什么，不刻意添加"
-- ❌ **把"灰泽满住到了"等梗串味**：批量转化时模型互相传染，应逐条独立转化
+### V4（2026-08-09~10）：补样本收官 + 措辞重建 + 参数调优 + 记忆增强
+- **样本库 14 → 56 条**，8 场景全均衡（被戳穿10/日常8/被调戏8/失约7/被夸7/推进7/立Flag5/感性4）
+- **措辞库重建为 11 组**：全部从素材提取（新工具 `mine-phrases`），废弃手工编的"被作业封印了"等
+- **corpus 更新为 273 条**：5 场新素材场景化陈述 + 旧 73 条，修错字、剔乱码
+- **记忆增强**：长期记忆加"承诺/约定"（`new_promise`）跨会话记忆；短期记忆一致性规则修复
+- **参数定稿**（见第三部分）：`CHAT_TEMPERATURE=0.85`、`CHAT_FREQUENCY_PENALTY=0.3`、`CORPUS_TOP_N=2`、`SHORT_MEMORY_LINES=10`
 
 ---
 
-## 第二部分：当前项目架构
+## 第三部分：回复生成链路剖析（每一层在决定什么）
 
-```
-bot.py                           # NoneBot2 入口
-src/plugins/chatbot/             # 核心对话逻辑
-├── __init__.py                  # 插件入口
-├── constants.py                 # 路径/API/阈值常量（含 V3 检索/融合/预算参数）
-├── persona.py                   # 人格规则加载 + 行为匹配（trigger 向量缓存）
-├── memory.py                    # 短期记忆（带锁）+ 长期记忆封装
-├── rag.py                       # 直播记忆 RAG（embed_query / cosine）
-├── retrieval.py                 # V3 三路检索 + RRF 融合 + 预算截断
-└── core.py                      # 主循环（handle_chat / build_message_list）
-persona/                         # 人格数据
-├── system_prompt.txt            # 线上人设提示词（V2，3500字）
-├── system_prompt_v9_backup.txt  # 原 318 行完整版备份
-├── persona_traits/styles/behaviors.json  # 人格三件套
-├── voice_samples.json           # 声音样本库（当前 14 条）
-├── phrases.json                 # 措辞指纹库（8 组）
-data/                            # 运行数据 + 向量缓存（机器人启动要读）
-├── corpus_vectors.json / trigger_vectors.json / voice_sample_vectors.json / phrase_vectors.json
-├── memory.json / long_term_memory.json
-assets/                          # 用户放原始素材（audio/ 音频、transcripts/ 转写）
-outputs/                         # 分析产物（pace/ 节奏地图、transcribe/、regression/ 等）
-scripts/                         # 离线工具箱（统一入口 run_tool.py）
-prompts/                         # 提示词模板（蒸馏/清洗/描述）
-materials/                       # 素材备份
-memory_manager.py                # 长期记忆（带文件锁，已移除关系等级机制）
-tests/                           # 46 条 pytest 单测
-bin/                             # ffmpeg 等
-```
+> 排查回复问题时，先定位是哪一层的锅：腔调（样本）？用词（措辞）？行为模式（behaviors）？还是人设定调（prompt）。**素材多样性问题从素材层解决，不要用提示词打补丁**（历史教训：提示词堆砌作用很差）。
 
----
+### 消息组装顺序 = 注入优先级（build_message_list）
 
-## 第三部分：离线工具箱（run_tool.py）
-
-**统一入口**：`python scripts/run_tool.py <工具> [参数]`（旧脚本仍可直接运行）
-
-| 子命令 | 干什么 | 常用示例 |
-|---|---|---|
-| transcribe | 音频 → 原始转写 | `run_tool transcribe assets/audio/live1.m4a` |
-| clean-transcript | 转写 → 清洗（合并碎片/修错字/加标点） | `run_tool clean-transcript -i 转写.json` |
-| convert-to-chat | 原文 → QQ 聊天回复（灰泽满自称+保留括号） | `run_tool convert-to-chat -i 原文.json` |
-| analyze-pace | 清洗后 → 节奏地图（可多场合并） | `run_tool analyze-pace -i cleaned.json --session 第一场 --merge` |
-| generate-vectors | 场景化陈述 → 语料向量库 | `run_tool generate-vectors` |
-| generate-persona | 场景化陈述 → 人格三件套 | `run_tool generate-persona` |
-| precompute | 预计算 trigger/声音样本/措辞向量 | `run_tool precompute --all` |
-| pipeline | 四步人格蒸馏流水线 | `run_tool pipeline -i 转写.json` |
-| regression | 回复灵性回归测试（A/B 对比） | `run_tool regression --ab` |
-
-**完整素材→样本流程**：
-```
-转写 → 清洗 → 分析(节奏地图) → 筛选高质量原文 → convert-to-chat 转聊天 → 进 voice_samples.json
-```
-
-**目录分工**：`assets/` 放素材 → `outputs/<工具>/` 放分析产物 → `data/`/`persona/` 是机器人读取的固定缓存。
-
----
-
-## 第四部分：样本库规划（当前 14 条 → 目标 35-40 条）
-
-### 场景规划
-
-| 场景 | 现状 | 目标 | 优先级 |
+| 顺序 | 来源 | 注入标签 | 决定什么 |
 |---|---|---|---|
-| 日常闲聊（游戏/饮食/健康/倒霉） | 9 | 8-10 | ✅ 已够 |
-| **失约被抓包**（鸽了/迟到/临时不播） | 1 | 4-5 | 🔴 最高 |
-| **被越界/被调戏** | 0 | 3-4 | 🔴 最高 |
-| **被夸时**（嘴硬否认） | 0 | 3-4 | 🔴 高 |
-| **被戳穿/被质疑** | 1 | 3-4 | 🔴 高 |
-| 摆烂/拖延 | 3 | 4-5 | 🟡 |
-| 感性流露/孤独 | 2 | 3-4 | 🟡 |
-| 分享倒霉事 | 2 | 3-4 | 🟡 |
-| 立Flag/承诺 | 0 | 2-3 | 🟢 |
-| 害羞/回忆 | 0 | 2-3 | 🟢 |
+| 1 | system_prompt.txt + traits/styles | 人设 | 她是谁、人格底线、节奏、自称、括号规则 |
+| 2 | behaviors（trigger 命中） | 【当前情境下的行为指令】 | 该情境的明确反应模式（权重最高 1.5） |
+| 3 | corpus（直播记忆） | 【她经历过的相关背景】 | 背景记忆，仅相关时提及，不参与风格 |
+| 4 | 长期记忆 | 【关于这个绿冻的长期记忆】 | 这个用户是谁（印象/事实/承诺/时刻） |
+| 5 | 短期记忆 | 【最近对话记录】 | 最近聊了什么（+一致性规则） |
+| 6 | phrases（措辞指纹） | 【她的固定说法】 | 表达同类意思时的真实用词 |
+| 7 | voice_samples（few-shot） | 【说话方式参考】 | 示范她的腔调（语气/断句/自称/节奏） |
+| 8 | 长度提醒 | 【回复节奏】 | 一句话就停，30字内 |
+| 9 | user_msg | — | 当前用户消息 |
 
-### 补样本原则（本轮确立）
+### 各文件作用
 
-1. **"被催播"改名"失约被抓包"**——直播中不会催播，只在"该播没播"时发生
-2. 样本形态必须是**聊天体**（user=弹幕问，reply=她的回答，两者严格分离，别混）
-3. **弹幕问的话和她的回答必须分开**——user 放触发，reply 只放她的回答
-4. 质量 > 数量——删掉辨识度低的，只留真有灰泽满味道的
-5. **补样本按"缺什么找什么"**：找对应场次
+**persona/**：`system_prompt.txt`（人设核心）/ `persona_traits.json`（性格基底）/ `persona_styles.json`（语言风格）/ `persona_behaviors.json`（触发行为，改后 precompute triggers）/ `voice_samples.json`（样本，改后 precompute voice-samples）/ `phrases.json`（措辞，改后 precompute phrases）
 
-### 找素材指引表（缺什么场景 → 找什么场次的直播）
+**data/**：`corpus_vectors.json`（直播记忆 RAG）/ `trigger_vectors.json` / `voice_sample_vectors.json` / `phrase_vectors.json` / `memory.json`（短期）/ `long_term_memory.json`（长期）
 
-| 缺失/不足场景 | 该找什么类型的直播场次 | 判断信号 |
+**src/plugins/chatbot/**：`core.py`（主循环组装）/ `persona.py` / `memory.py`（短期读写带锁）/ `rag.py`（embedding+余弦）/ `retrieval.py`（四路融合+预算）/ `constants.py`（所有可调参数）
+
+**memory_manager.py**：长期记忆卡 merge + build_memory_context + 记忆提取 prompt
+
+### 最终参数（constants.py）
+
+```python
+CHAT_TEMPERATURE = 0.85        # 0.7 会让模型走 RP 默认括号模板 → 括号爆炸（踩过坑）
+CHAT_FREQUENCY_PENALTY = 0.3   # 0.5 无效还引入整句重复（踩过坑）
+CORPUS_TOP_N = 2               # 长文本少占 few-shot 预算
+SHORT_MEMORY_LINES = 10        # 5 轮，一致性
+RETRIEVAL_BUDGET_CHARS = 1200
+VOICE_SAMPLE_TOP_N = 3         # few-shot 甜蜜点 2-5
+```
+
+### 检索层
+1 次 embedding → 四路检索 → RRF 融合（behavior 1.5 > phrase 1.2 > corpus/voice 1.0）→ topk → 预算截断。
+
+---
+
+## 第四部分：记忆系统设计
+
+| 层 | 内容 | 注入 |
 |---|---|---|
-| **被越界/被调戏** | 弹幕整活多、调戏她的场次 | 她说"你不对劲""请把这份感情留给更值得的人""？？？" |
-| **被夸时** | 唱歌/可爱被夸多的场次 | 她说"也没有啦""一般般吧""滤镜太重了" |
-| **失约被抓包** | 迟到开播、鸽了、临时有事不播的场次 | 开场在解释"为什么迟到""定闹钟又睡过头" |
-| **被戳穿/被质疑** | 她状态被弹幕看穿、被追问的场次 | "啊？没有吧""好吧，可能有一点点" |
-| **立Flag/承诺** | 她立目标（早起/更新/直播计划）的场次 | "这周一定""第0天打卡""如果...就绝对不可能" |
-| 感性流露/孤独 | 深夜场、聊孤独/独居/家人的场次 | 语气变缓、说"一个人""其实有点" |
-| 分享倒霉事 | 聊日常糗事的场次 | "又没带伞""被...了"、有画面感的倒霉故事 |
-| 害羞/回忆 | 被提往事、被叫宝宝、被说可爱 | "谢谢宝宝（小声）""别说了" |
+| **短期**（memory.json，5轮） | 最近对话原文 | 【最近对话记录】+ 一致性规则 |
+| **长期**（long_term_memory.json） | 印象标签/用户事实/重要时刻/**承诺约定** | 【关于这个绿冻的长期记忆】 |
 
-### 用户素材情况
-
-- 用户已提供 2 场直播：`assets/audio/` 下（8月5日电话场 + 7月26日突击场）
-- 均已转写+清洗+分析，节奏地图在 `outputs/pace/pace_map.md`
-- 这两场里挖出的样本：失约被抓包（miss_1）、被戳穿（caught_1）、审丑（daily_short_8）
-- **缺被越界/被夸/立Flag**——这两场没料，需找专门场次
+- **self_fact 停用**：V1 起不提取 AI 自嗨的自我披露，防污染真实人格
+- **承诺记忆**（V4 加）：`new_promise` 跨会话记住她答应过用户的事（"明天一定""这周不鸽"）
+- **一致性规则**（V4 修）：解释同一件事借口一致，但新问题正常回答（不绑架旧借口）
+- 记忆提取异步、带文件锁
 
 ---
 
-## 第五部分：愿景与下一步
+## 第五部分：离线工具箱（run_tool.py）
 
-### 当前主线（进行中）：补样本到目标规模
+统一入口：`python scripts/run_tool.py <工具> [参数]`
 
-1. 用户按"缺什么找什么"找素材（优先：被调戏/被夸/失约被抓包场次）
-2. 拿到新素材 → 跑工具链（转写→清洗→分析→筛选→转聊天）→ 补进 voice_samples.json
-3. 每补一批重新 `precompute voice-samples`
-
-### 后续优化方向（本轮遗留）
-
-- **措辞指纹库扩展**：phrases.json 目前 8 组，可从更多素材里挖她的真实措辞补充
-- **清理残留**：`long_term_memory.json` 里已有用户的 `relationship_level` 字段是死数据（机制已删），可清理
-- **长度控制验证**：V3.1 加的长度控制平均 74→46 字，但"日常闲聊本来就长"是她的真实节奏，勿过度压短
-
-### 终极愿景（未动）
-
-让"灰泽满"成长为**能行动、能感知、能联动的虚拟主播 Agent**：联网了解事件、主动发消息、多模态看图、B 站联动她发动态/直播。即路线 B（Agent 化）：工具集（send_message/search_web/send_image/set_reminder/check_bilibili）+ ReAct 循环 + 意图区分 + 主动性。
-
----
-
-## 第六部分：风险与注意
-
-- **DeepSeek V4**：模型名 `deepseek-v4-flash`；思考模式默认开启，聊天调用需 `extra_body={"thinking":{"type":"disabled"}}` 保留 temperature
-- **改 `persona_behaviors.json` / `voice_samples.json` / `phrases.json` 后需重跑对应 precompute**
-- **素材质量决定样本上限**——不是所有直播都值得提炼，先快速判定场次价值
-- **改动主循环前先备份**（V2 的 318 行原版备份在 `persona/system_prompt_v9_backup.txt`）
+| 子命令 | 干什么 |
+|---|---|
+| transcribe | 音频 → 原始转写（faster-whisper GPU） |
+| clean-transcript | 转写清洗（繁体转简体 + 固定错字表） |
+| convert-to-chat | 直播 → 聊天（V3 五步：分离转述/回答 → 提特征 → 切分 → 压缩） |
+| analyze-pace | 节奏地图（`--focus` 聚焦 2-3 场景 + reasoning） |
+| mine-phrases | 从素材批量挖措辞指纹（多维度，输出待审批） |
+| generate-statements | 从素材生成场景化陈述（50-120字，供 corpus RAG） |
+| generate-vectors | 场景化陈述 → corpus 向量库 |
+| generate-persona | 场景化陈述 → 人格三件套 |
+| precompute | 预计算 trigger/声音样本/措辞向量 |
+| pipeline | 四步人格蒸馏流水线 |
+| regression | 回复灵性 A/B 回归测试 |
 
 ---
 
-*由 Claude Code 生成于 2026-08 · 供新窗口续接参考*
+## 第六部分：方法论（反复验证后确立）
+
+1. **样本 > 规则**：真实对话示范"怎么说话"，比规则规定有效
+2. **素材层解决 > 提示词打补丁**：措辞/括号/重复问题从素材解决；提示词硬约束是堆砌，无效且走老路
+3. **直播 ≠ 聊天**：必须经"转聊天"转化，且**切分压缩**（一个独立意思 = 一条 15-50 字短回复），不能整段保留
+4. **单人声音素材要分离"读弹幕 vs 回答"**：转述的粉丝话是 user，她的回答才是 reply
+5. **先筛选后分析**：先判噪声（礼物/寒暄/转述/看二创），只提炼高质量话轮
+6. **灰泽满永远自称"灰泽满/hzm"**，绝不用"我"（主语宾语都如此）
+7. **括号只在情感顶点用**：是例外不是默认；温度靠语气词/自嘲/省略号，不靠括号
+8. **措辞必须从素材提取**：不手工编造
+9. **每步产物先展示审批**，验证通过再往前
+
+---
+
+## 第七部分：踩坑记录（新会话务必避免）
+
+- ❌ 全量分析转写（55% 噪声）→ 先判噪声
+- ❌ "被催播"命名错 → 应叫"失约被抓包"
+- ❌ prompt 点名口癖 → 模型每条都加；应"原文有什么留什么"
+- ❌ **temperature 降到 0.7 治"重复" → 反而括号爆炸**（低温度让模型走 RP 默认模板）。0.85 反而括号少
+- ❌ **frequency_penalty 0.5 压括号 → 没压住还引入整句重复**。回退 0.3
+- ❌ 提示词加"别老用封印" → 堆砌覆辙，撤销，从措辞库多样化解决
+- ❌ "保持温度"提示词 → 模型理解成"用括号表达温度"；应明确"温度靠语气/自嘲/省略号"
+- ❌ 手工编措辞（"被作业封印了"）→ 非她原话，废弃，从素材提取
+- ❌ 一次性跑完流水线不给中间产物 → 每步先展示审批
+- ❌ 短期记忆持久化污染 → 测试对话会积累进 memory.json，影响后续（测试后注意清空）
+- ❌ "借口一致性强制规则"过度 → 旧借口绑架新问题（"泡面"）；应限定"同一件事一致，新问题正常答"
+- ❌ 一次性把 statement 全部向量化 → 应先生成→筛选修错字→再向量化（"代属国""婚姻买""满居"等错译）
+
+---
+
+## 第八部分：终极愿景（路线 B：Agent 化）
+
+让"灰泽满"成长为**能行动、能感知、能联动的虚拟主播 Agent**：
+- **联网**：search_web 了解事件，动态回应时事
+- **多模态**：send_image 看图、识别图片内容
+- **主动性**：主动发消息、set_reminder 提醒、check_bilibili 联动她发动态/直播
+- 架构：工具集（send_message/search_web/send_image/set_reminder/check_bilibili）+ ReAct 循环 + 意图区分 + 主动性
+- 当前人格系统（素材驱动 + 融合检索）是 Agent 化的地基——**建议进入此阶段时开新会话**（新会话读本文件接上）
+
+---
+
+## 第九部分：风险与注意
+
+- **DeepSeek V4**：`deepseek-v4-flash`；聊天调用需 `extra_body={"thinking":{"type":"disabled"}}` 保留 temperature
+- 改 `persona_behaviors.json` / `voice_samples.json` / `phrases.json` 后需重跑对应 precompute
+- 改主循环前先备份（core.py 有 backup_test1）
+- `.env.prod` 含 API key，已在 .gitignore
+- 素材质量决定样本上限——先快速判定场次价值
+
+---
+
+*由 Claude Code 生成于 2026-08-10 · 供新窗口续接参考*

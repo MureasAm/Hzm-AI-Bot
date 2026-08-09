@@ -104,6 +104,24 @@ def merge_memory_card(card: dict, updates: dict) -> dict:
         if len(moments) > 5:
             moments.pop(0)
 
+    # 合并承诺/约定（跨会话记住她答应过用户的事）
+    if updates.get("new_promise"):
+        promises = card.setdefault("promises", [])
+        promises = [dict(p) if isinstance(p, dict) else p for p in promises]
+        new_p = updates["new_promise"]
+        new_p_obj = {"promise": new_p, "made_on": datetime.now().strftime("%Y-%m-%d")}
+        found = False
+        for i, p in enumerate(promises):
+            text = p["promise"] if isinstance(p, dict) else p
+            if text == new_p:
+                if isinstance(promises[i], dict):
+                    promises[i]["made_on"] = new_p_obj["made_on"]
+                found = True
+                break
+        if not found:
+            promises.append(new_p_obj)
+        card["promises"] = promises[-5:]  # 保留最近 5 条
+
     return card
 
 
@@ -165,6 +183,19 @@ def build_memory_context(card: dict) -> str:
         recent = moments[-1]["summary"]
         parts.append(f"你们之间最近的记忆：{recent}。聊到相关话题时可自然提起。")
 
+    # 承诺/约定（跨会话记住）
+    promises = card.get("promises", [])
+    if promises:
+        promise_strs = []
+        for p in promises:
+            if isinstance(p, dict):
+                promise_strs.append(p.get("promise", ""))
+            else:
+                promise_strs.append(str(p))
+        promise_strs = [s for s in promise_strs if s]
+        if promise_strs:
+            parts.append(f"你答应过TA：{'；'.join(promise_strs)}。TA提到时要记得并回应，不要装作不知道。")
+
     return "\n".join(parts)
 
 MEMORY_EXTRACT_PROMPT = """
@@ -199,11 +230,17 @@ MEMORY_EXTRACT_PROMPT = """
 - 如果灰泽满的回复是为了附和用户而临时编造或类比的经验（如用户说考研，你跟着说"我也考过研"），不要提取。
 - 判断标准：如果这条信息在明天、下周的对话中还能成立，才值得记录。如果不确定，宁可不提取。
 
+**关于承诺（new_promise）**：
+- 记录灰泽满对用户明确做出的承诺/约定（如"明天一定直播""这周不鸽""下次补翻唱"）。
+- 判断标准：对用户明确承诺的、值得跨会话记住的事才记录；随口客套（"以后再说吧""有机会一起"）不记。
+- 无则 null
+
 返回 JSON（不要多余内容）：
 {{
   "new_impression": "对用户的长期印象标签，如'上班族''学生''夜猫子'。一次性的状态不要提取，无则null",
   "new_user_fact": "用户透露的长期身份或爱好，如'做设计的''在考研'。瞬间状态不要记录，无则null",
   "new_self_fact": "你向用户新透露的关于自己的真实事实，无则null",
+  "new_promise": "你本轮对用户做出的承诺/约定，无则null",
   "new_moment": "如果本轮对话有特殊意义，写简短摘要，无则null"
 }}
 """

@@ -13,7 +13,7 @@ from openai import AsyncOpenAI
 from .constants import (
     SYSTEM_PROMPT_FILE, DEEPSEEK_BASE_URL, ZHIPU_BASE_URL,
     DEFAULT_MODEL, THINKING_DISABLED,
-    CHAT_TEMPERATURE, CHAT_MAX_TOKENS,
+    CHAT_TEMPERATURE, CHAT_FREQUENCY_PENALTY, CHAT_MAX_TOKENS,
     MEMORY_EXTRACT_TEMPERATURE, MEMORY_EXTRACT_MAX_TOKENS,
     VOICE_SAMPLE_REPLY_TRIM_CHARS,
 )
@@ -131,13 +131,13 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
                 "content": f"【当前情境下的行为指令】请严格按此模式回应：\n{behavior_text}"
             })
 
-    # 直播记忆（source=corpus）
+    # 直播记忆（source=corpus）：只当"背景记忆"，不参与风格示范
     if corpus:
         context = "\n".join(f"- {it.text}" for it in corpus if it.text)
         if context:
             messages.append({
                 "role": "system",
-                "content": f"【历史记忆片段（模仿语气，勿复读）】:\n{context}"
+                "content": f"【她经历过的相关背景】以下是她经历过的相关的事，仅当对当前话题有帮助时自然提及；不要模仿里面的叙述口吻，不要整段复述。说话风格看下面的样本：\n{context}"
             })
 
     # 长期记忆注入
@@ -152,7 +152,7 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
         if isinstance(user_history, list):
             context = "\n".join(user_history)
             # 增加一致性强制指令
-            context += "\n\n【强制规则】请先阅读以上对话记录。如果你之前已经给过某个借口（如'被作业封印''泡面洒了''睡过头'），本轮必须沿用同一个借口，禁止在相邻几轮中编造不同的借口。如果你之前承诺过直播时间，不要更改。"
+            context += "\n\n【一致性规则】解释同一件事（如'今天为什么没播'）时，借口要与之前保持一致，不要前后矛盾；但被问到新问题（如'明天会不会播'）时正常回答，不要强行沿用旧借口。"
             label = "【最近对话记录】"
         else:
             context = f'我说："{user_history}"'
@@ -183,7 +183,7 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
     if samples:
         messages.append({
             "role": "system",
-            "content": "【灰泽满的说话方式参考】以下是她真实的对话片段。模仿其中的语气、断句、省略号和括号用法（括号只在情感强烈时用），内容要针对当前话题不要复述示例。日常回复保持短句（30字内），简短干脆。"
+            "content": "【灰泽满的说话方式参考】以下是她真实的对话片段。模仿其中的语气、断句、省略号、自称（灰泽满/hzm）和措辞。括号是她的'心里话标注'，只在情绪顶点才用一个（如（小声）），日常回复默认一个都不用。内容要针对当前话题不要复述示例。日常回复保持短句（30字内），简短干脆。"
         })
         for it in samples:
             user_part = it.extra.get("user", "")
@@ -210,6 +210,7 @@ async def generate_reply(messages: list) -> str:
             model=_get_model_name(),
             messages=messages,
             temperature=CHAT_TEMPERATURE,
+            frequency_penalty=CHAT_FREQUENCY_PENALTY,
             max_tokens=CHAT_MAX_TOKENS,
             **THINKING_DISABLED,
         )

@@ -31,7 +31,8 @@ EMBEDDING_MODEL = "embedding-3"
 THINKING_DISABLED = {"extra_body": {"thinking": {"type": "disabled"}}}
 
 # ==================== 对话参数 ====================
-CHAT_TEMPERATURE = 0.85
+CHAT_TEMPERATURE = 0.85       # 实验：回高温度（低温度让模型更走 RP 默认括号模板）
+CHAT_FREQUENCY_PENALTY = 0.3  # 实验：penalty 降低（0.5 未压括号还引入整句重复）
 CHAT_MAX_TOKENS = 150
 MEMORY_EXTRACT_TEMPERATURE = 0.1
 MEMORY_EXTRACT_MAX_TOKENS = 100
@@ -42,7 +43,7 @@ RAG_THRESHOLD = 0.35
 RAG_TOP_K = 2
 
 # ==================== V3 三路检索 ====================
-CORPUS_TOP_N = 3              # 直播记忆每路取 top
+CORPUS_TOP_N = 2              # 直播记忆每路取 top（少取，防止长文本挤占 few-shot 预算）
 VOICE_SAMPLE_TOP_N = 3        # 风格样本每路取 top
 VOICE_SAMPLE_THRESHOLD = 0.35 # 风格样本阈值（与 RAG 同）
 BEHAVIOR_TOP_N = 1            # 行为指令只取 1 条（保持 V2 语义）
@@ -67,4 +68,4 @@ VOICE_SAMPLE_REPLY_TRIM_CHARS = 60   # 长样本回复裁剪到该字数（引�
 MAX_CONTEXT_CHARS = 8000           # 整体安全上限兜底
 
 # ==================== 短期记忆 ====================
-SHORT_MEMORY_LINES = 6  # 最近 3 轮，每轮 2 条（用户 + AI）
+SHORT_MEMORY_LINES = 10  # 最近 5 轮，每轮 2 条（用户 + AI）；>3 轮可缓解承诺/借口遗忘

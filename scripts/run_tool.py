@@ -22,6 +22,21 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 import _common  # noqa: E402
 
 
+def _flatten_inputs(args_input):
+    """把 -i 解析结果拉平，兼容 `-i a b` 与 `-i a -i b` 两种写法。
+
+    子命令的 -i 是 nargs="+" + action="append"，多次出现会得到嵌套列表
+    如 [["a"], ["b"]]，此处拍平成 ["a", "b"]。
+    """
+    flat = []
+    for group in args_input:
+        if isinstance(group, list):
+            flat.extend(group)
+        else:
+            flat.append(group)
+    return flat
+
+
 # ==================== 子命令：transcribe ====================
 
 def _add_transcribe(sub):
@@ -65,8 +80,8 @@ def _run_transcribe(args):
 
 def _add_clean_transcript(sub):
     p = sub.add_parser("clean-transcript", help="转写清洗（合并碎片/修错字/加标点）")
-    p.add_argument("-i", "--input", nargs="+", required=True,
-                   help="原始转写 JSON，可传多个")
+    p.add_argument("-i", "--input", nargs="+", required=True, action="append",
+                   help="原始转写 JSON，可传多个（-i a b 或 -i a -i b 均可）")
     p.add_argument("-o", "--output", default=None,
                    help="输出路径（默认 outputs/transcribe/cleaned.json）")
     p.add_argument("--turn-gap", type=float, default=2.0,
@@ -79,7 +94,7 @@ def _run_clean_transcript(args):
     import clean_transcript
     out = Path(args.output) if args.output else _common.OUT_TRANSCRIBE / "cleaned.json"
     out.parent.mkdir(parents=True, exist_ok=True)
-    asyncio.run(clean_transcript.run(args.input, out, turn_gap=args.turn_gap))
+    asyncio.run(clean_transcript.run(_flatten_inputs(args.input), out, turn_gap=args.turn_gap))
     _common.report_saved(out)
 
 
@@ -87,8 +102,8 @@ def _run_clean_transcript(args):
 
 def _add_convert_to_chat(sub):
     p = sub.add_parser("convert-to-chat", help="直播原文 → QQ 聊天回复转化")
-    p.add_argument("-i", "--input", nargs="+", required=True,
-                   help="原文 JSON（可传多个）")
+    p.add_argument("-i", "--input", nargs="+", required=True, action="append",
+                   help="原文 JSON（可传多个，-i a b 或 -i a -i b 均可）")
     p.add_argument("-o", "--output", default=None,
                    help="输出路径（默认 outputs/transcribe/converted_chat.json）")
     p.set_defaults(func=_run_convert_to_chat)
@@ -99,7 +114,7 @@ def _run_convert_to_chat(args):
     import convert_to_chat
     out = Path(args.output) if args.output else _common.OUT_TRANSCRIBE / "converted_chat.json"
     out.parent.mkdir(parents=True, exist_ok=True)
-    asyncio.run(convert_to_chat.run(args.input, out))
+    asyncio.run(convert_to_chat.run(_flatten_inputs(args.input), out))
     _common.report_saved(out)
 
 
@@ -107,14 +122,16 @@ def _run_convert_to_chat(args):
 
 def _add_analyze_pace(sub):
     p = sub.add_parser("analyze-pace", help="直播节奏地图（支持多场合并、增量累积）")
-    p.add_argument("-i", "--input", nargs="+", required=True,
-                   help="转写 JSON，可传多个（每场一个）")
+    p.add_argument("-i", "--input", nargs="+", required=True, action="append",
+                   help="转写 JSON，可传多个（每场一个，-i a b 或 -i a -i b 均可）")
     p.add_argument("-o", "--out-prefix", default=None,
                    help="输出前缀（默认 outputs/pace/pace_map，生成 .json + .md）")
     p.add_argument("--session", action="append", default=None,
                    help="每场标签，如 --session 第一场；个数与 --input 对齐")
     p.add_argument("--merge", action="store_true",
                    help="并入既有 pace_map 增量累积；不加则覆盖为单场结果")
+    p.add_argument("--focus", default=None,
+                   help="只精标这几个场景（逗号分隔，如 --focus 被调戏,被夸），其余话轮归'其他'；不传则全场景")
     p.add_argument("--turn-gap", type=float, default=2.0,
                    help="话轮聚合间隔阈值（秒），默认 2.0")
     p.set_defaults(func=_run_analyze_pace)
@@ -125,12 +142,14 @@ def _run_analyze_pace(args):
     import analyze_pace
     out_prefix = Path(args.out_prefix) if args.out_prefix else _common.OUT_PACE / "pace_map"
     out_prefix.parent.mkdir(parents=True, exist_ok=True)
+    focus = [s.strip() for s in args.focus.split(",")] if args.focus else None
     asyncio.run(analyze_pace.run(
-        input_paths=args.input,
+        input_paths=_flatten_inputs(args.input),
         out_prefix=out_prefix,
         sessions=args.session,
         merge=args.merge,
         turn_gap=args.turn_gap,
+        focus=focus,
     ))
 
 
@@ -245,6 +264,50 @@ def _run_pipeline(args):
     _common.report_saved(out_dir)
 
 
+# ==================== 子命令：generate-statements ====================
+
+def _add_generate_statements(sub):
+    p = sub.add_parser("generate-statements", help="从清洗素材生成场景化陈述（50-120字，供 corpus RAG）")
+    p.add_argument("-i", "--input", nargs="+", required=True, action="append",
+                   help="清洗后的素材 JSON，可传多个")
+    p.add_argument("-o", "--output", default=None,
+                   help="输出路径（默认 outputs/transcribe/generated_statements.json）")
+    p.add_argument("--batch-size", type=int, default=50,
+                   help="每批话轮数，默认 50")
+    p.set_defaults(func=_run_generate_statements)
+
+
+def _run_generate_statements(args):
+    import asyncio
+    import generate_statements
+    out = Path(args.output) if args.output else _common.OUT_TRANSCRIBE / "generated_statements.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    asyncio.run(generate_statements.run(_flatten_inputs(args.input), out, batch_size=args.batch_size))
+    _common.report_saved(out)
+
+
+# ==================== 子命令：mine-phrases ====================
+
+def _add_mine_phrases(sub):
+    p = sub.add_parser("mine-phrases", help="从清洗素材里批量挖掘措辞指纹（多维度，输出候选 JSON 待审批）")
+    p.add_argument("-i", "--input", nargs="+", required=True, action="append",
+                   help="清洗后的素材 JSON，可传多个")
+    p.add_argument("-o", "--output", default=None,
+                   help="输出路径（默认 outputs/transcribe/mined_phrases.json）")
+    p.add_argument("--batch-size", type=int, default=60,
+                   help="每批话轮数，默认 60")
+    p.set_defaults(func=_run_mine_phrases)
+
+
+def _run_mine_phrases(args):
+    import asyncio
+    import mine_phrases
+    out = Path(args.output) if args.output else _common.OUT_TRANSCRIBE / "mined_phrases.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    asyncio.run(mine_phrases.run(_flatten_inputs(args.input), out, batch_size=args.batch_size))
+    _common.report_saved(out)
+
+
 # ==================== 子命令：regression ====================
 
 def _add_regression(sub):
@@ -284,6 +347,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_precompute(sub)
     _add_pipeline(sub)
     _add_regression(sub)
+    _add_mine_phrases(sub)
+    _add_generate_statements(sub)
     return parser
 
 
