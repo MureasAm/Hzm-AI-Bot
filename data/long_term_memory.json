@@ -1,34 +1,10 @@
 {
   "2891616516": {
-    "total_interactions": 88,
-    "last_seen": "2026-08-10T01:00:51.545623",
-    "relationship_level": "familiar",
-    "impressions": [
-      {
-        "tag": "喜欢催播",
-        "confidence": 0.8,
-        "last_updated": "2026-07-18T06:55:21.122580"
-      }
-    ]
+    "total_interactions": 3,
+    "last_seen": "2026-08-11T01:14:28.429149"
   },
-  "2903874648": {
-    "total_interactions": 12,
-    "last_seen": "2026-07-18T09:07:38.827572",
-    "relationship_level": "familiar"
-  },
-  "2375436108": {
-    "total_interactions": 4,
-    "last_seen": "2026-07-18T12:22:11.669664",
-    "relationship_level": "acquaintance"
-  },
-  "2178088153": {
-    "total_interactions": 14,
-    "last_seen": "2026-07-18T12:37:14.710007",
-    "relationship_level": "familiar"
-  },
-  "1745464731": {
-    "total_interactions": 5,
-    "last_seen": "2026-07-18T12:54:03.442563",
-    "relationship_level": "acquaintance"
+  "1113026628": {
+    "total_interactions": 2,
+    "last_seen": "2026-08-11T01:31:23.424126"
   }
 }

@@ -169,6 +169,33 @@ VOICE_SAMPLE_TOP_N = 3         # few-shot 甜蜜点 2-5
 
 ---
 
+## 第七部分B：生成 statement 的标准流水线（新窗口必读）
+
+**目标**：把新直播场次的 `assets/audio/场次.mp3` 处理成 corpus 的 statement，合并进 `outputs/transcribe/statement_final.json`（corpus 源），再向量化。
+
+**标准流水线**（全部用 `python scripts/run_tool.py`）：
+```
+1. transcribe        assets/audio/场次.mp3            → 场次_transcribed.json（原始转写）
+2. clean-transcript  -i 场次_transcribed.json          → cleaned_场次.json（清洗：繁体→简体/错字）
+3. analyze-pace      -i cleaned_场次.json --focus <场景> → 节奏地图（先判噪声，只留高质量话轮）
+4. convert-to-chat   -i cleaned_场次.json              → 转化聊天（分离转述/回答、切分压缩）
+5. mine-phrases      -i cleaned_场次.json              → 措辞候选（人工审批）
+6. generate-statements -i cleaned_场次.json            → statement 候选
+7. 人工审批 → 合并进 outputs/transcribe/statement_final.json
+8. generate-vectors  -i outputs/transcribe/statement_final.json → data/corpus_vectors.json
+9. 重启 bot 生效（corpus 向量缓存模块级加载）
+```
+
+**方法论文法（务必遵守）**：
+- **先判噪声**：礼物/寒暄/转述粉丝话/看二创 全过滤，只提炼高质量话轮
+- **直播 ≠ 聊天**：必须 convert-to-chat 切分压缩（一个独立意思 = 一条 15-50 字短陈述），不能整段保留
+- **statement 要具体锚定真实事件**：让模型能"直接引用"，不给它"由头自己编"的空间（"客厅能说话"就是反例）
+- **措辞从素材提取，不手工编**
+- **每步产物先展示审批**，验证通过再往前
+- 改 statement_final.json 后：先 `python -c "import json; json.load(open('outputs/transcribe/statement_final.json',encoding='utf-8'))"` 验证 JSON 合法，再 generate-vectors
+
+---
+
 ## 第八部分：终极愿景（路线 B：Agent 化）
 
 > **V5 已落地"感知"部分**：时间/天气（context_probe）、看图（vision）、B站开播/动态联动（bili_bridge）+ 真人节奏（读秒窗口/分批发送/智能归纳）。剩余的是"行动/主动性"。

@@ -271,6 +271,9 @@ def _load_corpus(input_path) -> list:
         data = json.load(f)
     if isinstance(data, list):
         return data
+    if isinstance(data, dict) and isinstance(data.get("statements"), list):
+        # 兼容 generate-statements 的 {"statements": ["..."]} 输出格式
+        return [{"statement": s} for s in data["statements"] if s]
     raise ValueError(f"无法识别的场景化陈述结构: {input_path}")
 
 
