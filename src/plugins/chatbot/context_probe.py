@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 import httpx
 from lunar_python import Solar
 
-from .constants import WEATHER_CACHE_SECONDS, WEATHER_GEO_CACHE_SECONDS
+from .constants import WEATHER_CACHE_SECONDS, WEATHER_GEO_CACHE_SECONDS, BILI_STATE_FILE
 from .config import get_weather_base_url, get_weather_city, get_weather_key
 
 _CST = ZoneInfo("Asia/Shanghai")
@@ -141,10 +141,26 @@ def _weather_line(city: str) -> str:
     return text
 
 
+def _live_status_text() -> str:
+    """读取 B站 monitor 最近更新的真实直播状态，返回一句话；无状态返回空串。
+
+    让灰泽满知道自己当前真实的直播状态，避免编造"刚下播/在直播"。
+    """
+    if not BILI_STATE_FILE.exists():
+        return ""
+    try:
+        import json
+        state = json.loads(BILI_STATE_FILE.read_text("utf-8"))
+        is_live = bool(state.get("last_live_status", False))
+    except (json.JSONDecodeError, OSError):
+        return ""
+    return "灰泽满现在正在直播中" if is_live else "灰泽满现在没有在直播"
+
+
 def get_now_context(city: str = "") -> str:
     """生成一行感知注入文本。含北京时间、墨尔本当地时间（灰泽满所在地）、农历/节气/节日、
-    天气（city 传用户城市则按用户城市，否则默认墨尔本）。如：
-    【当前时间】北京时间 8月10日 周一 02:36（墨尔本当地时间 04:36），农历六月廿八，灰泽满所在地：澳洲墨尔本，天气：Light Rain 11℃
+    真实直播状态、天气（city 传用户城市则按用户城市，否则默认墨尔本）。如：
+    【当前时间】北京时间 8月10日 周一 02:36（墨尔本当地时间 04:36），农历六月廿八，灰泽满所在地：澳洲，灰泽满现在没有在直播，天气：Light Rain 11℃
     """
     dt_cn = datetime.now(_CST)
     dt_mel = datetime.now(_MEL)
@@ -153,6 +169,9 @@ def get_now_context(city: str = "") -> str:
         _format_lunar(dt_cn),
         "灰泽满所在地：澳洲",
     ]
+    live = _live_status_text()
+    if live:
+        parts.append(live)
     weather = _weather_line(city)
     if weather:
         parts.append(weather)

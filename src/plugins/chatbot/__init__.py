@@ -12,6 +12,9 @@
 - chat_window.py  读秒窗口（方案B：消息攒批，回复前统一读图+归纳）
 - bili_bridge.py  B站直播/动态监听 + 私聊广播（启动时注册后台任务）
 """
+import ast
+import re
+
 from nonebot import on_message, on_request
 from nonebot.adapters.onebot.v11 import Bot, Event, FriendRequestEvent, RequestEvent
 
@@ -55,14 +58,47 @@ def _extract_image_source(msg) -> str:
     return ""
 
 
+def _extract_face_text(msg) -> str:
+    """提取 QQ 内置表情（face）的含义文字；无 face 返回空串。
+
+    face 段的 raw 里有 faceText（如 '/比爱心'），解析成可读含义，纯表情消息也能回。
+    """
+    for seg in msg:
+        if seg.type != "face":
+            continue
+        raw = seg.data.get("raw")
+        text = ""
+        if isinstance(raw, dict):
+            text = raw.get("faceText", "") or ""
+        elif isinstance(raw, str) and raw.strip():
+            try:
+                d = ast.literal_eval(raw)  # python dict repr
+                text = d.get("faceText", "") or ""
+            except Exception:
+                m = re.search(r'["\']faceText["\']\s*[:=]\s*["\']([^"\']*)["\']', raw)
+                text = m.group(1) if m else ""
+        if text:
+            return text.lstrip("/")
+        fid = seg.data.get("id")
+        if fid:  # 兜底：无 raw 时用 id
+            return f"QQ表情{fid}"
+    return ""
+
+
 @chat.handle()
 async def _handle_chat(bot: Bot, event: Event):
     msg = event.get_message()
     user_msg = msg.extract_plain_text().strip()
     image_source = _extract_image_source(msg)
+    face_text = _extract_face_text(msg)
+
+    # QQ 内置表情（face）：把含义转成消息，纯表情也能回应
+    if face_text:
+        face_msg = f"[表情：{face_text}]"
+        user_msg = f"{user_msg} {face_msg}".strip() if user_msg else face_msg
 
     if not user_msg and not image_source:
-        return  # 真正空消息（无文字无图片），不回复
+        return  # 真正空消息（无文字无图片无表情），不回复
 
     user_id = event.get_user_id()
     is_private = getattr(event, "message_type", "private") == "private"
