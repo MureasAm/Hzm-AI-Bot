@@ -240,32 +240,6 @@ def _run_precompute(args):
         print("   ⚠️ 这些是机器人启动要读的固定位置")
 
 
-# ==================== 子命令：pipeline ====================
-
-def _add_pipeline(sub):
-    p = sub.add_parser("pipeline", help="四步人格蒸馏流水线（QA → 人格 → 提示词草案 → 融合）")
-    p.add_argument("-i", "--input", default=None,
-                   help="转写 JSON（默认 data/input_transcript.json）")
-    p.add_argument("--old-prompt", default=None,
-                   help="线上旧版提示词（默认 persona/system_prompt.txt）")
-    p.add_argument("-o", "--out-dir", default=None,
-                   help="输出目录（默认 outputs/pipeline/）")
-    p.add_argument("--no-fusion", action="store_true", help="跳过第 4 步融合")
-    p.set_defaults(func=_run_pipeline)
-
-
-def _run_pipeline(args):
-    import four_step_pipeline as fsp
-    out_dir = Path(args.out_dir) if args.out_dir else _common.OUT_PIPELINE
-    fsp.run(
-        transcript_file=args.input,
-        old_prompt=args.old_prompt,
-        out_dir=str(out_dir),
-        do_fusion=not args.no_fusion,
-    )
-    _common.report_saved(out_dir)
-
-
 # ==================== 子命令：generate-statements ====================
 
 def _add_generate_statements(sub):
@@ -383,7 +357,6 @@ def build_parser() -> argparse.ArgumentParser:
     _add_generate_vectors(sub)
     _add_generate_persona(sub)
     _add_precompute(sub)
-    _add_pipeline(sub)
     _add_regression(sub)
     _add_mine_phrases(sub)
     _add_generate_statements(sub)
