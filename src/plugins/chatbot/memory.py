@@ -18,6 +18,7 @@ from memory_manager import (  # noqa: E402  # 长期记忆：记忆卡/关系等
     get_user_memory,
     update_user_memory,
     build_memory_context,
+    _format_profile_summary,
     MEMORY_EXTRACT_PROMPT,
 )
 
@@ -71,6 +72,7 @@ __all__ = [
     "get_user_memory",
     "update_user_memory",
     "build_memory_context",
+    "_format_profile_summary",
     "MEMORY_EXTRACT_PROMPT",
     "PROJECT_ROOT",
 ]

@@ -22,7 +22,7 @@ from .persona import load_persona_rules, build_global_persona_context
 from .memory import (
     get_user_history, append_user_history,
     get_user_memory, update_user_memory, build_memory_context,
-    MEMORY_EXTRACT_PROMPT,
+    _format_profile_summary, MEMORY_EXTRACT_PROMPT,
 )
 from .rag import embed_query
 from .retrieval import (
@@ -503,9 +503,16 @@ async def generate_reply(messages: list) -> str:
 
 async def update_memory_task(user_id: str, user_msg: str, reply: str, user_memory_card: dict):
     """异步提取并更新长期记忆。"""
+    # 密度门控：太短/纯表情的消息不值得提取（省成本减噪音）
+    msg = (user_msg or "").strip()
+    if not msg or len(msg) < 4:
+        return
+    if msg.startswith("[表情：") and msg.endswith("]"):
+        return
     try:
         deepseek_client, _ = _get_clients()
-        current_summary = json.dumps(user_memory_card, ensure_ascii=False) if user_memory_card else "无"
+        # 用可读画像摘要替代原生 JSON dump，让模型能可靠 dedup/冲突检测
+        current_summary = _format_profile_summary(user_memory_card)
         prompt = MEMORY_EXTRACT_PROMPT.format(
             current_summary=current_summary,
             user_msg=user_msg,

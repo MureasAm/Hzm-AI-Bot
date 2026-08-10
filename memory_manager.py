@@ -209,10 +209,42 @@ def build_memory_context(card: dict) -> str:
 
     return "\n".join(parts)
 
+def _format_profile_summary(card: dict) -> str:
+    """把记忆卡格式化成给提取模型看的可读画像摘要（替代原生 JSON dump）。
+
+    模型读可读画像才能可靠 dedup（判断"已知道没"）和冲突检测。
+    """
+    if not card:
+        return "（无，首次对话）"
+    parts = []
+    imps = card.get("impressions", [])
+    if imps:
+        tags = [i["tag"] if isinstance(i, dict) else str(i) for i in imps]
+        parts.append("印象：" + "、".join(str(t) for t in tags))
+    facts = card.get("user_facts", [])
+    if facts:
+        fstrs = [f.get("fact") if isinstance(f, dict) else str(f) for f in facts]
+        parts.append("事实：" + "；".join(str(f) for f in fstrs))
+    promises = card.get("promises", [])
+    if promises:
+        pstrs = [p.get("promise") if isinstance(p, dict) else str(p) for p in promises]
+        parts.append("承诺：" + "；".join(str(p) for p in pstrs))
+    city = card.get("weather_city", "")
+    if city:
+        parts.append(f"城市：{city}")
+    moments = card.get("significant_moments", [])
+    if moments:
+        mstrs = [m["summary"] if isinstance(m, dict) else str(m) for m in moments[-2:]]
+        parts.append("重要时刻：" + "；".join(str(m) for m in mstrs))
+    if not parts:
+        return "（无稳定画像，首次对话）"
+    return "已知道这个绿冻：" + "；".join(parts)
+
+
 MEMORY_EXTRACT_PROMPT = """
 你是一个记忆提取助手。分析以下对话，只提取**值得长期记住的新信息**。忽略日常寒暄。
 
-【当前记忆概要】
+【当前已知画像】
 {current_summary}
 
 【本轮对话】
@@ -220,31 +252,35 @@ MEMORY_EXTRACT_PROMPT = """
 灰泽满：{reply}
 
 【提取要求】
-只提取本轮新增的信息。如果本轮没有值得记录的新内容，返回 null。
+- **不要重复提取**：如果某条信息已在【当前已知画像】里（已经知道了），不要重复提取，对应字段返回 null。
+- 只提取本轮**新增**的信息。如果本轮没有值得记录的新内容，全部字段返回 null。
 - 判断标准：如果这条信息在明天、下周的对话中还能成立，才值得记录。
-- **绝对不要记录为了附和用户而临时编造的状态**：如果用户说"我是上班族"，你跟着说"我也有作业压力"，这种附和性内容不要记录。
-- **冲突检测**：如果提取的 self_fact 与当前记忆中的 impressions 或 user_facts 明显矛盾（如用户是上班族，你却记录自己也是上班族），不要提取。
+- **绝对不要记录为了附和用户而临时编造的状态**：用户说"我是上班族"，你跟着说"我也有作业压力"，这种附和性内容不要记录。
+- **冲突检测**：新信息与已知画像矛盾时（如已知城市广州、用户又说在深圳），以新信息为准更新。
 - 如果不确定，宁可不提取。
 
-**关于印象标签（new_impression）**：
-- 从用户的话中抽象出长期身份或性格标签（如"上班族""学生党""夜猫子""喜欢催播"）
-- 即使用户没有直接说"我是上班族"，如果说了"刚下班"，也应抽象为"上班族"
-- 如果用户透露的信息只是一次性状态（如"今天很累"），不要提取
+**印象标签 vs 用户事实的区别**：
+- new_impression = 抽象的性格/行为/身份标签（简短）：如"夜猫子""上班族""喜欢催播""嘴硬心软"
+- new_user_fact = 具体的长期信息（客观可描述）：如"在准备考研""养了只猫""做设计的"
+- 即使用户没说"我是上班族"，说"刚下班"也应抽象为"上班族"。
 
-**关于用户事实（new_user_fact）**：
-- 只记录用户的长期身份、职业、爱好等持续性信息（如"做设计的""在考研""养猫"）
-- 不要记录瞬间状态（如"今天很累""刚下班"）
+**提取示例**：
+该提取：
+- "我平时挺喜欢熬夜的" → new_impression="夜猫子"
+- "我在广州上班" → new_user_fact="在广州上班"，new_city="广州"
+- "我打算周六直播" → new_promise="周六直播"
+不该提取（返回 null）：
+- "今天好累啊"（一次性状态）
+- "哈哈哈""晚安""你吃饭了吗"（寒暄，无新信息）
 
 **关于自我披露（new_self_fact）的重要限制**：
 - 只记录灰泽满透露的**长期个人特征或真实经历**（如"拖延症晚期""在国外留学""不会做饭"）。
 - **绝对不要记录瞬间状态**：如"正在吃泡面""刚睡醒""今天嗓子哑"等一次性状态不要记录。
 - 如果灰泽满的回复是为了附和用户而临时编造或类比的经验（如用户说考研，你跟着说"我也考过研"），不要提取。
-- 判断标准：如果这条信息在明天、下周的对话中还能成立，才值得记录。如果不确定，宁可不提取。
 
 **关于承诺（new_promise）**：
 - 记录灰泽满对用户明确做出的承诺/约定（如"明天一定直播""这周不鸽""下次补翻唱"）。
 - 判断标准：对用户明确承诺的、值得跨会话记住的事才记录；随口客套（"以后再说吧""有机会一起"）不记。
-- 无则 null
 
 **关于用户城市（new_city）**：
 - 从用户的话中提取用户**所在城市/地区**（如"我在广州""住深圳""人在悉尼"→"广州""深圳""悉尼"）。
@@ -252,11 +288,11 @@ MEMORY_EXTRACT_PROMPT = """
 
 返回 JSON（不要多余内容）：
 {{
-  "new_impression": "对用户的长期印象标签，如'上班族''学生''夜猫子'。一次性的状态不要提取，无则null",
-  "new_user_fact": "用户透露的长期身份或爱好，如'做设计的''在考研'。瞬间状态不要记录，无则null",
+  "new_impression": "对用户的长期印象标签，无则null",
+  "new_user_fact": "用户透露的长期身份或爱好，无则null",
   "new_self_fact": "你向用户新透露的关于自己的真实事实，无则null",
   "new_promise": "你本轮对用户做出的承诺/约定，无则null",
   "new_moment": "如果本轮对话有特殊意义，写简短摘要，无则null",
-  "new_city": "用户所在城市/地区名（如'广州'），未提及则null"
+  "new_city": "用户所在城市/地区名，未提及则null"
 }}
 """
