@@ -12,11 +12,13 @@ import json
 from dataclasses import dataclass, field
 
 from .constants import (
-    VOICE_SAMPLE_VECTOR_FILE, PHRASE_VECTOR_FILE,
+    VOICE_SAMPLE_VECTOR_FILE, PHRASE_VECTOR_FILE, PREFERENCE_VECTOR_FILE, CORE_STORY_VECTOR_FILE,
     RAG_THRESHOLD, CORPUS_TOP_N,
     VOICE_SAMPLE_THRESHOLD, VOICE_SAMPLE_TOP_N, VOICE_SAMPLE_KEEPALIVE, VOICE_SAMPLE_MIN_K,
     PHRASE_THRESHOLD, PHRASE_TOP_N, PHRASE_PHASES_MAX,
     BEHAVIOR_MATCH_THRESHOLD, BEHAVIOR_TOP_N,
+    PREFERENCE_THRESHOLD, PREFERENCE_TOP_N,
+    CORE_STORY_THRESHOLD, CORE_STORY_TOP_N,
     RRF_K, SOURCE_WEIGHTS, RETRIEVAL_TOPK,
     RETRIEVAL_BUDGET_CHARS, MAX_RETRIEVAL_ITEM_CHARS,
 )
@@ -189,6 +191,106 @@ def retrieve_phrases(user_query: str, query_vector,
     return _score_candidates(query_vector, entries, threshold, top_n,
                              "phrase", lambda e: e["id"], lambda e: e["text"],
                              lambda e: e["extra"])
+
+
+# ==================== 偏好检索（第 5 路） ====================
+
+# 偏好向量缓存（模块级，一次性加载）
+_pref_vectors = None
+
+
+def load_preference_vectors() -> list:
+    """读 data/preference_vectors.json（缓存）。"""
+    global _pref_vectors
+    if _pref_vectors is not None:
+        return _pref_vectors
+    if not PREFERENCE_VECTOR_FILE.exists():
+        _pref_vectors = []
+        return _pref_vectors
+    try:
+        with open(PREFERENCE_VECTOR_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        entries = data.get("entries", []) if isinstance(data, dict) else []
+        _pref_vectors = [e for e in entries if e.get("vector") and e.get("text")]
+    except (json.JSONDecodeError, OSError):
+        _pref_vectors = []
+    return _pref_vectors
+
+
+def retrieve_preferences(user_query: str, query_vector,
+                         threshold: float = PREFERENCE_THRESHOLD,
+                         top_n: int = PREFERENCE_TOP_N) -> list:
+    """偏好语义检索（第 5 路）：命中与当前消息相关的偏好条目。
+
+    返回 [{id, category, text, score}]，供【灰泽满的偏好】注入。
+    不进 RRF 融合、不占检索预算——偏好是身份事实层，命中才带，避免与风格样本抢预算。
+    """
+    entries = load_preference_vectors()
+    if not entries or not query_vector:
+        return []
+    scored = []
+    for e in entries:
+        sim = cosine_similarity(query_vector, e["vector"])
+        if sim < threshold:
+            continue
+        scored.append((sim, e))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [{
+        "id": e.get("id", ""),
+        "category": e.get("category", ""),
+        "text": e.get("text", ""),
+        "score": round(sim, 3),
+    } for sim, e in scored[:top_n]]
+
+
+# ==================== 核心记忆检索（印象最深的结晶） ====================
+
+# 核心记忆向量缓存（模块级，一次性加载）
+_core_story_vectors = None
+
+
+def load_core_story_vectors() -> list:
+    """读 data/core_story_vectors.json（缓存）。"""
+    global _core_story_vectors
+    if _core_story_vectors is not None:
+        return _core_story_vectors
+    if not CORE_STORY_VECTOR_FILE.exists():
+        _core_story_vectors = []
+        return _core_story_vectors
+    try:
+        with open(CORE_STORY_VECTOR_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        stories = data.get("stories", []) if isinstance(data, dict) else []
+        _core_story_vectors = [s for s in stories if s.get("vector") and s.get("text")]
+    except (json.JSONDecodeError, OSError):
+        _core_story_vectors = []
+    return _core_story_vectors
+
+
+def retrieve_core_stories(user_query: str, query_vector,
+                          threshold: float = CORE_STORY_THRESHOLD,
+                          top_n: int = CORE_STORY_TOP_N) -> list:
+    """核心记忆检索：命中与当前消息相关的核心故事（比 corpus 阈值低，更容易浮现）。
+
+    返回 [{id, category, text, score}]，注入【她的核心记忆】。
+    这些是直播以来印象最深的结晶，独立检索避免被 273 条普通背景淹没。
+    """
+    stories = load_core_story_vectors()
+    if not stories or not query_vector:
+        return []
+    scored = []
+    for s in stories:
+        sim = cosine_similarity(query_vector, s["vector"])
+        if sim < threshold:
+            continue
+        scored.append((sim, s))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [{
+        "id": s.get("id", ""),
+        "category": s.get("category", ""),
+        "text": s.get("text", ""),
+        "score": round(sim, 3),
+    } for sim, s in scored[:top_n]]
 
 
 # ==================== RRF 融合 ====================

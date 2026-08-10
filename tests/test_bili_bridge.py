@@ -88,6 +88,29 @@ class TestLiveTransition:
         assert pushed == []
 
 
+class TestExtractDynamic:
+    def test_opus_text_via_summary(self):
+        item = {"modules": {"module_dynamic": {
+            "major": {"type": "MAJOR_TYPE_OPUS",
+                      "opus": {"summary": {"text": "现在已经是煮饭高手了"}}}}}}
+        assert bb._extract_dynamic_text(item) == "现在已经是煮饭高手了"
+
+    def test_opus_images_via_pics(self):
+        item = {"modules": {"module_dynamic": {
+            "major": {"type": "MAJOR_TYPE_OPUS",
+                      "opus": {"pics": [{"url": "http://a.jpg"}, {"url": "http://b.jpg"}]}}}}}
+        assert bb._extract_dynamic_images(item) == ["http://a.jpg", "http://b.jpg"]
+
+    def test_desc_text_legacy(self):
+        item = {"modules": {"module_dynamic": {"desc": {"text": "唱拉了 关上门悄悄听"}}}}
+        assert bb._extract_dynamic_text(item) == "唱拉了 关上门悄悄听"
+
+    def test_archive_pic(self):
+        item = {"modules": {"module_dynamic": {
+            "major": {"type": "MAJOR_TYPE_ARCHIVE", "archive": {"pic": "http://v.jpg"}}}}}
+        assert bb._extract_dynamic_images(item) == ["http://v.jpg"]
+
+
 class TestLiveMessage:
     def test_format_with_room(self):
         msg = bb._live_open_message("测试直播", 1775719573)
@@ -217,14 +240,15 @@ class TestPush:
         await m._push(bot, "内容")
         assert len(bot.sent) == 3
 
-    async def test_uses_cached_friends(self, monkeypatch):
+    async def test_push_uses_fresh_friends(self, monkeypatch):
+        # 旧缓存应被忽略：每次推送都拉最新好友，确保新加好友能收到
         m = _make_monitor(state={"friends": [{"user_id": "111"}],
                                  "friends_ts": 9999999999})
         monkeypatch.setattr(bb, "get_notify_whitelist", lambda: [])
         monkeypatch.setattr(bb, "_save_state", lambda s: None)
-        bot = FakeBot(friends=("111", "222"))  # 有缓存应只发缓存的 1 位
+        bot = FakeBot(friends=("111", "222"))
         await m._push(bot, "内容")
-        assert [uid for uid, _ in bot.sent] == ["111"]
+        assert [uid for uid, _ in bot.sent] == ["111", "222"]
 
     async def test_push_with_image_attaches_segment(self, monkeypatch):
         m = _make_monitor(state={})

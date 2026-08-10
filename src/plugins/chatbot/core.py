@@ -27,7 +27,7 @@ from .memory import (
 from .rag import embed_query
 from .retrieval import (
     retrieve_corpus, retrieve_voice_samples, retrieve_behaviors, retrieve_phrases,
-    fuse_and_truncate,
+    retrieve_preferences, retrieve_core_stories, fuse_and_truncate,
 )
 from .constants import (
     PHRASE_PHASES_MAX, SPLIT_MIN_LEN, SPLIT_MAX_PARTS,
@@ -39,14 +39,101 @@ from . import context_probe
 # ==================== 💬 经典梗硬匹配库 ====================
 LEGENDARY_REPLIES = {
     "爱不爱绿冻": [
-        "早就说过很爱了...",
-        "爱是也可以的，不爱也可以的~"
+        "早就说过很爱了...你要是感觉不到，灰泽满也不知道该怎么证明了",
+        "爱是也可以的，不爱也可以的~（但其实是爱的，别不信）",
     ],
     "在和谁说话": [
         "在和..在和你说话哦~",
         "在和弹幕说话~"
-    ]
+    ],
+    # "爱不爱"的跟进句：绿冻说感觉不到爱（带 LLM 确认，结合上下文判断是不是指感情）
+    "没感觉": [
+        "那灰泽满要怎么表现你才感觉得到？抱一下？",
+        "感觉不到吗……那灰泽满多说几次，真的很爱",
+    ],
+    "感觉不": [
+        "感觉不出来？那灰泽满只能天天说了，说到你信为止",
+    ],
+    # "绿冻永远是第二选择"（真实直播梗）：语义检索够不到口语化关系提问（实测~0.55），
+    # 用关键词子串精确触发。回复从她的原话出发。
+    "排第几": [
+        "绿冻永远是灰泽满的第二选择，这还用排吗",
+        "别排了，绿冻永远是灰泽满的第二选择",
+    ],
+    "你的粉丝": [
+        "不只是粉丝……绿冻永远是灰泽满的第二选择",
+        "谁说是普通粉丝了，绿冻永远是灰泽满的第二选择",
+    ],
+    "在乎我": [
+        "在乎的，绿冻永远是灰泽满的第二选择",
+        "绿冻永远是灰泽满的第二选择，怎么可能不在乎",
+    ],
+    "我重要": [
+        "重要啊，绿冻永远是灰泽满的第二选择",
+        "怎么会不重要，绿冻永远是灰泽满的第二选择",
+    ],
+    "绿冻算什么": [
+        "绿冻算什么……绿冻是灰泽满的第二选择啊",
+    ],
 }
+
+# ==================== 梗库双路由：LLM 语境确认 ====================
+# 仅宽泛关键词配确认（防误触发）；'排第几''绿冻算什么'等特定词不配。
+# 每个 trigger → 一个确认 prompt 模板；含 {context} 的会附带最近对话（判断需要上下文的语境）。
+_CONFIRM_SECOND = (
+    "判断这条消息是否属于'绿冻向灰泽满表达自我怀疑：自己只是普通粉丝、不被在乎、"
+    "在灰泽满心里没有位置'的语境，需要灰泽满用'绿冻永远是第二选择'来安抚。\n\n"
+    "属于（回复'是'）的例子：\n"
+    "- 我在你心里排第几\n- 我只是你的粉丝吧\n- 你是不是根本不在乎我\n- 你觉得我重要吗\n\n"
+    "不属于（回复'否'）的例子：\n"
+    "- 你的粉丝好热情啊（是在夸粉丝，不是绿冻自我怀疑）\n"
+    "- 这个任务我重要吗（指任务，不是绿冻本人）\n"
+    "- 你还在乎我们宿舍吗（指宿舍/他人，不是绿冻本人）\n\n"
+    "消息：{msg}\n只回复：是 或 否"
+)
+_CONFIRM_LOVE = (
+    "判断这条消息是否在'绿冻质疑灰泽满的感情（爱不爱、在不在乎、能不能感觉到爱）'的语境。\n"
+    "结合最近对话判断——如果最近在聊感情/爱不爱，消息里的'没感觉''感觉不到'就是指感情。\n\n"
+    "属于（回复'是'）的例子：\n"
+    "- 可是我没感觉出来（前面在聊爱不爱）\n- 你说爱我但我感觉不到\n\n"
+    "不属于（回复'否'）的例子：\n"
+    "- 这首歌我没感觉（指歌）\n- 这个菜没味道（指菜）\n\n"
+    "最近对话：\n{context}\n\n消息：{msg}\n只回复：是 或 否"
+)
+LEGENDARY_CONFIRMS = {
+    "你的粉丝": _CONFIRM_SECOND,
+    "在乎我": _CONFIRM_SECOND,
+    "我重要": _CONFIRM_SECOND,
+    "没感觉": _CONFIRM_LOVE,
+    "感觉不": _CONFIRM_LOVE,
+}
+
+
+async def _legendary_confirmed(user_msg: str, prompt_template: str, history: str = "") -> bool:
+    """LLM 判断关键词命中的消息是否真是目标梗的语境（双路由第二层，防误触发）。
+
+    关键词命中是低频事件，为它加一次便宜 LLM 判断成本可控；确认失败默认放行（不阻塞）。
+    history 用于需要上下文的确认（如'没感觉出来'是否指感情）。
+    """
+    try:
+        content = prompt_template
+        if "{context}" in content:
+            content = content.replace("{context}", history or "（无）").replace("{msg}", user_msg)
+        else:
+            content = content.replace("{msg}", user_msg)
+        deepseek_client, _ = _get_clients()
+        resp = await deepseek_client.chat.completions.create(
+            model=_get_model_name(),
+            messages=[{"role": "user", "content": content}],
+            temperature=0,
+            max_tokens=10,
+            **THINKING_DISABLED,
+        )
+        return "是" in (resp.choices[0].message.content or "")
+    except Exception as e:
+        print(f"⚠️ 梗确认失败（默认放行）: {e}")
+        return True
+
 
 # ==================== 🎭 基础人设提示词 ====================
 if SYSTEM_PROMPT_FILE.exists():
@@ -99,23 +186,58 @@ def _trim_text(text: str, max_chars: int) -> str:
     return text[:max_chars] + "……"
 
 
+def _split_sentences(text: str) -> list:
+    """按句末标点切分（。！？）；省略号仅在后面还有较长内容时才是边界。
+
+    省略号常表"无语/语气"（如"啊……这……"），不能乱切；
+    只有后面跟着新内容（≥5 字）才当停顿边界（如"唱拉了……灰泽满先关上门悄悄听会儿"）。
+    """
+    parts = []
+    i = 0
+    for m in re.finditer(r'[。！？]|…+', text):
+        end = m.end()
+        if m.group(0).startswith("…"):
+            rest = text[end:].lstrip()
+            if len(rest) < 5:
+                continue  # 省略号后内容太少 → 语气/无语，不切
+        parts.append(text[i:end])
+        i = end
+    if i < len(text):
+        parts.append(text[i:])
+    return [p for p in parts if p.strip()]
+
+
+def _limit_commas(parts: list) -> list:
+    """每段至多 1 个逗号；超了从最后一个逗号拆开（逗号去掉），避免长串逗号连句。"""
+    result = []
+    for p in parts:
+        while True:
+            commas = [idx for idx, ch in enumerate(p) if ch in "，,"]
+            if len(commas) < 2:
+                break
+            idx = commas[-1]
+            result.append(p[:idx].strip())
+            p = p[idx + 1:].strip()
+        result.append(p)
+    return [x for x in result if x]
+
+
 def split_reply(reply: str, min_len: int = SPLIT_MIN_LEN,
                 max_parts: int = SPLIT_MAX_PARTS) -> list:
     """把长回复按句子断开发送（打字感）。短回复/单句不拆，返回单元素列表。
 
-    按句末标点（。！？…）切分；连续标点归并（"……"不断开）；
-    超出 max_parts 的碎片并入最后一段，避免刷屏。
-    聊天习惯不打句号：切分后去掉句尾的"。"（保留 ？！…）。
+    切分规则：
+    - 句末标点（。！？）切分；省略号仅在后面还有新内容（≥5 字）时才切，保住"啊……"这类无语表达
+    - 逗号限制：每段至多 1 个逗号，超了从最后一个逗号拆开（防长串逗号连句）
+    - 聊天习惯不打句号：切分后去掉句尾"。"（保留？！…）
+    - 超出 max_parts 并入最后一段，避免刷屏
     """
     text = reply.strip().rstrip("。")  # 整条回复末尾的句号也去掉
     if not text or len(text) < min_len:
         return [text]
 
-    parts = re.findall(r'[^。！？…]*[。！？…]+', text)
-    tail = text[len(''.join(parts)):].strip()
-    if tail:
-        parts.append(tail)
-    # 去句号：聊天不打句号，其他标点保留
+    parts = _split_sentences(text)
+    parts = _limit_commas(parts)
     parts = [p.strip().rstrip("。") for p in parts if p and p.strip()]
 
     if len(parts) <= 1:
@@ -223,19 +345,44 @@ def _split_fused(fused_items):
 def build_message_list(user_msg: str, global_persona: str, fused_items: list,
                        memory_context: str, user_history: list,
                        vision_desc: str = "", weather_city: str = "",
-                       batch_summary: str = "") -> list:
+                       batch_summary: str = "", preference_items: list = None,
+                       core_stories: list = None) -> list:
     """按优先级组装发送给模型的消息列表。
 
     fused_items 为三路融合后的 RetrievalItem 列表，按源分组注入。
     vision_desc 为用户消息附带的图片视觉描述（可选）。
     weather_city 为该用户所在城市（空则用全局默认天气城市）。
     batch_summary 为一批消息的智能归纳（可选，提示层）。
+    preference_items 为命中相关偏好的条目列表（第 5 路语义检索，可选）。
+    core_stories 为命中的核心记忆（印象最深的结晶，可选）。
     """
     messages = []
     base_system = SYSTEM_PROMPT
     if global_persona:
         base_system += "\n\n" + global_persona
     messages.append({"role": "system", "content": base_system})
+
+    # 偏好档案（第 5 路语义检索）：聊到相关话题才注入；与语料/记忆冲突时以偏好为准
+    if preference_items:
+        prefs_text = "；".join(
+            f"{p.get('category', '')}：{p.get('text', '')}" for p in preference_items
+        )
+        if prefs_text:
+            messages.append({
+                "role": "system",
+                "content": f"【灰泽满的偏好】{prefs_text}（这是她稳定真实的偏好，若与直播记忆/聊天记录冲突，以本条为准）",
+            })
+
+    # 核心记忆（印象最深的结晶）：粉丝常提及的过去故事，命中才注入
+    if core_stories:
+        story_text = "；".join(
+            f"{s.get('category', '')}：{s.get('text', '')}" for s in core_stories
+        )
+        if story_text:
+            messages.append({
+                "role": "system",
+                "content": f"【她的核心记忆】{story_text}（这是她过去最深刻的经历，粉丝常拿这些开玩笑，回应时要自然带出）",
+            })
 
     # 感知源①：当前时间/农历/天气（始终注入，占预算极少；天气按该用户所在城市）
     now_context = context_probe.get_now_context(city=weather_city)
@@ -392,10 +539,23 @@ async def update_memory_task(user_id: str, user_msg: str, reply: str, user_memor
 async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
                       batch_summary: str = "") -> str:
     """处理一条用户消息，返回机器人回复。vision_desc 为图片描述；batch_summary 为批量归纳。"""
-    # --- 🃏 经典梗硬匹配 ---
+    # --- 🃏 经典梗硬匹配（双路由：关键词粗筛 + LLM 语境确认，防误触发） ---
+    _confirm_history = ""
     for trigger, replies in LEGENDARY_REPLIES.items():
         if trigger in user_msg:
-            return random.choice(replies)
+            confirm_tpl = LEGENDARY_CONFIRMS.get(trigger)
+            if confirm_tpl:
+                if not _confirm_history:
+                    _confirm_history = "\n".join(get_user_history(user_id)[-4:])
+                if not await _legendary_confirmed(user_msg, confirm_tpl, history=_confirm_history):
+                    print(f"[梗] 关键词 {trigger!r} 命中但 LLM 未确认，落到正常管线")
+                    break  # 不是目标语境，放弃梗，走正常回复
+            reply = random.choice(replies)
+            # 梗匹配也记入短期记忆 + 异步长期记忆，避免后续对话"失忆"
+            append_user_history(user_id, user_msg, reply)
+            card = get_user_memory(user_id)
+            asyncio.create_task(update_memory_task(user_id, user_msg, reply, card))
+            return reply
 
     # --- 🎭 人格规则 ---
     traits, styles, behaviors = load_persona_rules()
@@ -412,8 +572,12 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         behavior_items = retrieve_behaviors(query_text, query_vector, behaviors)
         phrase_items = retrieve_phrases(query_text, query_vector)
         fused_items = fuse_and_truncate(corpus_items, sample_items, behavior_items, phrase_items)
+        preference_items = retrieve_preferences(query_text, query_vector)  # 第 5 路：偏好
+        core_stories = retrieve_core_stories(query_text, query_vector)     # 核心记忆（结晶）
     else:
         fused_items = []
+        preference_items = []
+        core_stories = []
 
     # --- 🧠 确定性两路记忆 ---
     user_memory_card = get_user_memory(user_id)
@@ -425,6 +589,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     messages = build_message_list(
         user_msg, global_persona, fused_items, memory_context, user_history,
         vision_desc=vision_desc, weather_city=weather_city, batch_summary=batch_summary,
+        preference_items=preference_items, core_stories=core_stories,
     )
 
     # --- 🤖 调用大模型 ---

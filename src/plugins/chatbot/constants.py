@@ -100,3 +100,16 @@ VISION_THINKING_DISABLED = {"extra_body": {"thinking": {"type": "disabled"}}}
 # 方向3 B站联动
 PUSH_INTERVAL = 45                # B站轮询间隔（秒）
 BILI_STATE_FILE = PROJECT_ROOT / "data" / "bili_state.json"   # 开播/动态去重状态持久化
+
+# 好友申请自动通过（否则新加的绿冻是单向好友，推送发不到，见 NapCat issue #72）
+AUTO_ACCEPT_FRIEND = True
+
+# 偏好档案（第 5 路语义检索）
+PREFERENCE_VECTOR_FILE = PROJECT_ROOT / "data" / "preference_vectors.json"
+PREFERENCE_THRESHOLD = 0.55       # 偏好命中阈值（实测：真实命中 0.58+，短句偏好向量泛化过头会误命中，取 0.55 压误命中）
+PREFERENCE_TOP_N = 2              # 最多注入几条偏好条目
+
+# 核心记忆（印象最深的结晶，独立于 corpus 单独检索，低阈值高浮现）
+CORE_STORY_VECTOR_FILE = PROJECT_ROOT / "data" / "core_story_vectors.json"
+CORE_STORY_THRESHOLD = 0.42       # 比偏好/行为低，核心故事更容易浮出（但低于此不注入，防乱触发）
+CORE_STORY_TOP_N = 2              # 最多注入几条核心记忆

@@ -47,6 +47,15 @@
 - **括号根治**：样本去滥用括号（留 3 条情绪顶点示范）+ `clean_reply` 输出清洗（剥开头前缀、至多 1 个、拆段后再清）
 - 测试：117 个单测全过
 
+### V5.1（2026-08-10）：人格检索分层 + 数据扩充
+- **偏好第 5 路**：`persona/preferences.json` 结构化条目（一条一话题，text 向量化）→ `retrieve_preferences` 语义检索（复用 query embedding，**不进 RRF 融合/不占预算**，阈值 0.55，命中才注入【灰泽满的偏好】+ 冲突裁决"与语料/记忆冲突以偏好为准"）
+- **核心记忆层**：`persona/core_stories.json`（印象最深的结晶，独立于 corpus，阈值 0.42 低更容易浮现）→ 注入【她的核心记忆】
+- **梗库双路由**：`LEGENDARY_REPLIES` 关键词粗筛 + LLM 语境确认（`LEGENDARY_CONFIRMS` 按梗区分确认模板，含带上下文的"爱/感情"确认）；跟进句锚定感情线（"爱不爱→没感觉出来"走感情梗，不再跑偏到声卡话题）
+- **数据扩充**：偏好 22 条（食物/水果/果冻/饮料/雨天/看书/电话/动物/瓜类/运动/作家/番剧/游戏…一条一话题）+ 核心记忆 5 条（三好学生 38票 / 222名 / 虚拟深圳上学 / 作家梦《乌色月》含原文）
+- **split_reply 重做**：逗号限制（每段 ≤1 逗号，超了从最后一个逗号拆）+ 省略号保护（"啊……这……"无语不切，停顿边界才切）
+- **修复**：动态 OPUS 类型提取（文本在 major.opus.summary.text、图在 pics）、推送强制刷好友（当天新好友立即收到）、自动通过好友申请（NapCat 给单向好友发消息是已知 bug，只能让它变双向）、梗匹配记入短期记忆
+- 测试：128 个单测全过
+
 ---
 
 ## 第三部分：回复生成链路剖析（每一层在决定什么）
@@ -73,7 +82,9 @@
 
 **data/**：`corpus_vectors.json`（直播记忆 RAG）/ `trigger_vectors.json` / `voice_sample_vectors.json` / `phrase_vectors.json` / `memory.json`（短期）/ `long_term_memory.json`（长期）
 
-**src/plugins/chatbot/**：`core.py`（主循环组装）/ `persona.py` / `memory.py`（短期读写带锁）/ `rag.py`（embedding+余弦）/ `retrieval.py`（四路融合+预算）/ `constants.py`（所有可调参数）/ `config.py`（配置读取）/ `context_probe.py`（时间/天气感知）/ `vision.py`（glm-4.6v 视觉）/ `chat_window.py`（读秒窗口+分批发送+智能归纳）/ `bili_bridge.py`（B站联动推送）
+**src/plugins/chatbot/**：`core.py`（主循环组装）/ `persona.py` / `memory.py`（短期读写带锁）/ `rag.py`（embedding+余弦）/ `retrieval.py`（四路融合+预算 + 偏好第5路 + 核心记忆检索）/ `constants.py`（所有可调参数）/ `config.py`（配置读取）/ `context_probe.py`（时间/天气感知）/ `vision.py`（glm-4.6v 视觉）/ `chat_window.py`（读秒窗口+分批发送+智能归纳）/ `bili_bridge.py`（B站联动推送 + 自动通过好友）
+
+**persona/** 新增：`preferences.json`（偏好条目，一条一话题，第5路语义检索）/ `core_stories.json`（核心记忆，印象最深的结晶，低阈值高浮现）
 
 **memory_manager.py**：长期记忆卡 merge + build_memory_context + 记忆提取 prompt
 

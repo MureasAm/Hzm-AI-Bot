@@ -12,13 +12,28 @@
 - chat_window.py  读秒窗口（方案B：消息攒批，回复前统一读图+归纳）
 - bili_bridge.py  B站直播/动态监听 + 私聊广播（启动时注册后台任务）
 """
-from nonebot import on_message
-from nonebot.adapters.onebot.v11 import Bot, Event
+from nonebot import on_message, on_request
+from nonebot.adapters.onebot.v11 import Bot, Event, FriendRequestEvent, RequestEvent
 
+from .constants import AUTO_ACCEPT_FRIEND
 from . import bili_bridge  # noqa: F401  导入即注册启动时的后台监听任务
 from . import chat_window
 
 chat = on_message(priority=10, block=True)
+
+# 自动通过好友申请：新加的绿冻立即变双向好友，B站推送才能到达（NapCat 无法给单向好友发消息）
+friend_req = on_request(priority=1, block=False)
+
+
+@friend_req.handle()
+async def _auto_accept_friend(bot: Bot, event: RequestEvent):
+    if not isinstance(event, FriendRequestEvent) or not AUTO_ACCEPT_FRIEND:
+        return  # 群申请等不处理
+    try:
+        await bot.set_friend_add_request(flag=event.flag, approve=True, remark="")
+        print(f"[好友申请] ✅ 已自动通过 user={event.user_id}")
+    except Exception as e:
+        print(f"[好友申请] ⚠️ 自动通过失败 user={event.user_id}: {e}")
 
 
 def _extract_image_source(msg) -> str:

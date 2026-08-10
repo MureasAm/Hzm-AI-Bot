@@ -75,26 +75,45 @@ def _live_open_message(room_title: str, room_id: int = 0) -> str:
 
 
 def _extract_dynamic_text(item: dict) -> str:
-    """从 bilibili-api 的动态 item 里提取正文（防御式，转发动态取 orig 正文）。"""
+    """从 bilibili-api 的动态 item 里提取正文（防御式，兼容多种类型）。
+
+    旧格式（ARCHIVE/DRAW）：module_dynamic.desc.text；转发取 orig.desc.text。
+    新格式（OPUS 图文/文字动态）：major.opus.summary.text。
+    """
     modules = item.get("modules", {}) or {}
     md = modules.get("module_dynamic", {}) or {}
-    desc = md.get("desc", {}) or {}
-    text = desc.get("text", "") or ""
+    text = (md.get("desc", {}) or {}).get("text", "") or ""
     if not text:
         orig = md.get("orig", {}) or {}
         text = (orig.get("desc", {}) or {}).get("text", "") or ""
+    if not text:
+        # OPUS 新格式
+        opus = (md.get("major", {}) or {}).get("opus", {}) or {}
+        summary = opus.get("summary")
+        if isinstance(summary, dict):
+            text = summary.get("text", "") or ""
+        elif isinstance(summary, str):
+            text = summary
     return text.strip()
 
 
 def _extract_dynamic_images(item: dict) -> list:
-    """从动态 item 提取配图 URL（图文/视频封面），无图返回空列表。"""
+    """从动态 item 提取配图 URL（图文/视频封面），无图返回空列表。
+
+    OPUS 新格式图片在 major.opus.pics（不是 images）。
+    """
     modules = item.get("modules", {}) or {}
     major = (modules.get("module_dynamic", {}) or {}).get("major", {}) or {}
     mtype = major.get("type", "")
     urls = []
     if mtype == "MAJOR_TYPE_OPUS":
         opus = major.get("opus", {}) or {}
-        urls = [im.get("url", "") for im in (opus.get("images") or []) if im.get("url")]
+        for pic in (opus.get("pics") or []):
+            if pic.get("url"):
+                urls.append(pic["url"])
+        for im in (opus.get("images") or []):  # 兼容旧字段
+            if im.get("url"):
+                urls.append(im["url"])
     elif mtype == "MAJOR_TYPE_ARCHIVE":
         arc = major.get("archive", {}) or {}
         if arc.get("pic"):
@@ -248,13 +267,14 @@ class BiliMonitor:
     # ---- 私聊广播 ----
 
     async def _get_friends(self, bot) -> list:
-        """好友列表，进程内持久化缓存 1 天，避免每次轮询都查。"""
-        ts = float(self.state.get("friends_ts", 0) or 0)
-        cached = self.state.get("friends", [])
-        if cached and time.time() - ts < 86400:
-            return cached
+        """每次推送都拉最新好友列表（推送本就罕见，确保新加的好友立即能收到）。
+
+        旧版缓存 1 天，导致当天新加的好友收不到推送。
+        """
         lst = await bot.get_friend_list()
         friends = [{"user_id": f["user_id"]} for f in lst if f.get("user_id")]
+        ids = [f["user_id"] for f in friends]
+        print(f"[B站] 当前好友 {len(ids)} 人: {ids[:20]}{'…' if len(ids) > 20 else ''}")
         self.state["friends"] = friends
         self.state["friends_ts"] = time.time()
         _save_state(self.state)

@@ -34,11 +34,15 @@ VECTOR_FILE = DATA_DIR / "corpus_vectors.json"
 TRIGGER_VECTOR_FILE = DATA_DIR / "trigger_vectors.json"
 VOICE_SAMPLE_VECTOR_FILE = DATA_DIR / "voice_sample_vectors.json"
 PHRASE_VECTOR_FILE = DATA_DIR / "phrase_vectors.json"
+PREFERENCE_VECTOR_FILE = DATA_DIR / "preference_vectors.json"
+CORE_STORY_VECTOR_FILE = DATA_DIR / "core_story_vectors.json"
 TRAITS_FILE = PERSONA_DIR / "persona_traits.json"
 STYLES_FILE = PERSONA_DIR / "persona_styles.json"
 BEHAVIORS_FILE = PERSONA_DIR / "persona_behaviors.json"
 VOICE_SAMPLES_FILE = PERSONA_DIR / "voice_samples.json"
 PHRASES_FILE = PERSONA_DIR / "phrases.json"
+PREFERENCES_FILE = PERSONA_DIR / "preferences.json"
+CORE_STORIES_FILE = PERSONA_DIR / "core_stories.json"
 
 
 def get_api_key(name: str) -> str | None:
