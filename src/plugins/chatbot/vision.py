@@ -39,10 +39,12 @@ async def _read_image_bytes(source: str) -> bytes:
         headers = {
             "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"),
-            "Referer": "https://qun.qq.com/",
+            "Referer": "https://www.bilibili.com/",
         }
+        # trust_env=False：强制直连，不受环境变量代理影响
+        # （踩坑：bot 环境曾有失效代理 HTTP_PROXY=127.0.0.1:50454，导致 B站图链下载 ConnectError）
         async with httpx.AsyncClient(timeout=DOWNLOAD_TIMEOUT, follow_redirects=True,
-                                     headers=headers) as client:
+                                     headers=headers, trust_env=False) as client:
             resp = await client.get(source)
             resp.raise_for_status()
             return resp.content
