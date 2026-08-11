@@ -132,19 +132,23 @@ class BiliMonitor:
         self.sessdata = get_bili_sessdata()
         self.state = _load_state()
         self._warned_no_sessdata = False
+        # 基线是否已建（进程内标志，不持久化——每次启动都重新对齐，
+        # 避免停机期间的动态/开播在重启后被当新事件推送）
+        self._primed = False
 
     async def poll_once(self, bot) -> None:
         if not self.uid:
             return
-        if not self.state.get("_primed"):
+        if not self._primed:
             await self._prime()
         await self._check_live(bot)
         await self._check_dynamic(bot)
 
     async def _prime(self) -> None:
-        """首次启动建基线：记录当前直播/动态状态，不推送已发生的事件。
+        """每次启动建基线：记录当前直播/动态状态，不推送"停机期间已发生"的事件。
 
-        避免 bot 重启后把"启动前就开播/发的动态"当新事件广播给所有好友。
+        基线是进程内一次性的（self._primed），每次 bot 启动都重新对齐——
+        否则重启后会把停机期间的开播/动态当新事件广播给所有好友。
         """
         try:
             info = await self._fetch_live_status()
@@ -156,9 +160,9 @@ class BiliMonitor:
             self.state["last_dynamic_id"] = dyn.get("id", "")
         except Exception as e:
             print(f"⚠️ 基线-动态失败（忽略）: {e}")
-        self.state["_primed"] = True
+        self._primed = True
         _save_state(self.state)
-        print("[B站] 首次启动已建立基线，之后检测到新的开播/动态才会推送")
+        print("[B站] 已建立基线（对齐当前直播/动态状态），之后检测到新的开播/动态才会推送")
 
     # ---- 开播 ----
 

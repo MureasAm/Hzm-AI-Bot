@@ -240,7 +240,7 @@ class TestPrime:
         await m.poll_once(bot)
         # 首次只建基线，不推送
         assert pushed == []
-        assert m.state["_primed"] is True
+        assert m._primed is True  # 基线是实例标志
         assert m.state["last_live_status"] is True
         assert m.state["last_dynamic_id"] == "new"
 
@@ -248,9 +248,43 @@ class TestPrime:
         await m.poll_once(bot)
         assert pushed == []
 
-    async def test_after_baseline_new_event_pushes(self, monkeypatch):
+    async def test_restart_does_not_push_downtime_events(self, monkeypatch):
+        """重启后（_primed 实例标志重置为 False）：停机期间已开播/发动态不推送。
+
+        回归：此前 _primed 持久化在 state 文件，重启后不重新建基线，
+        导致停机期间的开播/动态被当新事件推送。
+        """
         m = _make_monitor(uid="1", sessdata="sess", state={
-            "_primed": True, "last_live_status": False, "last_dynamic_id": "old"})
+            "last_live_status": False, "last_dynamic_id": "old"})
+        # 模拟重启：实例 _primed 默认 False
+        assert m._primed is False
+        pushed = []
+
+        async def fake_push(bot, content, image_path=None):
+            pushed.append(content)
+
+        # 停机期间灰泽满开播了 + 发了新动态（都比 state 里的旧记录新）
+        async def _live():
+            return {"live_status": 1, "title": "直播中"}
+
+        async def _dyn():
+            return {"id": "new", "text": "停机期间发的", "image_urls": []}
+
+        monkeypatch.setattr(m, "_push", fake_push)
+        monkeypatch.setattr(m, "_fetch_live_status", _live)
+        monkeypatch.setattr(m, "_fetch_latest_dynamic", _dyn)
+        monkeypatch.setattr(bb, "_save_state", lambda s: None)
+
+        await m.poll_once(FakeBot())
+        # 重启后第一次 poll 只对齐基线，不推送停机期间的事件
+        assert pushed == []
+        assert m.state["last_live_status"] is True  # 基线已对齐为直播中
+        assert m.state["last_dynamic_id"] == "new"
+
+    async def test_after_baseline_new_event_pushes(self, monkeypatch):
+        # _primed 是实例标志（进程内）；已建基线后，新动态才推送
+        m = _make_monitor(uid="1", sessdata="sess", _primed=True, state={
+            "last_live_status": False, "last_dynamic_id": "old"})
         pushed = []
 
         async def fake_push(bot, content, image_path=None):
