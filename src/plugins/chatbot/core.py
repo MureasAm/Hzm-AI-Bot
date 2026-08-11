@@ -191,11 +191,55 @@ def _trim_text(text: str, max_chars: int) -> str:
     return text[:max_chars] + "……"
 
 
-def _split_sentences(text: str) -> list:
-    """按句末标点切分（。！？）；省略号仅在后面还有较长内容时才是边界。
+def _lcs_len(a: str, b: str) -> int:
+    """最长公共子串长度（DP，O(n*m)）。复读检测用。"""
+    n, m = len(a), len(b)
+    if n == 0 or m == 0:
+        return 0
+    prev = [0] * (m + 1)
+    best = 0
+    for i in range(1, n + 1):
+        cur = [0] * (m + 1)
+        for j in range(1, m + 1):
+            if a[i - 1] == b[j - 1]:
+                cur[j] = prev[j - 1] + 1
+                if cur[j] > best:
+                    best = cur[j]
+        prev = cur
+    return best
 
-    省略号常表"无语/语气"（如"啊……这……"），不能乱切；
-    只有后面跟着新内容（≥5 字）才当停顿边界（如"唱拉了……灰泽满先关上门悄悄听会儿"）。
+
+def _is_echo_reply(reply: str, recent_bot_replies: list, min_ratio: float = 0.6) -> bool:
+    """判断新回复是否复读了最近自己说过的话（复读机防护）。
+
+    复读是模型对情境相关句的执着（会在短期记忆里看到自己的原话再引用），
+    提示词的【防复读】拦不住，只能确定性检测：与最近回复完全一致，
+    或最长公共子串覆盖较短者的 60% 以上（如"你这话说的……灰泽满刚醒"
+    复读后半句"灰泽满刚醒"）。太短的句子（<8字）不判，避免误伤"晚安"类。
+    """
+    reply = (reply or "").strip()
+    if not reply:
+        return False
+    for old in (recent_bot_replies or [])[-3:]:
+        old = (old or "").strip()
+        if not old:
+            continue
+        if reply == old:
+            return True
+        shorter = min(len(reply), len(old))
+        if shorter < 8:
+            continue
+        if _lcs_len(reply, old) >= shorter * min_ratio:
+            return True
+    return False
+
+
+def _split_sentences(text: str) -> list:
+    """按句末标点切分（。！？）；省略号仅在"前后都有内容"时才当边界。
+
+    省略号常表"无语/语气"（如"啊……这……"）和犹豫前缀（如"灰泽满……"），不能乱切；
+    只有省略号后面跟着新内容（≥5 字）**且前面也有足够内容**（≥4 字）才当停顿边界
+    （如"……那你说说"这类，前文太短就不是边界，避免把"灰泽满……"单独切一条发出去）。
     """
     parts = []
     i = 0
@@ -203,8 +247,10 @@ def _split_sentences(text: str) -> list:
         end = m.end()
         if m.group(0).startswith("…"):
             rest = text[end:].lstrip()
-            if len(rest) < 5:
-                continue  # 省略号后内容太少 → 语气/无语，不切
+            before = text[i:m.start()].rstrip()
+            # 后文太少=语气/无语；前文太短=犹豫前缀（"灰泽满……"），都不是边界
+            if len(rest) < 5 or len(before) < 4:
+                continue
         parts.append(text[i:end])
         i = end
     if i < len(text):
@@ -245,11 +291,24 @@ def split_reply(reply: str, min_len: int = SPLIT_MIN_LEN,
     parts = _limit_commas(parts)
     parts = [p.strip().rstrip("。") for p in parts if p and p.strip()]
 
+    # 纯括号段（（小声嘀咕））并入上一段，避免单独发一条"舞台说明"——它没有实质内容，
+    # 单独发会让对方接不住（实测：单独"（小声嘀咕）"→ 对方问"你在说什么"→ 模型瞎编）
+    merged = []
+    for p in parts:
+        if merged and re.fullmatch(r'[（(][^）)]*[）)]', p):
+            merged[-1] += p
+        else:
+            merged.append(p)
+    parts = merged
+
     if len(parts) <= 1:
         return [text]
 
     if len(parts) > max_parts:
-        parts = parts[:max_parts - 1] + [''.join(parts[max_parts - 1:]).strip()]
+        # 超限的分段用换行连接（不能直接拼接——会把两句焊成一句没标点的 run-on，
+        # 实测"好像是媒体研究。灰泽满只想打死自己"被拼成"研究灰泽满只想…"）
+        merged = "\n".join(p for p in parts[max_parts - 1:] if p).strip()
+        parts = parts[:max_parts - 1] + [merged]
     return parts
 
 
@@ -296,11 +355,13 @@ async def summarize_batch(msgs: list) -> str:
 
 
 def clean_reply(reply: str) -> str:
-    """输出清洗：去掉开头（动作/情绪）括号前缀，整条至多保留 1 个括号。
+    """输出清洗：去括号前缀、整条至多 1 个括号、省略号归一并限频。
 
-    人设规则是"每轮回复至多一个括号、日常通常不用"，但声音样本里带（小声）（心虚），
-    模型 few-shot 会学着用。这里做确定性过滤：剥掉开头"（咽口水）"这类前缀，
-    整条超过 1 个括号时只保留第一个（符合人设额度）。温度靠语气词/自嘲/省略号承载。
+    人设规则是"每轮回复至多一个括号、省略号是例外"，但声音样本里带（小声）（心虚），
+    模型 few-shot 会学着用。这里做确定性过滤：
+    - 剥掉开头"（咽口水）"这类前缀；整条超过 1 个括号时只保留第一个（符合人设额度）
+    - 省略号归一（.../…… 串 → ……），整条至多 2 次——保住"啊……这……"这种无语表达，
+      掐掉刷屏式……。温度靠语气词/自嘲承载，不靠符号堆砌。
     """
     text = reply.strip()
     # 去掉开头的连续括号前缀，如 （咽口水）你看...
@@ -319,6 +380,18 @@ def clean_reply(reply: str) -> str:
         kept = first.group(0)
         after = re.sub(r'（[^）]*）', '', text[first.end():])
         text = before + kept + after
+    # 省略号纪律：归一连续省略号；剥掉开头省略号（"……那你说说"→"那你说说"，纯"……"无语保留）；
+    # 整条至多保留前 2 个
+    text = re.sub(r'\.{3,}|…+', '……', text)
+    text = re.sub(r'^……(?=\S)', '', text)
+    if not text:
+        text = '……'
+    ell_pos = [m.start() for m in re.finditer('……', text)]
+    if len(ell_pos) > 2:
+        cut = ell_pos[2]
+        text = text[:cut] + text[cut:].replace('……', '')
+    # 结巴消融："那、那"→"那那"（真人快速打字是叠字，不是顿号；顿号结巴是 RP 腔）
+    text = re.sub(r'(.)、\1', r'\1\1', text)
     return text
 
 
@@ -659,6 +732,21 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
 
     # --- 🤖 调用大模型 ---
     reply = await generate_reply(messages)
+
+    # --- 🔁 复读机防护（确定性，治本）---
+    # 模型会对情境相关句执着复读（自己说过的话进短期记忆后再被引用），提示词拦不住。
+    # 检测到与最近自己说过的话重复，就加"别复读"提示强制重新生成（最多 2 次）。
+    recent_bot = [ln[4:] for ln in get_user_history(user_id) if ln.startswith("灰泽满：")]
+    if _is_echo_reply(reply, recent_bot):
+        print(f"[防复读] 检测到复读『{reply[:20]}』，强制重新生成")
+        nudge = {
+            "role": "system",
+            "content": f"警告：你刚说过『{reply}』，几乎原样复读会让人反感。用完全不同的说法重新回复这条消息，别重复这句话。",
+        }
+        for _ in range(2):
+            reply = await generate_reply(list(messages) + [nudge])
+            if not _is_echo_reply(reply, recent_bot):
+                break
 
     # --- 💾 更新短期记忆（带锁）：图片消息把视觉描述记进去，后续才记得聊过什么图 ---
     record_msg = _compose_record_msg(user_msg, vision_desc)

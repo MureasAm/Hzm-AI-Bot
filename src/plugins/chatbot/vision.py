@@ -25,10 +25,30 @@ DOWNLOAD_TIMEOUT = 10.0
 MAX_IMAGE_BYTES = 15 * 1024 * 1024  # 15MB 上限，超出跳过
 
 
+_QQ_IMAGE_DOMAINS = ("qq.com", "qpic.cn")
+_BILI_IMAGE_DOMAINS = ("bilibili.com", "hdslb.com", "biliimg.com")
+
+
+def _referer_for(url: str) -> str:
+    """按图链域名选 Referer（hotlink 校验，选错会 400/403）。
+
+    - QQ 图链（multimedia.nt.qq.com.cn / gchat.qpic.cn 等）→ QQ 域 Referer。
+      踩坑：曾统一改成 B站 Referer 导致 QQ 图片下载 400 'invalid rkey'（QQ CDN hotlink 校验）。
+    - B站图链（hdslb.com 等）→ B站 Referer（B站 WAF 拦默认 UA/Referer）。
+    - 其他域名 → 不强加 Referer（留空）。
+    """
+    host = url.split("//", 1)[1].split("/", 1)[0].lower() if "//" in url else ""
+    if any(d in host for d in _BILI_IMAGE_DOMAINS):
+        return "https://www.bilibili.com/"
+    if any(d in host for d in _QQ_IMAGE_DOMAINS):
+        return "https://qun.qq.com/"
+    return ""
+
+
 async def _read_image_bytes(source: str) -> bytes:
     """把各种输入归一化为图片字节。
 
-    QQ 图链（gchat.qpic.cn 等）会拦默认 UA，必须带浏览器 UA + Referer；
+    QQ/B站图链会拦默认 UA，必须带浏览器 UA + 对应域的 Referer（见 _referer_for）；
     也兼容 file:// 前缀与本地路径。
     """
     if source.startswith("data:"):
@@ -39,8 +59,10 @@ async def _read_image_bytes(source: str) -> bytes:
         headers = {
             "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"),
-            "Referer": "https://www.bilibili.com/",
         }
+        referer = _referer_for(source)
+        if referer:
+            headers["Referer"] = referer
         # trust_env=False：强制直连，不受环境变量代理影响
         # （踩坑：bot 环境曾有失效代理 HTTP_PROXY=127.0.0.1:50454，导致 B站图链下载 ConnectError）
         async with httpx.AsyncClient(timeout=DOWNLOAD_TIMEOUT, follow_redirects=True,

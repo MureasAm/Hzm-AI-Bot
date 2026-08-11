@@ -14,9 +14,10 @@ class TestSplitReply:
         # 拆分后去掉句号（聊天不打句号），保留？！…
         assert core.split_reply("今天好冷。你那边呢？") == ["今天好冷", "你那边呢？"]
 
-    def test_ellipsis_not_broken(self):
+    def test_ellipsis_short_leadin_not_split(self):
+        # 省略号前文太短（"唱拉了……"是犹豫前缀）不切，避免把"灰泽满……"单独发一条
         assert core.split_reply("唱拉了……灰泽满先关上门悄悄听会儿。") == \
-            ["唱拉了……", "灰泽满先关上门悄悄听会儿"]
+            ["唱拉了……灰泽满先关上门悄悄听会儿"]
 
     def test_trailing_text_appended(self):
         assert core.split_reply("今天好冷。嗯", min_len=0) == ["今天好冷", "嗯"]
@@ -24,8 +25,8 @@ class TestSplitReply:
     def test_max_parts_cap(self):
         r = "一。二。三。四。五。六。"
         assert len(core.split_reply(r)) <= core.SPLIT_MAX_PARTS
-        # 句号已被去掉
-        assert "".join(core.split_reply(r)) == r.replace("。", "")
+        # 句号已被去掉；超限分段内部用换行连接（防 run-on），内容不丢
+        assert "".join(core.split_reply(r)).replace("\n", "") == r.replace("。", "")
 
     def test_min_len_respected(self):
         # 低于 min_len 不拆；末尾句号仍会被去掉
@@ -41,9 +42,40 @@ class TestSplitReply:
         assert core.split_reply("啊……这……", min_len=0) == ["啊……这……"]
 
     def test_ellipsis_boundary_splits(self):
-        # 省略号后跟新内容（≥5字）才是停顿边界
-        assert core.split_reply("唱拉了……灰泽满先关上门悄悄听会儿", min_len=0) == \
-            ["唱拉了……", "灰泽满先关上门悄悄听会儿"]
+        # 省略号前后都有内容（前≥4字、后≥5字）才是停顿边界
+        assert core.split_reply("唱了一晚上……灰泽满先关上门悄悄听会儿", min_len=0) == \
+            ["唱了一晚上……", "灰泽满先关上门悄悄听会儿"]
+
+
+class TestEchoReply:
+    """复读机防护：检测新回复是否复读最近自己说过的话。"""
+
+    def test_exact_duplicate(self):
+        assert core._is_echo_reply(
+            "灰泽满刚醒，你倒是精神好", ["灰泽满刚醒，你倒是精神好"]
+        ) is True
+
+    def test_shared_tail(self):
+        # "你这话说的……灰泽满刚醒" 复读后半句，最长公共子串覆盖 >60%
+        assert core._is_echo_reply(
+            "你这话说的……灰泽满刚醒，你倒是精神好", ["灰泽满刚醒，你倒是精神好"]
+        ) is True
+
+    def test_reverse_order(self):
+        # 完整复读句（>8字）在更长旧句里，也判为复读
+        assert core._is_echo_reply(
+            "灰泽满刚醒，你倒是精神好", ["大早上的玩这个……灰泽满刚醒，你倒是精神好"]
+        ) is True
+
+    def test_short_not_flagged(self):
+        # 太短不判（"晚安" 常见短句，避免误伤）
+        assert core._is_echo_reply("晚安", ["晚安，做个好梦"]) is False
+
+    def test_different_not_flagged(self):
+        assert core._is_echo_reply("今天天气真不错", ["灰泽满刚醒，你倒是精神好"]) is False
+
+    def test_empty_not_flagged(self):
+        assert core._is_echo_reply("", ["灰泽满刚醒"]) is False
 
 
 class TestSummarizeBatch:
@@ -107,6 +139,21 @@ class TestCleanReply:
 
     def test_all_stripped_returns_original(self):
         assert core.clean_reply("（咽口水）") == "（咽口水）"
+
+    def test_ellipsis_ascii_normalized(self):
+        # 英文三点 ... 归一成中文省略号 ……
+        assert core.clean_reply("好冷……真的...手都僵了") == "好冷……真的……手都僵了"
+
+    def test_ellipsis_preserves_double(self):
+        # "啊……这……" 无语表达，2 次省略号在额度内，原样保留
+        assert core.clean_reply("啊……这……") == "啊……这……"
+
+    def test_ellipsis_capped_keeps_two(self):
+        # 刷屏式省略号，只保留前 2 个
+        assert core.clean_reply("a……b……c……d……") == "a……b……cd"
+
+    def test_ellipsis_long_dots_normalized(self):
+        assert core.clean_reply("冷死了...........") == "冷死了……"
 
 
 class TestPreferences:
