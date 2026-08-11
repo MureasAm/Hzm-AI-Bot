@@ -56,6 +56,28 @@
 - **修复**：动态 OPUS 类型提取（文本在 major.opus.summary.text、图在 pics）、推送强制刷好友（当天新好友立即收到）、自动通过好友申请（NapCat 给单向好友发消息是已知 bug，只能让它变双向）、梗匹配记入短期记忆
 - 测试：128 个单测全过
 
+### V5.2（2026-08-11）：会话级记忆 + 短 query 扩充 + 样本层修复
+- **会话级记忆（episodic memory）**：新建 `session_memory.py`，记录"当前话题 + 本场关键事件"，转话题时更替；注入【当前会话】让模型接得住会话调性（对齐 HEMA compact memory / plast-mem episodic 层）
+- **对话前同步探测**：`probe_session` 在**组装消息前**同步探测话题延续/转换 + 短 query 扩充（一次 LLM 调用同时完成），避免对话后异步更新导致的"转话题滞后一轮"——新主题下一轮立即生效
+- **短 query 上下文扩充**：用户消息 ≤4 字（如"咋这样"）先在会话语境里扩充成完整句再 embedding——短向量太"糊"会误命中不相关样本（实测触发过"好女孩"误回复）
+- **样本层修复**：`flirt_6/flirt_7` 的 user 描述"发不绿色的内容"过泛，被"比爱心/撒娇"语境误命中 → 改为"发黄段子/擦边/低俗弹幕"，重算向量后「咋这样」不再命中
+- **记忆清理**：清除线上 memory.json / long_term_memory.json（测试对话污染）
+- 新增 `tests/test_session_memory.py`；测试 141 个全过
+
+### V5.3（2026-08-11）：行为规则样板化 + 人格提取工具重建
+- **behaviors 格式改造**：`persona_behaviors.json` 每条加 `samples` 字段（真人原话示范，few-shot），`_format_behavior_rule` 注入时带"她这么说过（照着学腔调）"；触发-响应从"指令式"升级为"指令 + 示范"（对齐 Codified Profiles / forge-persona 的"行为>标签"）
+- **提取代码重建**：新增 `scripts/extract_persona.py`（替代被删的 four_step_pipeline），吃 **convert-to-chat 产物**（已分离 user/reply 的对话对）→ 提取触发-响应行为 → **validation 铁律**：samples 必须逐字匹配 convert-to-chat 产物，模型改写/自创直接剔除
+- **流程修正**：行为提取必须先 convert-to-chat 分离"读弹幕 vs 回答"，再 extract_persona——直接吃 cleaned 会把弹幕当 user（踩过）
+- **检索阈值调优（切断"日常聊时间→注入直播样本"伪关联）**：实测日常短句与任意样本相似度天然 0.55-0.62、真直播命中 0.62-0.70。取中间值：`VOICE_SAMPLE_THRESHOLD` 0.35→**0.60**、`RAG_THRESHOLD` 0.35→**0.55**、新增 `VOICE_SAMPLE_KEEPALIVE_MIN_SIM=0.60`（保底也设门槛，宁断档不错话题）。案例：用户"9点是你那边"曾被注入直播时间样本 → 模型编"明天还是9点开播"；修后日常不再注入、真直播仍命中
+- 测试 139 个全过
+
+### V5.4（2026-08-11）：表情消息处理 + behaviors/voice 样本扩充
+- **表情消息识别与处理**：纯表情消息（emoji / QQ表情码 `[表情：xx]`）走独立路径——① probe 扩充时**按表情标准含义识别**（😅=无语/尴尬、😭=委屈/哭，不从对话历史臆测，曾误判😅为"傲娇调侃"）；② **跳过五路语义检索**（表情不表达话题，😭曾被命中"被夸"样本）；③ 注入专门提示：按情绪回应并体现态度（无语→攻击性反击"感觉你不是很服气？"、委屈→心软安慰但**不套当前话题模板**，曾硬接"夸你可爱"）
+- **behaviors samples 补充**（走"挑话轮→初筛→精修→convert→再筛→写入"流程）：冷场补"群冷场大王/直播间没人说话尴尬"4 条、感性补"此生无憾/打破网络世界妖魔化"2 条、被夸补"生日/反响"2 条、被质疑补"周表"2 条、立Flag补"早起"2 条；触发-响应从指令式升级为"指令+samples 真人示范"
+- **voice_samples 扩充**：0807 生日场新增 birth_1~8 / peer_1~7 共 15 条（生日祝福反应 + 同行/前辈关系，填补原有缺口）
+- **素材复用规则**：behaviors samples 尽量不复用 voice_samples 已有样本，避免同话题双注入（H1 同期祝福因已在 voice 而剔除）
+- 测试 139 个全过
+
 ---
 
 ## 第三部分：回复生成链路剖析（每一层在决定什么）
@@ -70,19 +92,22 @@
 | 2 | behaviors（trigger 命中） | 【当前情境下的行为指令】 | 该情境的明确反应模式（权重最高 1.5） |
 | 3 | corpus（直播记忆） | 【她经历过的相关背景】 | 背景记忆，仅相关时提及，不参与风格 |
 | 4 | 长期记忆 | 【关于这个绿冻的长期记忆】 | 这个用户是谁（印象/事实/承诺/时刻） |
-| 5 | 短期记忆 | 【最近对话记录】 | 最近聊了什么（+一致性规则） |
-| 6 | phrases（措辞指纹） | 【她的固定说法】 | 表达同类意思时的真实用词 |
-| 7 | voice_samples（few-shot） | 【说话方式参考】 | 示范她的腔调（语气/断句/自称/节奏） |
-| 8 | 长度提醒 | 【回复节奏】 | 一句话就停，30字内 |
-| 9 | user_msg | — | 当前用户消息 |
+| 5 | 会话级记忆（V5.2） | 【当前会话】 | 这场对话的话题线 + 本场发生的事（调性锚点） |
+| 6 | 短期记忆 | 【最近对话记录】 | 最近聊了什么（+一致性规则） |
+| 7 | phrases（措辞指纹） | 【她的固定说法】 | 表达同类意思时的真实用词 |
+| 8 | voice_samples（few-shot） | 【说话方式参考】 | 示范她的腔调（语气/断句/自称/节奏） |
+| 9 | 长度提醒 | 【回复节奏】 | 一句话就停，30字内 |
+| 10 | user_msg | — | 当前用户消息 |
+
+> **检索 query（V5.2）**：用户消息 ≤4 字时，先在会话语境里扩充成完整句再 embedding——短向量太"糊"会误命中不相关样本（踩过"好女孩"误回复）。见 `session_memory.expand_short_query`。
 
 ### 各文件作用
 
 **persona/**：`system_prompt.txt`（人设核心）/ `persona_traits.json`（性格基底）/ `persona_styles.json`（语言风格）/ `persona_behaviors.json`（触发行为，改后 precompute triggers）/ `voice_samples.json`（样本，改后 precompute voice-samples）/ `phrases.json`（措辞，改后 precompute phrases）
 
-**data/**：`corpus_vectors.json`（直播记忆 RAG）/ `trigger_vectors.json` / `voice_sample_vectors.json` / `phrase_vectors.json` / `memory.json`（短期）/ `long_term_memory.json`（长期）
+**data/**：`corpus_vectors.json`（直播记忆 RAG）/ `trigger_vectors.json` / `voice_sample_vectors.json` / `phrase_vectors.json` / `memory.json`（短期）/ `long_term_memory.json`（长期）/ `session_memory.json`（会话级记忆：当前话题+本场事件，V5.2）
 
-**src/plugins/chatbot/**：`core.py`（主循环组装）/ `persona.py` / `memory.py`（短期读写带锁）/ `rag.py`（embedding+余弦）/ `retrieval.py`（四路融合+预算 + 偏好第5路 + 核心记忆检索）/ `constants.py`（所有可调参数）/ `config.py`（配置读取）/ `context_probe.py`（时间/天气感知）/ `vision.py`（glm-4.6v 视觉）/ `chat_window.py`（读秒窗口+分批发送+智能归纳）/ `bili_bridge.py`（B站联动推送 + 自动通过好友）
+**src/plugins/chatbot/**：`core.py`（主循环组装）/ `persona.py` / `memory.py`（短期读写带锁）/ `session_memory.py`（会话级记忆：话题追踪+短query扩充，V5.2）/ `rag.py`（embedding+余弦）/ `retrieval.py`（四路融合+预算 + 偏好第5路 + 核心记忆检索）/ `constants.py`（所有可调参数）/ `config.py`（配置读取）/ `context_probe.py`（时间/天气感知）/ `vision.py`（glm-4.6v 视觉）/ `chat_window.py`（读秒窗口+分批发送+智能归纳）/ `bili_bridge.py`（B站联动推送 + 自动通过好友）
 
 **persona/** 新增：`preferences.json`（偏好条目，一条一话题，第5路语义检索）/ `core_stories.json`（核心记忆，印象最深的结晶，低阈值高浮现）
 
@@ -166,6 +191,8 @@ VOICE_SAMPLE_TOP_N = 3         # few-shot 甜蜜点 2-5
 - ❌ 短期记忆持久化污染 → 测试对话会积累进 memory.json，影响后续（测试后注意清空）
 - ❌ "借口一致性强制规则"过度 → 旧借口绑架新问题（"泡面"）；应限定"同一件事一致，新问题正常答"
 - ❌ 一次性把 statement 全部向量化 → 应先生成→筛选修错字→再向量化（"代属国""婚姻买""满居"等错译）
+- ❌ **样本 user 描述过泛 → 误命中**：`flirt_6`"发不绿色的内容"被"比爱心/咋这样"撒娇语境误命中，模型抄了"好女孩不能看这个"措辞答非所问 → user 描述要精确限定触发语境（"发黄段子/擦边"）
+- ❌ **短 query 向量"糊"**：≤4 字消息 embedding 后与多个无关话题相似度都偏高，阈值 0.35 全放行 → 短 query 先在会话语境扩充成完整句再检索（V5.2 session_memory.expand_short_query）
 
 ---
 
@@ -216,6 +243,32 @@ VOICE_SAMPLE_TOP_N = 3         # few-shot 甜蜜点 2-5
 - 改主循环前先备份（core.py 有 backup_test1）
 - `.env.prod` 含 API key，已在 .gitignore
 - 素材质量决定样本上限——先快速判定场次价值
+
+---
+
+## 第十部分：未来优化方向（2026-08 调研业界后记档）
+
+> 以下为对照业界（AMADEUS/CharacterRAG、plast-mem/HEMA、InCharacter/CharacterEval 等）调研出的优化项。
+> ✅ ①会话级记忆、④人格评测已于 V5.2 落地；以下 ②③ 仍未做，量上来后再考虑。
+
+### ① 会话级 episodic 记忆【✅ V5.2 已实现】
+- 落地：`session_memory.py`（当前话题 + 本场关键事件，转话题更替，注入【当前会话】）+ 短 query（≤4字）会话语境扩充后再检索。
+- 见版本史 V5.2。
+
+### ② 记忆时间维度（承诺过期 + 印象衰减）【需求不大，规划未来】
+- **现状**：印象标签 confidence 只升不降（最高 1.0），promises 只保留最近 5 条但无"应兑现日期/过期"概念。
+- **业界参考**：Memoria 的指数衰减（`w=exp(-a·x)` 按分钟数）；Zenodo 论文的"记忆有效性期限"。
+- **做法草案**：给承诺加应兑现日期，过期自动标注失效；印象标签长时间不出现则降 confidence。
+
+### ③ 轻量情绪状态（neurostate-lite）【有兴趣但怕动摇回复根基，需详聊后定】
+- **设想**：给灰泽满一个轻量的当日心情状态（如"今天被夸多了→心情+1"），注入影响语气，提升连续感。
+- **风险**：可能动摇"温度靠语气不靠括号、人格来自素材"的回复根基，需谨慎设计（见会话讨论）。
+- **业界参考**：EmiliaLab neurostate-engine（六神经递质 0-100，事件驱动更新）；AiVtuberProject 情绪→TTS 映射。
+
+### ④ 人格一致性评测体系【✅ V5.2 已实现】
+- 落地：`scripts/persona_eval.py`（项目外独立脚本）。大五人格 14 道开放题 + `--anonymous` 匿名化防名字作弊。
+- 实测：实名 13/14（93%）、匿名 14/14（100%）——匿名不掉分，说明人格来自设定而非名字记忆。
+- 运行：`python scripts/persona_eval.py [--anonymous]`
 
 ---
 
