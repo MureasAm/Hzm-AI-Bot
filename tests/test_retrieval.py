@@ -123,11 +123,18 @@ class TestRetrieveVoiceSamples:
         monkeypatch.setattr("src.plugins.chatbot.retrieval.load_voice_sample_vectors", lambda: [])
         assert retrieve_voice_samples("q", _vec()) == []
 
-    def test_keepalive_returns_one_when_all_below_threshold(self, monkeypatch):
+    def test_keepalive_skips_when_all_below_threshold(self, monkeypatch):
         monkeypatch.setattr("src.plugins.chatbot.retrieval.load_voice_sample_vectors",
                             self._fake_samples)
-        # query 与两个样本都正交 → 全低于阈值 → 保底注入 1 条
+        # query 与两个样本都正交 → 全低于阈值，且低于保底门槛 → 不注入（宁断档不错话题）
         items = retrieve_voice_samples("q", [0, 0, 1, 0], threshold=0.9)
+        assert items == []
+
+    def test_keepalive_injects_when_high_similarity(self, monkeypatch):
+        monkeypatch.setattr("src.plugins.chatbot.retrieval.load_voice_sample_vectors",
+                            self._fake_samples)
+        # query 与样本 a 高相关（cos=1.0），但主阈值设很高 → 走保底注入 1 条
+        items = retrieve_voice_samples("q", [1, 0, 0, 0], threshold=0.99)
         assert len(items) >= 1
         assert all(i.source == "voice_sample" for i in items)
 
