@@ -346,7 +346,7 @@ def _run_vision_test(args):
 def _add_mine_theme(sub):
     p = sub.add_parser("mine-theme", help="主题素材挖掘（模型语义找素材，如立Flag秒打脸）")
     p.add_argument("-i", "--input", required=True, help="转写或清洗后的 JSON")
-    p.add_argument("--theme", required=True, choices=["立Flag秒打脸"], help="要挖的主题")
+    p.add_argument("--theme", required=True, choices=["立Flag秒打脸", "失约被催", "被表白"], help="要挖的主题")
     p.add_argument("-o", "--output", default=None, help="输出路径")
     p.set_defaults(func=_run_mine_theme)
 
