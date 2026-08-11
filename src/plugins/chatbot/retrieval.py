@@ -140,11 +140,31 @@ def retrieve_voice_samples(user_query: str, query_vector,
     return _ensure_min_samples(items, samples, query_vector)
 
 
+# 口语质问关键词 → 强制命中行为（语义检索对"敷衍/鸽/迟到"这类口语有~0.55天花板且易错配，
+# 对齐 LEGENDARY 的思路：固定质问词 → 固定反应）
+_BEHAVIOR_KEYWORDS = {
+    "被质疑时心虚辩解": ["敷衍", "又骗", "在骗", "装的", "撒谎", "骗子"],
+    "失约被催时认栽滑跪": ["又迟到", "说好的", "又鸽", "鸽了", "放鸽子", "爽约", "又没播"],
+}
+
+
 def retrieve_behaviors(user_query: str, query_vector, behaviors: list,
                        threshold: float = BEHAVIOR_MATCH_THRESHOLD,
                        top_n: int = BEHAVIOR_TOP_N) -> list:
-    """行为触发检索。与 match_behaviors_semantic 同源，只返回最高分达标行为。"""
-    if not behaviors or not query_vector:
+    """行为触发检索。与 match_behaviors_semantic 同源，只返回最高分达标行为。
+
+    先做关键词兜底（口语质问词强制命中），再做语义检索（top-1 达阈值）。
+    """
+    if not behaviors or not user_query:
+        return []
+    # 关键词兜底：明确的质问词直接命中对应行为（语义检索够不到口语质问）
+    for b in behaviors:
+        name = b.get("name", "")
+        kws = _BEHAVIOR_KEYWORDS.get(name)
+        if kws and any(k in user_query for k in kws):
+            return [RetrievalItem(source="behavior", item_id=name, score=1.0,
+                                  text=_format_behavior_rule(b))]
+    if not query_vector:
         return []
     tv = load_trigger_vectors()
     scored = []

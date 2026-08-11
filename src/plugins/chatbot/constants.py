@@ -38,7 +38,7 @@ MEMORY_EXTRACT_TEMPERATURE = 0.1
 MEMORY_EXTRACT_MAX_TOKENS = 100
 
 # ==================== 检索阈值 ====================
-BEHAVIOR_MATCH_THRESHOLD = 0.65
+BEHAVIOR_MATCH_THRESHOLD = 0.55  # 口语质问的语义相似度有~0.55天花板(ROADMAP记录), 0.65太高导致被质疑/失约被催几乎不触发
 RAG_THRESHOLD = 0.55
 RAG_TOP_K = 2
 

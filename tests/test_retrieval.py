@@ -171,6 +171,17 @@ class TestRetrieveBehaviors:
         assert "B1" in items[0].text
         assert "反应1" in items[0].text
 
+    def test_keyword_fallback_forces_behavior(self):
+        # 口语质问词（敷衍/鸽/迟到）→ 关键词兜底强制命中，即使 query 语义 miss（None）
+        behaviors = [
+            {"name": "被质疑时心虚辩解", "trigger": "质疑", "response": "先否认再心虚"},
+            {"name": "失约被催时认栽滑跪", "trigger": "迟到", "response": "认栽滑跪"},
+        ]
+        items = retrieve_behaviors("你是不是在敷衍我", None, behaviors)
+        assert len(items) == 1 and items[0].item_id == "被质疑时心虚辩解"
+        items2 = retrieve_behaviors("说好的八点直播呢？你又鸽了", None, behaviors)
+        assert len(items2) == 1 and items2[0].item_id == "失约被催时认栽滑跪"
+
 
 # ==================== 环境变量开关 ====================
 
