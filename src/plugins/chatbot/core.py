@@ -397,9 +397,13 @@ def clean_reply(reply: str) -> str:
         after = re.sub(r'（[^）]*）', '', text[first.end():])
         text = before + kept + after
     # 省略号纪律：归一连续省略号；剥掉开头省略号（"……那你说说"→"那你说说"，纯"……"无语保留）；
+    # 开头"词+省略号"犹豫（"早……灰泽满刚醒"）→ 省略号换逗号（"早，灰泽满刚醒"），保留语气词；
     # 整条至多保留前 2 个
     text = re.sub(r'\.{3,}|…+', '……', text)
     text = re.sub(r'^……(?=\S)', '', text)
+    # 开头"1个中文字+省略号"犹豫（"早……灰泽满刚醒"）→ 省略号换逗号（"早，灰泽满刚醒"）。
+    # 只转"后面还有≥5字实质内容"的，保住"啊……这……"（无语）和"好冷……真的"（内容+停顿）
+    text = re.sub(r'^([一-鿿])……(?=.{5,})', r'\1，', text)
     if not text:
         text = '……'
     ell_pos = [m.start() for m in re.finditer('……', text)]
