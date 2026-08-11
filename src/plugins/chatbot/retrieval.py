@@ -15,6 +15,7 @@ from .constants import (
     VOICE_SAMPLE_VECTOR_FILE, PHRASE_VECTOR_FILE, PREFERENCE_VECTOR_FILE, CORE_STORY_VECTOR_FILE,
     RAG_THRESHOLD, CORPUS_TOP_N,
     VOICE_SAMPLE_THRESHOLD, VOICE_SAMPLE_TOP_N, VOICE_SAMPLE_KEEPALIVE, VOICE_SAMPLE_MIN_K,
+    VOICE_SAMPLE_KEEPALIVE_MIN_SIM,
     PHRASE_THRESHOLD, PHRASE_TOP_N, PHRASE_PHASES_MAX,
     BEHAVIOR_MATCH_THRESHOLD, BEHAVIOR_TOP_N,
     PREFERENCE_THRESHOLD, PREFERENCE_TOP_N,
@@ -103,12 +104,21 @@ def load_voice_sample_vectors() -> list:
 
 
 def _ensure_min_samples(items: list, samples: list, query_vector) -> list:
-    """保底：阈值过滤后为空时，注入全体最高分 1 条，保住声音风格不断档。"""
+    """保底：阈值过滤后为空时，注入全体最高分 1 条，保住声音风格不断档。
+
+    但保底也要设门槛（VOICE_SAMPLE_KEEPALIVE_MIN_SIM）：如果最高分样本
+    相关度太低（日常短句 vs 直播时间样本 ≈ 0.55），宁可风格断档也不注入
+    无关样本——否则会像"9点是你那边"那样，把直播时间样本硬塞给日常话题。
+    """
     if items or not VOICE_SAMPLE_KEEPALIVE or not samples:
         return items
     entries = [{"vector": s["vector"], "id": s["id"],
                 "text": "", "extra": {"user": s["user"], "reply": s["reply"], "type": s.get("type", "")}}
                for s in samples]
+    # 找全体最高分，若低于保底门槛则不注入（宁缺毋滥）
+    best = max((cosine_similarity(query_vector, s["vector"]) for s in entries), default=-1.0)
+    if best < VOICE_SAMPLE_KEEPALIVE_MIN_SIM:
+        return []
     return _score_candidates(query_vector, entries, -1.0, VOICE_SAMPLE_MIN_K,
                              "voice_sample", lambda e: e["id"], lambda e: e["text"],
                              lambda e: e["extra"])

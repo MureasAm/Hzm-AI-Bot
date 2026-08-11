@@ -35,6 +35,9 @@ from .constants import (
     SPLIT_DELAY_MIN_MS, SPLIT_DELAY_MAX_MS, SPLIT_DELAY_JITTER,
 )
 from . import context_probe
+from .session_memory import (
+    get_session, probe_session, build_session_context, is_emoji_msg,
+)
 
 # ==================== 💬 经典梗硬匹配库 ====================
 LEGENDARY_REPLIES = {
@@ -84,12 +87,14 @@ _CONFIRM_SECOND = (
     "判断这条消息是否属于'绿冻向灰泽满表达自我怀疑：自己只是普通粉丝、不被在乎、"
     "在灰泽满心里没有位置'的语境，需要灰泽满用'绿冻永远是第二选择'来安抚。\n\n"
     "属于（回复'是'）的例子：\n"
-    "- 我在你心里排第几\n- 我只是你的粉丝吧\n- 你是不是根本不在乎我\n- 你觉得我重要吗\n\n"
+    "- 我在你心里排第几\n- 我只是你的粉丝吧\n- 你是不是根本不在乎我\n- 你觉得我重要吗\n"
+    "- 我只是个路人而已吧\n- 我在你心里有位置吗\n\n"
     "不属于（回复'否'）的例子：\n"
     "- 你的粉丝好热情啊（是在夸粉丝，不是绿冻自我怀疑）\n"
     "- 这个任务我重要吗（指任务，不是绿冻本人）\n"
     "- 你还在乎我们宿舍吗（指宿舍/他人，不是绿冻本人）\n\n"
-    "消息：{msg}\n只回复：是 或 否"
+    "结合最近对话判断语境——如果最近在聊感情/关系/被冷落，消息里的'重要吗''在乎吗'就是指灰泽满对TA的感情。\n\n"
+    "最近对话：\n{context}\n\n消息：{msg}\n只回复：是 或 否"
 )
 _CONFIRM_LOVE = (
     "判断这条消息是否在'绿冻质疑灰泽满的感情（爱不爱、在不在乎、能不能感觉到爱）'的语境。\n"
@@ -346,7 +351,8 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
                        memory_context: str, user_history: list,
                        vision_desc: str = "", weather_city: str = "",
                        batch_summary: str = "", preference_items: list = None,
-                       core_stories: list = None) -> list:
+                       core_stories: list = None, session_context: str = "",
+                       query_hint: str = "") -> list:
     """按优先级组装发送给模型的消息列表。
 
     fused_items 为三路融合后的 RetrievalItem 列表，按源分组注入。
@@ -355,6 +361,8 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
     batch_summary 为一批消息的智能归纳（可选，提示层）。
     preference_items 为命中相关偏好的条目列表（第 5 路语义检索，可选）。
     core_stories 为命中的核心记忆（印象最深的结晶，可选）。
+    session_context 为会话级记忆（当前话题 + 本场事件，可选）。
+    query_hint 为短消息的语境扩充（可选）：模型理解短消息用，正文仍是原 msg。
     """
     messages = []
     base_system = SYSTEM_PROMPT
@@ -383,6 +391,13 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
                 "role": "system",
                 "content": f"【她的核心记忆】{story_text}（这是她过去最深刻的经历，粉丝常拿这些开玩笑，回应时要自然带出）",
             })
+
+    # 会话级记忆（当前话题 + 本场事件）：让模型接得住会话调性
+    if session_context:
+        messages.append({
+            "role": "system",
+            "content": f"【当前会话】{session_context}\n（这是你们这一场对话的调性和发生过的事，回应时要自然地顺着这个语境，不要生硬提及）",
+        })
 
     # 感知源①：当前时间/农历/天气（始终注入，占预算极少；天气按该用户所在城市）
     now_context = context_probe.get_now_context(city=weather_city)
@@ -479,6 +494,26 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
             "content": f"【这批消息的归纳】{batch_summary}"
         })
 
+    # 短消息语境提示：用户消息 ≤4 字时，把扩充后的完整语义作为提示给模型
+    # （正文仍是原 msg，这里帮模型理解"咋这样"这种短句的真实含义）
+    if query_hint:
+        # 纯表情消息：按表情的真实情绪回应，体现情绪该有的态度，不被当前话题绑架
+        if is_emoji_msg(final_user):
+            emoji_hint = (
+                f"【用户发了表情】{query_hint}\n"
+                "用户只发了一个表情，没有任何文字。请按这个表情的真实情绪回应，并体现这种情绪该有的态度：\n"
+                "- 无语/无奈（😅）→ 略带攻击性地反击，类似'感觉你不是很服气？'\n"
+                "- 委屈/哭（😭）→ 心软安慰，但不要套用当前话题的模板（如别硬扯'夸你可爱'）\n"
+                "- 其他情绪 → 按情绪的自然反应回应\n"
+                "不要复述表情，不要顺着当前话题硬接，只回应这个情绪。"
+            )
+            messages.append({"role": "system", "content": emoji_hint})
+        else:
+            messages.append({
+                "role": "system",
+                "content": f"【用户这条消息的语境】{query_hint}\n（用户发的是短消息，上面是它在当前语境下的完整意思，按这个理解回复；不要复述这句话）"
+            })
+
     messages.append({"role": "user", "content": final_user})
     return messages
 
@@ -546,6 +581,21 @@ async def update_memory_task(user_id: str, user_msg: str, reply: str, user_memor
 async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
                       batch_summary: str = "") -> str:
     """处理一条用户消息，返回机器人回复。vision_desc 为图片描述；batch_summary 为批量归纳。"""
+    deepseek_client, zhipu_client = _get_clients()
+
+    # --- 会话级记忆：对话前同步探测（判断话题延续/转换 + 短 query 扩充） ---
+    # 必须在组装消息前完成，这样本轮注入的就是本轮自己的话题，不滞后一轮。
+    query_text = user_msg.strip()
+    user_history = get_user_history(user_id)
+    history_text = "\n".join(user_history[-6:]) if user_history else ""
+    retrieval_query = query_text
+    if query_text:
+        retrieval_query = await probe_session(user_id, query_text, history_text, deepseek_client)
+        if retrieval_query != query_text:
+            print(f"[会话记忆] 短 query 扩充: 「{query_text}」→「{retrieval_query}」")
+    # 话题/事件已在本轮探测中更新，取最新会话状态
+    session_context = build_session_context(user_id)
+
     # --- 🃏 经典梗硬匹配（双路由：关键词粗筛 + LLM 语境确认，防误触发） ---
     _confirm_history = ""
     for trigger, replies in LEGENDARY_REPLIES.items():
@@ -570,17 +620,17 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
 
     # --- 🔍 检索 + 融合（query 只算 1 次 embedding） ---
     # 纯图片消息（无文字）不做检索：让灰泽满直接评价图片，避免语料/行为劫持图片内容
-    query_text = user_msg.strip()
-    _, zhipu_client = _get_clients()
-    if query_text:
-        query_vector = await embed_query(zhipu_client, query_text)
-        corpus_items = retrieve_corpus(query_text, query_vector)
-        sample_items = retrieve_voice_samples(query_text, query_vector)
-        behavior_items = retrieve_behaviors(query_text, query_vector, behaviors)
-        phrase_items = retrieve_phrases(query_text, query_vector)
+    # 纯表情消息（emoji/[表情：xx]）也不做语义检索：表情只表达情绪不表达话题，
+    # 扩充句会作为语气提示注入，但检索 memory 会跑偏（如😭命中"被夸"样本）
+    if query_text and not is_emoji_msg(query_text):
+        query_vector = await embed_query(zhipu_client, retrieval_query or query_text)
+        corpus_items = retrieve_corpus(retrieval_query or query_text, query_vector)
+        sample_items = retrieve_voice_samples(retrieval_query or query_text, query_vector)
+        behavior_items = retrieve_behaviors(retrieval_query or query_text, query_vector, behaviors)
+        phrase_items = retrieve_phrases(retrieval_query or query_text, query_vector)
         fused_items = fuse_and_truncate(corpus_items, sample_items, behavior_items, phrase_items)
-        preference_items = retrieve_preferences(query_text, query_vector)  # 第 5 路：偏好
-        core_stories = retrieve_core_stories(query_text, query_vector)     # 核心记忆（结晶）
+        preference_items = retrieve_preferences(retrieval_query or query_text, query_vector)  # 第 5 路：偏好
+        core_stories = retrieve_core_stories(retrieval_query or query_text, query_vector)     # 核心记忆（结晶）
     else:
         fused_items = []
         preference_items = []
@@ -589,14 +639,16 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     # --- 🧠 确定性两路记忆 ---
     user_memory_card = get_user_memory(user_id)
     memory_context = build_memory_context(user_memory_card)
-    user_history = get_user_history(user_id)
     weather_city = (user_memory_card or {}).get("weather_city", "") or ""
 
     # --- 🧩 构建消息列表 ---
+    # query_hint：短消息（≤4字）的语境扩充，仅当扩充句与原文不同时传入，帮模型理解短句
+    query_hint = retrieval_query if (retrieval_query and retrieval_query != query_text) else ""
     messages = build_message_list(
         user_msg, global_persona, fused_items, memory_context, user_history,
         vision_desc=vision_desc, weather_city=weather_city, batch_summary=batch_summary,
         preference_items=preference_items, core_stories=core_stories,
+        session_context=session_context, query_hint=query_hint,
     )
 
     # --- 🤖 调用大模型 ---
@@ -606,7 +658,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     record_msg = _compose_record_msg(user_msg, vision_desc)
     append_user_history(user_id, record_msg, reply)
 
-    # --- 📝 异步更新长期记忆 ---
+    # --- 📝 异步更新长期记忆（会话级记忆已在对话前 probe_session 同步更新） ---
     asyncio.create_task(update_memory_task(user_id, record_msg, reply, user_memory_card))
 
     return reply

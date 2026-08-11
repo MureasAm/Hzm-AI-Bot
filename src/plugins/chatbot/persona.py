@@ -117,10 +117,16 @@ async def match_behaviors_semantic(user_query: str, query_vector, behaviors: lis
 
 
 def _format_behavior_rule(rule: dict) -> str:
-    """将一条行为规则格式化为注入文本。供 match_behaviors_semantic 与检索层共用。"""
+    """将一条行为规则格式化为注入文本。供 match_behaviors_semantic 与检索层共用。
+
+    新版格式含 samples（真人原话示范，few-shot）：
+    - response 给行为指令
+    - samples 给"她真实怎么说话"的示范（必须来自素材原文，不得改写）
+    """
     name = rule.get("name", "")
     desc = rule.get("response", "")
     trigger_desc = rule.get("trigger", "")
+    samples = rule.get("samples", [])
     parts = []
     if name:
         parts.append(f"【{name}】")
@@ -128,4 +134,14 @@ def _format_behavior_rule(rule: dict) -> str:
         parts.append(f"触发情境：{trigger_desc}")
     if desc:
         parts.append(f"回应模式：{desc}")
+    if samples:
+        # 真人原话示范：模型照这个腔调学，不自己发明
+        sample_lines = []
+        for s in samples:
+            u = s.get("user", "")
+            r = s.get("reply", "")
+            if u and r:
+                sample_lines.append(f"  粉丝说：{u} → 灰泽满：{r}")
+        if sample_lines:
+            parts.append("她这么说过（照着学腔调，不自己发明）：\n" + "\n".join(sample_lines))
     return "\n".join(parts)

@@ -161,3 +161,5 @@ assets/audio/
 
 # B站联动去重状态（运行时生成，不入库）
 data/bili_state.json
+# 会话级记忆（运行时生成，不入库）
+data/session_memory.json
