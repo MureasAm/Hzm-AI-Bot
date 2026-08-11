@@ -78,7 +78,8 @@
 - **素材复用规则**：behaviors samples 尽量不复用 voice_samples 已有样本，避免同话题双注入（H1 同期祝福因已在 voice 而剔除）
 - **B站动态配图下载修复**：根因是 bot 环境有失效代理 `HTTP_PROXY=127.0.0.1:50454`，httpx 默认 trust_env=True 走代理 → 图链下载 ConnectError。修法：`vision._read_image_bytes` 加 `trust_env=False` 强制直连 + Referer 改 B站（只影响图片下载，不影响 DeepSeek/智谱 API）
 - **开播通知带直播封面**：`_fetch_live_status` 增加 `cover`（取 `cover_from_user` 直播封面，空回退 `keyframe` 关键帧）；开播时下载封面附在文字后推送（下载失败不阻塞仍发文字）
-- 测试 141 个全过
+- **重启不推停机期间事件**：`_primed` 从持久化 state 改为进程内实例标志——每次 bot 启动重新对齐当前直播/动态基线，避免重启后把停机期间的开播/动态当新事件推送（曾踩坑）
+- 测试 142 个全过
 
 ---
 
