@@ -144,8 +144,8 @@ class TestCleanReply:
         assert core.clean_reply("（咽口水）") == "（咽口水）"
 
     def test_ellipsis_ascii_normalized(self):
-        # 英文三点 ... 归一成中文省略号 ……
-        assert core.clean_reply("好冷……真的...手都僵了") == "好冷……真的……手都僵了"
+        # 英文三点 ... 归一成中文省略号；开头"好冷……"短语+省略号犹豫 → 逗号
+        assert core.clean_reply("好冷……真的...手都僵了") == "好冷，真的……手都僵了"
 
     def test_ellipsis_preserves_double(self):
         # "啊……这……" 无语表达，2 次省略号在额度内，原样保留
