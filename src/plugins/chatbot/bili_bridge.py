@@ -180,6 +180,8 @@ class BiliMonitor:
             "live_status": int(info.get("live_status", 0)),
             "title": str(info.get("title", "")),
             "room_id": int(info.get("room_id", 0) or 0),
+            # 直播封面：优先主播设置封面(cover_from_user)，空则回退关键帧(keyframe)
+            "cover": str(info.get("cover_from_user", "") or info.get("keyframe", "") or ""),
         }
 
     async def _check_live(self, bot) -> None:
@@ -194,7 +196,15 @@ class BiliMonitor:
         if is_live and not was_live:
             content = _live_open_message(info["title"], info.get("room_id", 0))
             print(f"[B站] 检测到开播 -> {content}")
-            await self._push(bot, content)
+            # 开播带直播封面（下载失败不阻塞，仍发文字）
+            image_path = None
+            if info.get("cover"):
+                try:
+                    image_path = await _download_image(info["cover"])
+                    print(f"[B站] 直播封面已下载: {image_path.name}")
+                except Exception as e:
+                    print(f"⚠️ 直播封面下载失败（忽略，仍发文字）: {e}")
+            await self._push(bot, content, image_path=image_path)
         self.state["last_live_status"] = is_live
         _save_state(self.state)
 

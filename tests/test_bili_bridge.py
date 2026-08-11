@@ -33,7 +33,7 @@ class TestLiveTransition:
         m = _make_monitor(uid="1298779265", state={"last_live_status": False})
         pushed = []
 
-        async def fake_push(bot, content):
+        async def fake_push(bot, content, image_path=None):
             pushed.append(content)
 
         monkeypatch.setattr(m, "_push", fake_push)
@@ -53,11 +53,62 @@ class TestLiveTransition:
         await m._check_live(bot)
         assert len(pushed) == 1
 
+    async def test_offline_to_live_with_cover_downloads(self, monkeypatch):
+        """开播且带封面时，下载封面并传给 _push（失败不阻塞）。"""
+        m = _make_monitor(uid="1298779265", state={"last_live_status": False})
+        pushed = []
+        download_called = []
+
+        async def fake_push(bot, content, image_path=None):
+            pushed.append((content, image_path))
+
+        async def fake_download(url):
+            download_called.append(url)
+            from pathlib import Path
+            return Path("fake_cover.jpg")
+
+        monkeypatch.setattr(m, "_push", fake_push)
+        monkeypatch.setattr(bb, "_download_image", fake_download)
+        monkeypatch.setattr(bb, "_save_state", lambda s: None)
+
+        async def _live():
+            return {"live_status": 1, "title": "测试直播", "cover": "https://x.com/c.jpg"}
+
+        monkeypatch.setattr(m, "_fetch_live_status", _live)
+
+        await m._check_live(FakeBot())
+        assert download_called == ["https://x.com/c.jpg"]  # 封面被下载
+        assert pushed and pushed[0][1] is not None  # image_path 传给了 _push
+
+    async def test_offline_to_live_cover_download_failure_ok(self, monkeypatch):
+        """封面下载失败不阻塞，仍发文字推送。"""
+        m = _make_monitor(uid="1298779265", state={"last_live_status": False})
+        pushed = []
+
+        async def fake_push(bot, content, image_path=None):
+            pushed.append((content, image_path))
+
+        async def fake_download(url):
+            raise RuntimeError("网络错误")
+
+        monkeypatch.setattr(m, "_push", fake_push)
+        monkeypatch.setattr(bb, "_download_image", fake_download)
+        monkeypatch.setattr(bb, "_save_state", lambda s: None)
+
+        async def _live():
+            return {"live_status": 1, "title": "测试直播", "cover": "https://x.com/c.jpg"}
+
+        monkeypatch.setattr(m, "_fetch_live_status", _live)
+
+        await m._check_live(FakeBot())
+        assert len(pushed) == 1
+        assert pushed[0][1] is None  # 下载失败 → image_path=None，仍推文字
+
     async def test_already_live_no_push(self, monkeypatch):
         m = _make_monitor(uid="1", state={"last_live_status": True})
         pushed = []
 
-        async def fake_push(bot, content):
+        async def fake_push(bot, content, image_path=None):
             pushed.append(content)
 
         monkeypatch.setattr(m, "_push", fake_push)
@@ -74,7 +125,7 @@ class TestLiveTransition:
         m = _make_monitor(uid="1", state={"last_live_status": False})
         pushed = []
 
-        async def fake_push(bot, content):
+        async def fake_push(bot, content, image_path=None):
             pushed.append(content)
 
         monkeypatch.setattr(m, "_push", fake_push)
@@ -170,7 +221,7 @@ class TestPrime:
         m = _make_monitor(uid="1", sessdata="sess", state={})
         pushed = []
 
-        async def fake_push(bot, content):
+        async def fake_push(bot, content, image_path=None):
             pushed.append(content)
 
         async def _live():
