@@ -10,41 +10,44 @@ class TestSplitReply:
     def test_single_sentence_not_split(self):
         assert core.split_reply("今天天气真不错啊") == ["今天天气真不错啊"]
 
-    def test_multiple_sentences_split_and_strip_period(self):
-        # 拆分后去掉句号（聊天不打句号），保留？！…
-        assert core.split_reply("今天好冷。你那边呢？") == ["今天好冷", "你那边呢？"]
+    def test_short_clauses_merge_to_one(self):
+        # 短句+短句合并成一条自然消息，不再拆成碎条（"哦？"不该单独成条）
+        assert core.split_reply("今天好冷。你那边呢？") == ["今天好冷。你那边呢？"]
 
     def test_ellipsis_short_leadin_not_split(self):
         # 省略号前文太短（"唱拉了……"是犹豫前缀）不切，避免把"灰泽满……"单独发一条
         assert core.split_reply("唱拉了……灰泽满先关上门悄悄听会儿。") == \
             ["唱拉了……灰泽满先关上门悄悄听会儿"]
 
-    def test_trailing_text_appended(self):
-        assert core.split_reply("今天好冷。嗯", min_len=0) == ["今天好冷", "嗯"]
+    def test_trailing_short_text_merged(self):
+        # 结尾短段（嗯）并入前段，不单独成条
+        assert core.split_reply("今天好冷。嗯", min_len=0) == ["今天好冷。嗯"]
 
-    def test_max_parts_cap(self):
-        r = "一。二。三。四。五。六。"
-        assert len(core.split_reply(r)) <= core.SPLIT_MAX_PARTS
-        # 句号已被去掉；超限分段内部用换行连接（防 run-on），内容不丢
-        assert "".join(core.split_reply(r)).replace("\n", "") == r.replace("。", "")
+    def test_micro_fragments_merge_to_natural(self):
+        # 核心：短惊讶碎片（哦？/睡醒了？/那倒是稀奇……）合并成一条自然消息，不再戏剧节拍
+        assert core.split_reply(
+            "哦？睡醒了？那倒是稀奇……灰泽满这个点刚准备睡，你却醒了", min_len=0
+        ) == ["哦？睡醒了？那倒是稀奇……", "灰泽满这个点刚准备睡，你却醒了"]
 
     def test_min_len_respected(self):
         # 低于 min_len 不拆；末尾句号仍会被去掉
         assert core.split_reply("好。", min_len=10) == ["好"]
 
-    def test_comma_limit_splits_at_last_comma(self):
-        # 每段至多 1 个逗号，超了从最后一个逗号拆开
-        assert core.split_reply("喜欢这个，但是纠结，最后买了", min_len=0) == \
-            ["喜欢这个，但是纠结", "最后买了"]
+    def test_comma_split_kept_when_long(self):
+        # 长句的逗号拆分保留（只有短碎片才并回）
+        assert core.split_reply(
+            "灰泽满今天特别想出去玩，但是作业还没写完，明天还得早起去上第一节课", min_len=0
+        ) == ["灰泽满今天特别想出去玩，但是作业还没写完", "明天还得早起去上第一节课"]
 
     def test_ellipsis_hesitation_preserved(self):
         # 省略号表"无语/语气"（后面没新内容）不切
         assert core.split_reply("啊……这……", min_len=0) == ["啊……这……"]
 
-    def test_ellipsis_boundary_splits(self):
-        # 省略号前后都有内容（前≥4字、后≥5字）才是停顿边界
-        assert core.split_reply("唱了一晚上……灰泽满先关上门悄悄听会儿", min_len=0) == \
-            ["唱了一晚上……", "灰泽满先关上门悄悄听会儿"]
+    def test_ellipsis_boundary_split_kept_when_both_long(self):
+        # 省略号前后都有足够内容（都≥12字）时仍切分
+        assert core.split_reply(
+            "灰泽满今天嗓子特别不舒服……明天就想早点下播休息一下", min_len=0
+        ) == ["灰泽满今天嗓子特别不舒服……", "明天就想早点下播休息一下"]
 
 
 class TestEchoReply:

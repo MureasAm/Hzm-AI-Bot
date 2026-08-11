@@ -30,7 +30,7 @@ from .retrieval import (
     retrieve_preferences, retrieve_core_stories, fuse_and_truncate,
 )
 from .constants import (
-    PHRASE_PHASES_MAX, SPLIT_MIN_LEN, SPLIT_MAX_PARTS,
+    PHRASE_PHASES_MAX, SPLIT_MIN_LEN, SPLIT_MAX_PARTS, SPLIT_MERGE_MIN_CHARS,
     SPLIT_DELAY_BASE_MS, SPLIT_DELAY_PER_CHAR_MS,
     SPLIT_DELAY_MIN_MS, SPLIT_DELAY_MAX_MS, SPLIT_DELAY_JITTER,
 )
@@ -300,6 +300,22 @@ def split_reply(reply: str, min_len: int = SPLIT_MIN_LEN,
         else:
             merged.append(p)
     parts = merged
+
+    # 短段并入下一段（业界：merge small chunks with neighbors，防"哦？""那倒是稀奇……"
+    # 这种微消息单独成条——按标点机械切碎=表演感/戏剧节拍，短惊讶应是一条自然消息）。
+    # 最后一段过短则并入前一段。
+    merged_short = []
+    i = 0
+    while i < len(parts):
+        if i + 1 < len(parts) and len(parts[i]) < SPLIT_MERGE_MIN_CHARS:
+            parts[i + 1] = parts[i] + parts[i + 1]
+        else:
+            merged_short.append(parts[i])
+        i += 1
+    parts = merged_short
+    if len(parts) > 1 and len(parts[-1]) < SPLIT_MERGE_MIN_CHARS:
+        parts[-2] += parts[-1]
+        parts.pop()
 
     if len(parts) <= 1:
         return [text]

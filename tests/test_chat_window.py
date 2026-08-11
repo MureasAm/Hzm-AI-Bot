@@ -22,7 +22,7 @@ class TestFlush:
             captured["text"] = text
             captured["vision"] = vision_desc
             captured["summary"] = batch_summary
-            return "今天好冷。你那边呢？"
+            return "灰泽满今天嗓子特别不舒服……明天就想早点下播休息一下"
 
         async def fake_summarize(msgs):
             return "用户在问候并问天气"
@@ -44,7 +44,7 @@ class TestFlush:
         assert captured["text"] == "在吗\n天气咋样"
         assert captured["vision"] == ""
         assert captured["summary"] == "用户在问候并问天气"
-        assert sent == ["今天好冷", "你那边呢？"]  # 拆分 + 去句号
+        assert sent == ["灰泽满今天嗓子特别不舒服……", "明天就想早点下播休息一下"]  # 拆分 + 去句号
 
     async def test_flush_reads_image_at_reply_time(self, monkeypatch):
         win = cw._UserWindow("u2")
