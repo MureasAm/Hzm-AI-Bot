@@ -1,7 +1,7 @@
 """memory_manager 记忆卡合并逻辑的单元测试（纯函数，不触 IO）。"""
 import pytest
 
-from memory_manager import merge_memory_card, update_user_memory
+from memory_manager import merge_memory_card, update_user_memory, build_memory_context
 
 
 class TestMergeMemoryCard:
@@ -26,6 +26,14 @@ class TestMergeMemoryCard:
         imps = card["impressions"]
         assert len(imps) == 1
         assert imps[0]["confidence"] == pytest.approx(0.9)
+
+    def test_user_name_stored_and_overwritten(self):
+        card = merge_memory_card({}, {"new_name": "小明"})
+        assert card["user_name"] == "小明"
+        card = merge_memory_card(card, {"new_name": "阿伟"})
+        assert card["user_name"] == "阿伟"  # 改名覆盖
+        ctx = build_memory_context(card)
+        assert "阿伟" in ctx  # 注入时带上名字
 
     def test_user_fact_dedup(self):
         card = merge_memory_card({}, {"new_user_fact": "在考研"})

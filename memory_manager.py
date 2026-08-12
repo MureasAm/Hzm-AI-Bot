@@ -110,6 +110,12 @@ def merge_memory_card(card: dict, updates: dict) -> dict:
         if city:
             card["weather_city"] = city
 
+    # 用户名字/昵称（怎么称呼TA；用户改名则覆盖）
+    if updates.get("new_name"):
+        name = str(updates["new_name"]).strip()
+        if name:
+            card["user_name"] = name
+
     # 合并承诺/约定（跨会话记住她答应过用户的事）
     if updates.get("new_promise"):
         promises = card.setdefault("promises", [])
@@ -146,6 +152,11 @@ def build_memory_context(card: dict) -> str:
         return ""
 
     parts = []
+
+    # 用户名字/昵称
+    name = card.get("user_name")
+    if name:
+        parts.append(f"这个绿冻叫{name}，聊天时用TA的名字称呼TA，别老叫TA'这个绿冻'。")
 
     # 用户所在城市（天气感知用）
     city = card.get("weather_city")
@@ -232,6 +243,9 @@ def _format_profile_summary(card: dict) -> str:
     city = card.get("weather_city", "")
     if city:
         parts.append(f"城市：{city}")
+    name = card.get("user_name", "")
+    if name:
+        parts.append(f"名字：{name}")
     moments = card.get("significant_moments", [])
     if moments:
         mstrs = [m["summary"] if isinstance(m, dict) else str(m) for m in moments[-2:]]
@@ -286,8 +300,17 @@ MEMORY_EXTRACT_PROMPT = """
 - 从用户的话中提取用户**所在城市/地区**（如"我在广州""住深圳""人在悉尼"→"广州""深圳""悉尼"）。
 - 只记城市名或区划名，不记街道/小区。未提到城市则 null。
 
+**关于用户名字（new_name）**：
+- 从用户的话中提取用户希望灰泽满怎么称呼 TA（如"我叫小明""你可以叫我阿伟"→"小明""阿伟"）。
+- **只在用户明确告知名字/昵称时提取**；QQ 昵称不算（那不是聊天里说的）；随口称呼（"哥们""姐妹"）不算。
+- 未告知则 null。
+
+**提取示例补充**：
+- "我叫小明，你以后叫我小明就行" → new_name="小明"
+
 返回 JSON（不要多余内容）：
 {{
+  "new_name": "用户希望被称呼的名字/昵称，未告知则null",
   "new_impression": "对用户的长期印象标签，无则null",
   "new_user_fact": "用户透露的长期身份或爱好，无则null",
   "new_self_fact": "你向用户新透露的关于自己的真实事实，无则null",
