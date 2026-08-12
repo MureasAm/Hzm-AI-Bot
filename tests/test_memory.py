@@ -35,6 +35,15 @@ class TestMergeMemoryCard:
         ctx = build_memory_context(card)
         assert "阿伟" in ctx  # 注入时带上名字
 
+    def test_supersede_removes_old_facts(self):
+        card = merge_memory_card({}, {"new_impression": "上班族", "new_user_fact": "在XX公司做设计"})
+        assert "上班族" in build_memory_context(card)
+        card = merge_memory_card(card, {"new_impression": "自由职业", "supersede": ["上班族", "在XX公司做设计"]})
+        ctx = build_memory_context(card)
+        assert "自由职业" in ctx
+        assert "上班族" not in ctx  # 旧标签被作废
+        assert "在XX公司做设计" not in ctx  # 旧事实被作废
+
     def test_user_fact_dedup(self):
         card = merge_memory_card({}, {"new_user_fact": "在考研"})
         card = merge_memory_card(card, {"new_user_fact": "在考研"})

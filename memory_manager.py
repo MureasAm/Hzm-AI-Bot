@@ -81,6 +81,21 @@ def merge_memory_card(card: dict, updates: dict) -> dict:
         if not any(f.get("fact") == new_fact_obj.get("fact") for f in user_facts if isinstance(f, dict)):
             user_facts.append(new_fact_obj)
 
+    # supersede：用户明确说某已知信息已变，作废对应的旧印象/事实（防止旧标签永远残留）
+    if updates.get("supersede"):
+        gone = [str(x).strip() for x in updates["supersede"] if str(x).strip()]
+        if gone:
+            if card.get("impressions"):
+                card["impressions"] = [
+                    imp for imp in card["impressions"]
+                    if (imp.get("tag") if isinstance(imp, dict) else str(imp)) not in gone
+                ]
+            if card.get("user_facts"):
+                card["user_facts"] = [
+                    f for f in card["user_facts"]
+                    if (f.get("fact") if isinstance(f, dict) else str(f)) not in gone
+                ]
+
     # 合并自我披露
     # 注意：V1 起不再从 AI 回复提取 self_fact（防止 AI 自嗨污染真实人格）。
     # 只保留显式传入的 self_fact（例如从真人素材蒸馏而来），提取流程在 core.py 停用。
@@ -268,15 +283,18 @@ MEMORY_EXTRACT_PROMPT = """
 【提取要求】
 - **不要重复提取**：如果某条信息已在【当前已知画像】里（已经知道了），不要重复提取，对应字段返回 null。
 - 只提取本轮**新增**的信息。如果本轮没有值得记录的新内容，全部字段返回 null。
-- 判断标准：如果这条信息在明天、下周的对话中还能成立，才值得记录。
+- **只记用户明确陈述的长期事实**：用户没说出口的、靠推断的、一次性的，都别记。"刚下班"不能推断成"上班族"——除非用户明确说"我是上班族"。
+- **分层**：不可变身份（名字/生日/过敏）一次就可记；可变偏好/状态（职业/爱好/居住）要**明确陈述或重复提到**才记；一次性心情/状态（"今天好累""刚下班"）不记。
+- **保留限定词**：提取时别丢细节——"在XX公司做设计"不是"做设计的"；"想养猫但还没养"不是"养了只猫"。
 - **绝对不要记录为了附和用户而临时编造的状态**：用户说"我是上班族"，你跟着说"我也有作业压力"，这种附和性内容不要记录。
 - **冲突检测**：新信息与已知画像矛盾时（如已知城市广州、用户又说在深圳），以新信息为准更新。
+- **supersede（作废旧信息）**：如果用户明确说某个已知信息已经变了（如"我现在不上班了""我不在广州了"），在 supersede 字段列出要作废的旧印象/事实。
 - 如果不确定，宁可不提取。
 
 **印象标签 vs 用户事实的区别**：
 - new_impression = 抽象的性格/行为/身份标签（简短）：如"夜猫子""上班族""喜欢催播""嘴硬心软"
 - new_user_fact = 具体的长期信息（客观可描述）：如"在准备考研""养了只猫""做设计的"
-- 即使用户没说"我是上班族"，说"刚下班"也应抽象为"上班族"。
+- 只有用户明确说的才算数；一次"刚下班"不抽象成"上班族"。
 
 **提取示例**：
 该提取：
@@ -297,7 +315,8 @@ MEMORY_EXTRACT_PROMPT = """
 - 判断标准：对用户明确承诺的、值得跨会话记住的事才记录；随口客套（"以后再说吧""有机会一起"）不记。
 
 **关于用户城市（new_city）**：
-- 从用户的话中提取用户**所在城市/地区**（如"我在广州""住深圳""人在悉尼"→"广州""深圳""悉尼"）。
+- 从用户的话中提取用户**常住**城市/地区（如"我在广州""住深圳""人在悉尼"→"广州""深圳""悉尼"）。
+- **出差/旅游/暂住不算常住**："我去上海出差""周末去北京玩"不覆盖常住城市，new_city 返回 null。
 - 只记城市名或区划名，不记街道/小区。未提到城市则 null。
 
 **关于用户名字（new_name）**：
@@ -316,6 +335,7 @@ MEMORY_EXTRACT_PROMPT = """
   "new_self_fact": "你向用户新透露的关于自己的真实事实，无则null",
   "new_promise": "你本轮对用户做出的承诺/约定，无则null",
   "new_moment": "如果本轮对话有特殊意义，写简短摘要，无则null",
-  "new_city": "用户所在城市/地区名，未提及则null"
+  "new_city": "用户常住城市/地区名，出差旅游不算，未提及则null",
+  "supersede": "要作废的旧印象/事实列表（用户明确说某已知信息已变时填），没有则[]"
 }}
 """
