@@ -483,7 +483,7 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
         if story_text:
             messages.append({
                 "role": "system",
-                "content": f"【她的核心记忆】{story_text}（这是她过去最深刻的经历，粉丝常拿这些开玩笑，回应时要自然带出）",
+                "content": f"【她的核心记忆】{story_text}（这是她过去最深刻的经历，粉丝常拿这些开玩笑。**回应时自然带出，别整段复述**：被问你的书/事迹时，大方承认、可提议念给TA听或说个片段概括，别一口气把原文/全文念出来——除非对方明确说'念一下'）",
             })
 
     # 会话级记忆（当前话题 + 本场事件）：让模型接得住会话调性
