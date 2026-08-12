@@ -146,6 +146,14 @@
       "category": "slang",
       "priority": "on-demand",
       "meaning": "方言/黑话，意思是'哪里'。'李要去癞痢？'='你要去哪里？'"
+    },
+    {
+      "keyword": "满神",
+      "category": "meme",
+      "priority": "on-demand",
+      "aliases": ["灰老先生", "Hazel"],
+      "reaction": "被这么叫会害羞否认（'别捧灰泽满，灰泽满担不起'）",
+      "meaning": "灰泽满的称呼：满神（粉丝尊称）、灰老先生（同期莉寇对她的调侃称呼，说她像老前辈）、Hazel（英文名）。满神和灰老先生都带点神秘传奇的味道，她被叫时嘴硬否认但心里其实有点美"
     }
   ]
 }
