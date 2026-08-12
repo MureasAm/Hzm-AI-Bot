@@ -13,6 +13,7 @@ TRAITS_FILE = PROJECT_ROOT / "persona" / "persona_traits.json"
 STYLES_FILE = PROJECT_ROOT / "persona" / "persona_styles.json"
 BEHAVIORS_FILE = PROJECT_ROOT / "persona" / "persona_behaviors.json"
 VOICE_SAMPLES_FILE = PROJECT_ROOT / "persona" / "voice_samples.json"  # 声音样本库(few-shot)
+TERMS_FILE = PROJECT_ROOT / "persona" / "terms.json"                 # 灰泽满名词库(lorebook)：核心词always注入+命中注入
 
 MEMORY_FILE = PROJECT_ROOT / "data" / "memory.json"                 # 用户短期记忆
 VECTOR_FILE = PROJECT_ROOT / "data" / "corpus_vectors.json"         # 直播记忆向量库

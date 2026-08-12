@@ -12,7 +12,7 @@ from nonebot import get_driver
 from openai import AsyncOpenAI
 
 from .constants import (
-    SYSTEM_PROMPT_FILE, DEEPSEEK_BASE_URL, ZHIPU_BASE_URL,
+    SYSTEM_PROMPT_FILE, DEEPSEEK_BASE_URL, ZHIPU_BASE_URL, TERMS_FILE,
     DEFAULT_MODEL, THINKING_DISABLED,
     CHAT_TEMPERATURE, CHAT_FREQUENCY_PENALTY, CHAT_MAX_TOKENS,
     MEMORY_EXTRACT_TEMPERATURE, MEMORY_EXTRACT_MAX_TOKENS,
@@ -441,6 +441,49 @@ def _split_fused(fused_items):
     return behaviors, corpus, samples, phrases
 
 
+# ==================== 名词库（terms/lorebook） ====================
+
+_terms_cache = None
+
+
+def load_terms() -> list:
+    """加载 persona/terms.json 名词库（模块级缓存）。"""
+    global _terms_cache
+    if _terms_cache is not None:
+        return _terms_cache
+    if not TERMS_FILE.exists():
+        _terms_cache = []
+        return _terms_cache
+    try:
+        data = json.loads(TERMS_FILE.read_text(encoding="utf-8"))
+        _terms_cache = data.get("terms", []) if isinstance(data, dict) else []
+    except (json.JSONDecodeError, OSError):
+        _terms_cache = []
+    return _terms_cache
+
+
+def build_terms_note(user_msg: str) -> str:
+    """根据用户消息命中名词库：核心词(always)每次注入 + 命中词(关键词在消息里)注入。
+
+    返回注入文本【灰泽满的世界】。客观打底 + 带灰泽满态度，让模型既懂词义又有正确的相处态度。
+    """
+    terms = load_terms()
+    if not terms:
+        return ""
+    msg = user_msg or ""
+    notes = []
+    for t in terms:
+        kw = t.get("keyword", "")
+        if not kw:
+            continue
+        if t.get("priority") == "always" or kw in msg:
+            parts = [t.get("meaning", "")]
+            if t.get("reaction"):
+                parts.append(f"被提到时：{t['reaction']}")
+            notes.append(f"{kw}：{'；'.join(parts)}")
+    return "；".join(notes) if notes else ""
+
+
 def build_message_list(user_msg: str, global_persona: str, fused_items: list,
                        memory_context: str, user_history: list,
                        vision_desc: str = "", weather_city: str = "",
@@ -485,6 +528,14 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
                 "role": "system",
                 "content": f"【她的核心记忆】{story_text}（这是她过去最深刻的经历，粉丝常拿这些开玩笑。**回应时自然带出，别整段复述**：被问你的书/事迹时，大方承认、可提议念给TA听或说个片段概括，别一口气把原文/全文念出来——除非对方明确说'念一下'）",
             })
+
+    # 名词库（terms/lorebook）：核心词 always 注入 + 命中用户消息的词注入——让模型懂"绿冻/枪神8/slg"这类词并带对的态度
+    terms_note = build_terms_note(user_msg)
+    if terms_note:
+        messages.append({
+            "role": "system",
+            "content": f"【灰泽满的世界】{terms_note}（这些是她世界的词，遇到时按定义理解并带着对应的态度，别当成普通的词）",
+        })
 
     # 会话级记忆（当前话题 + 本场事件）：让模型接得住会话调性
     if session_context:
