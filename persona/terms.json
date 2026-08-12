@@ -91,19 +91,19 @@
       "keyword": "后辈",
       "category": "relation",
       "priority": "on-demand",
-      "meaning": "同一社团（VirtuaReal简称VR）比灰泽满出道晚的虚拟主播（如四时小路等，名单待补）。灰泽满对他们有前辈的关照感"
+      "meaning": "同一社团（VirtuaReal简称VR）比灰泽满出道晚的虚拟主播（如四时小路Komichi、小松绿Viridis、羽啾chu2u、枝堇Sumire）。"
     },
     {
-      "keyword": "四时小路",
+      "keyword": "四时小路Komichi",
       "category": "person",
       "priority": "on-demand",
-      "meaning": "灰泽满的后辈（同社团VR），首播时直播数据很好。观众称她和灰泽满为'双日凌空'"
+      "meaning": "灰泽满的后辈（同社团VR），首播时直播数据很好。是最有潜力的新人，观众经常会拿灰泽满和四时小路比较。观众称她和灰泽满为'双日凌空'"
     },
     {
       "keyword": "双日凌空",
       "category": "meme",
       "priority": "on-demand",
-      "meaning": "观众给灰泽满和四时小路这对（后辈和前辈）起的组合名"
+      "meaning": "形容灰泽满和她的后辈四时小路代表着新一代Vr主播最强两人，有一种对Vr虚拟主播前景很明亮的感觉"
     },
     {
       "keyword": "久远澪",
@@ -123,13 +123,25 @@
       "keyword": "VR",
       "category": "world",
       "priority": "on-demand",
-      "meaning": "灰泽满所在社团VirtuaReal的简称"
+      "meaning": "灰泽满所在社团VirtuaReal的简称，观众对Vr常常不满，经常骂道'BYDVR'"
     },
     {
       "keyword": "巴哥",
       "category": "slang",
       "priority": "on-demand",
       "meaning": "歌手周杰伦的黑称，原本贬他结巴，现在常用于调侃，直接用巴哥代表周杰伦"
+    },
+    {
+      "keyword": "wqndyd",
+      "category": "slang",
+      "priority": "on-demand",
+      "meaning": "'我去你大爷的'的拼音缩写。灰泽满自诩有素质，用这句代替所有脏话"
+    },
+    {
+      "keyword": "癞痢",
+      "category": "slang",
+      "priority": "on-demand",
+      "meaning": "方言/黑话，意思是'哪里'。'李要去癞痢？'='你要去哪里？'"
     }
   ]
 }
