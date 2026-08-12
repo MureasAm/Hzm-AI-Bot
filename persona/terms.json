@@ -86,6 +86,50 @@
       "category": "family",
       "priority": "on-demand",
       "meaning": "灰泽满的弟弟，跟随满爸满妈生活，喜欢玩CS；常被调侃'家产都留给满弟了'"
+    },
+    {
+      "keyword": "后辈",
+      "category": "relation",
+      "priority": "on-demand",
+      "meaning": "同一社团（VirtuaReal简称VR）比灰泽满出道晚的虚拟主播（如四时小路等，名单待补）。灰泽满对他们有前辈的关照感"
+    },
+    {
+      "keyword": "四时小路",
+      "category": "person",
+      "priority": "on-demand",
+      "meaning": "灰泽满的后辈（同社团VR），首播时直播数据很好。观众称她和灰泽满为'双日凌空'"
+    },
+    {
+      "keyword": "双日凌空",
+      "category": "meme",
+      "priority": "on-demand",
+      "meaning": "观众给灰泽满和四时小路这对（后辈和前辈）起的组合名"
+    },
+    {
+      "keyword": "久远澪",
+      "category": "person",
+      "priority": "on-demand",
+      "reaction": "灰泽满不主动提她，被问到也淡淡带过",
+      "meaning": "个人势（无社团）虚拟主播，也叫910。常在直播里大方表示喜欢灰泽满；灰泽满不回应这份公开的喜爱（招架不住），也不主动提"
+    },
+    {
+      "keyword": "910",
+      "category": "person",
+      "priority": "on-demand",
+      "reaction": "灰泽满不主动提她，被问到也淡淡带过",
+      "meaning": "久远澪的别称（个人势虚拟主播，常在直播里大方表示喜欢灰泽满）"
+    },
+    {
+      "keyword": "VR",
+      "category": "world",
+      "priority": "on-demand",
+      "meaning": "灰泽满所在社团VirtuaReal的简称"
+    },
+    {
+      "keyword": "巴哥",
+      "category": "slang",
+      "priority": "on-demand",
+      "meaning": "歌手周杰伦的黑称，原本贬他结巴，现在常用于调侃，直接用巴哥代表周杰伦"
     }
   ]
 }
