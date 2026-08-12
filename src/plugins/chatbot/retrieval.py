@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from .constants import (
     VOICE_SAMPLE_VECTOR_FILE, PHRASE_VECTOR_FILE, PREFERENCE_VECTOR_FILE, CORE_STORY_VECTOR_FILE,
     RAG_THRESHOLD, CORPUS_TOP_N,
+    CORPUS_KEYWORD_FLOOR, CORPUS_STRONG_KEYWORD,
     VOICE_SAMPLE_THRESHOLD, VOICE_SAMPLE_TOP_N, VOICE_SAMPLE_KEEPALIVE, VOICE_SAMPLE_MIN_K,
     VOICE_SAMPLE_KEEPALIVE_MIN_SIM,
     PHRASE_THRESHOLD, PHRASE_TOP_N, PHRASE_PHASES_MAX,
@@ -65,19 +66,65 @@ def _score_candidates(query_vector, entries, threshold, top_n,
     return scored[:top_n]
 
 
+# ==================== V6 corpus 关键词门 ====================
+# 纯 cosine 对"问句 vs 陈述式"嵌入有鸿沟（相关 0.51 / 无关 0.62 无法用单一阈值分开），
+# 且 embedding 按句式聚团（"灰泽满你…"问句不论夸骂都挤一起）。加区分性关键词门：
+# 只有 query 与 statement 有实质词重叠才放行，语义阈值敢降也不乱锁。
+
+# 领域停用字：过滤区分性 bigram 时剔除的高频词（灰泽满/绿冻/直播/你我他的…）
+_GATE_STOP_CHARS = set("灰泽满绿冻直播你我他的了吗呢吧啊嗯哈是不是不什么怎么和去很在就没都")
+# 名字/高频实体：先整词剔除再算 bigram（"灰泽"残留在每句陈述里会污染重叠度）
+_GATE_STRIP_TOKENS = ("灰泽满", "灰泽满Hazel", "hzm", "绿冻", "满神", "小满", "满姐")
+
+
+def _gate_bigrams(text: str) -> set:
+    """区分性 bigram：去名字/实体 + 去领域停用字。"""
+    for tok in _GATE_STRIP_TOKENS:
+        text = text.replace(tok, "")
+    text = text.replace(" ", "")
+    out = set()
+    for i in range(len(text) - 1):
+        a, b = text[i], text[i + 1]
+        if a in _GATE_STOP_CHARS or b in _GATE_STOP_CHARS:
+            continue
+        out.add(a + b)
+    return out
+
+
+def _corpus_keyword_overlap(query: str, statement: str) -> float:
+    """query 的区分性 bigram 被 statement 覆盖的比例（0~1）。"""
+    qb = _gate_bigrams(query)
+    if not qb:
+        return 0.0
+    tb = _gate_bigrams(statement)
+    return len(qb & tb) / len(qb)
+
+
+def _corpus_gate_pass(query: str, statement: str, sim: float) -> bool:
+    """corpus 放行判定：强关键词直接过；否则语义达标 + 有区分性词重叠才过。"""
+    ov = _corpus_keyword_overlap(query, statement)
+    if ov >= CORPUS_STRONG_KEYWORD:
+        return True
+    return sim >= RAG_THRESHOLD and ov >= CORPUS_KEYWORD_FLOOR
+
+
 # ==================== 三路 retriever ====================
 
 def retrieve_corpus(user_query: str, query_vector,
                     threshold: float = RAG_THRESHOLD,
                     top_n: int = CORPUS_TOP_N) -> list:
-    """直播记忆检索。item_id 用序号，text=场景化陈述。"""
+    """直播记忆检索。item_id 用序号，text=场景化陈述。带 V6 关键词门。"""
     db = load_vector_db()
-    if not db:
+    if not db or not user_query or not query_vector:
         return []
-    entries = [{"vector": it["vector"], "id": str(i), "text": it["text"]}
-               for i, it in enumerate(db)]
-    return _score_candidates(query_vector, entries, threshold, top_n,
-                             "corpus", lambda e: e["id"], lambda e: e["text"])
+    scored = []
+    for i, it in enumerate(db):
+        sim = cosine_similarity(query_vector, it["vector"])
+        if not _corpus_gate_pass(user_query, it["text"], sim):
+            continue
+        scored.append(RetrievalItem(source="corpus", item_id=str(i), score=sim, text=it["text"]))
+    scored.sort(key=lambda x: x.score, reverse=True)
+    return scored[:top_n]
 
 
 # 声音样本向量缓存（模块级，一次性加载）
@@ -145,6 +192,9 @@ def retrieve_voice_samples(user_query: str, query_vector,
 _BEHAVIOR_KEYWORDS = {
     "被质疑时心虚辩解": ["敷衍", "又骗", "在骗", "装的", "撒谎", "骗子"],
     "失约被催时认栽滑跪": ["又迟到", "说好的", "又鸽", "鸽了", "放鸽子", "爽约", "又没播"],
+    # 被越界：领域黑话（黄桃梗/擦边/低俗）是判别性内容词，LLM 未必认识"黄桃"这类梗，
+    # 关键词兜底可靠（实测 LLM 对"造个黄桃吧"判 null，加兜底后命中）
+    "被越界时冷静推开": ["黄桃", "擦边", "低俗", "黄段子", "开黄腔", "色色", "涩涩"],
 }
 
 
@@ -183,6 +233,31 @@ def retrieve_behaviors(user_query: str, query_vector, behaviors: list,
         return []
     return [RetrievalItem(source="behavior", item_id=best.get("name", ""),
                           score=best_sim, text=_format_behavior_rule(best))]
+
+
+def select_behavior_item(user_msg: str, behavior_intent: str, behaviors: list) -> "RetrievalItem | None":
+    """L3：把行为意图（LLM 判定）转成行为注入项。
+
+    优先级：LLM 意图 > 关键词兜底（判别词：敷衍/骗/鸽/迟到…，当 LLM 拿不准时保底）。
+    返回 None 表示本轮不注入任何行为。替代旧的纯语义检索（embedding 按句式聚团，
+    把'夸奖'和'质问'这类同句式消息挤在一起会误判——见 ROADMAP/L3 说明）。
+    """
+    if not behaviors or not user_msg:
+        return None
+    # ① LLM 判定的意图（权威）
+    if behavior_intent:
+        for b in behaviors:
+            if b.get("name") == behavior_intent:
+                return RetrievalItem(source="behavior", item_id=behavior_intent, score=1.0,
+                                     text=_format_behavior_rule(b))
+    # ② 关键词兜底：LLM 拿不准但消息含判别词（"你是不是在敷衍我"这类），保底命中
+    for b in behaviors:
+        name = b.get("name", "")
+        kws = _BEHAVIOR_KEYWORDS.get(name)
+        if kws and any(k in user_msg for k in kws):
+            return RetrievalItem(source="behavior", item_id=name, score=1.0,
+                                 text=_format_behavior_rule(b))
+    return None
 
 
 # 措辞指纹向量缓存（模块级，一次性加载）

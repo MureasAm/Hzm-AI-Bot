@@ -159,6 +159,37 @@ class TestCleanReply:
         assert core.clean_reply("冷死了...........") == "冷死了……"
 
 
+class TestSelfPronounCleanup:
+    """clean_reply 的"她/他自指兜底"：灰泽满用名字自称，不该出现"她"指自己。"""
+
+    def test_self_she_replaced(self):
+        assert core.clean_reply("她转开视线，声音闷闷的：行了") == \
+            "灰泽满转开视线，声音闷闷的：行了"
+
+    def test_other_person_she_preserved(self):
+        # 出现其他第三人称名字（女同学/满妈），"她"指别人，不动
+        assert "她" in core.clean_reply("女同学递了巧克力，她笑了")
+        assert "她" in core.clean_reply("满妈说让她早点睡")
+
+    def test_qita_not_corrupted(self):
+        # "其他"里的"他"是词不是代词，不能替换成灰泽满
+        out = core.clean_reply("其他的也别说了，就聊这个吧")
+        assert "其他" in out
+        assert "灰泽满" not in out
+
+    def test_full_example(self):
+        reply = ("灰泽满瞥了一眼屏幕，耳根有点热\n这人怎么还带图片攻击的……\n"
+                 "她转开视线，声音闷闷的：行了行了\n"
+                 "（小声）你这话倒是说得她心里挺暖的")
+        out = core.clean_reply(reply)
+        assert "她" not in out
+        assert "灰泽满转开视线" in out
+        assert "说得灰泽满心里挺暖" in out
+
+    def test_male_self_reference_replaced(self):
+        assert "灰泽满" in core.clean_reply("他心里其实挺高兴的")
+
+
 class TestPreferences:
     def test_injects_retrieved_preferences(self, monkeypatch):
         monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
@@ -205,6 +236,160 @@ class TestLegendaryMemory:
         await core.handle_chat("u", trigger)
         assert captured, "梗匹配回复也应记入短期记忆"
         assert captured[0][0] == trigger
+
+
+class TestClassifyBehavior:
+    """L3：LLM 判定行为意图（embedding 猜意图不可靠，改 LLM 理解）。"""
+
+    def _behaviors(self):
+        return [
+            {"name": "被夸时嘴硬否认", "trigger": "收到夸奖时", "response": "否认"},
+            {"name": "被质疑时心虚辩解", "trigger": "被质问时", "response": "辩解"},
+        ]
+
+    def _fake(self, content):
+        class _FakeCompletions:
+            async def create(self, **kwargs):
+                msg = type("M", (), {"content": content})()
+                return type("R", (), {"choices": [type("C", (), {"message": msg})()]})()
+        return type("C", (), {"chat": type("Chat", (), {"completions": _FakeCompletions()})()})
+
+    async def test_returns_valid_behavior_name(self):
+        out = await core.classify_behavior(self._fake('{"behavior": "被夸时嘴硬否认"}'),
+                                           "你唱歌好好听", "", self._behaviors())
+        assert out == "被夸时嘴硬否认"
+
+    async def test_null_returns_empty(self):
+        out = await core.classify_behavior(self._fake('{"behavior": null}'),
+                                           "今天天气不错", "", self._behaviors())
+        assert out == ""
+
+    async def test_fabricated_name_rejected(self):
+        out = await core.classify_behavior(self._fake('{"behavior": "不存在的行为"}'),
+                                           "随便", "", self._behaviors())
+        assert out == ""
+
+    async def test_markdown_wrapped_json_parsed(self):
+        out = await core.classify_behavior(self._fake('```json\n{"behavior": "被质疑时心虚辩解"}\n```'),
+                                           "你又在骗人", "", self._behaviors())
+        assert out == "被质疑时心虚辩解"
+
+    async def test_failure_returns_empty(self):
+        def _raise(*a, **k):
+            raise RuntimeError("api down")
+        fake = type("C", (), {"chat": type("Chat", (), {"completions": type("C2", (), {"create": _raise})()})()})
+        out = await core.classify_behavior(fake, "你好", "", self._behaviors())
+        assert out == ""
+
+    async def test_no_behaviors_returns_empty(self):
+        out = await core.classify_behavior(self._fake('{"behavior": "x"}'), "你好", "", [])
+        assert out == ""
+
+
+class TestRepairLlmJson:
+    """DeepSeek 偶发的不规范 JSON 修复（记忆提取路径）。"""
+
+    def test_bare_keys(self):
+        assert core._repair_llm_json('{new_impression: "夜猫子"}') == '{"new_impression": "夜猫子"}'
+
+    def test_single_quotes(self):
+        assert core._repair_llm_json("{'a': 'x'}") == '{"a": "x"}'
+
+    def test_trailing_comma(self):
+        assert core._repair_llm_json('{"a": 1,}') == '{"a": 1}'
+
+    def test_markdown_fence(self):
+        assert core._repair_llm_json('```json\n{"a": 1}\n```') == '{"a": 1}'
+
+    def test_leading_garbage(self):
+        assert core._repair_llm_json('好的\n{"a": 1}') == '{"a": 1}'
+
+    def test_empty_unchanged(self):
+        assert core._repair_llm_json("") == ""
+
+
+class TestParseMemoryExtract:
+    def test_valid(self):
+        assert core._parse_memory_extract('{"new_impression": "夜猫子"}') == {"new_impression": "夜猫子"}
+
+    def test_null_returns_empty(self):
+        assert core._parse_memory_extract("null") == {}
+
+    def test_repaired(self):
+        assert core._parse_memory_extract("{new_impression: '夜猫子'}") == {"new_impression": "夜猫子"}
+
+    def test_invalid_raises(self):
+        import pytest
+        with pytest.raises(Exception):
+            core._parse_memory_extract("{broken")
+
+
+class TestUpdateMemoryTaskRetry:
+    """记忆提取：首次 JSON 不规范 → 修复/重试，不丢记忆。"""
+
+    def _fake_client(self, first_content, second_content):
+        class _Seq:
+            def __init__(self):
+                self.n = 0
+            async def create(self, **kwargs):
+                self.n += 1
+                content = first_content if self.n == 1 else second_content
+                msg = type("M", (), {"content": content})()
+                return type("R", (), {"choices": [type("C", (), {"message": msg})()]})()
+        return type("C", (), {"chat": type("Chat", (), {"completions": _Seq()})})()
+
+    async def test_retries_then_updates(self, monkeypatch):
+        client = self._fake_client("{new_impression: '夜猫子'}", '{"new_impression": "夜猫子"}')
+        monkeypatch.setattr(core, "_get_clients", lambda: (client, None))
+        captured = {}
+        monkeypatch.setattr(core, "update_user_memory", lambda uid, updates: captured.update(updates))
+        await core.update_memory_task("u", "我是夜猫子，晚上不睡", "灰泽满也是夜猫子", {})
+        assert captured.get("new_impression") == "夜猫子"
+
+    async def test_valid_first_call_no_retry(self, monkeypatch):
+        client = self._fake_client('{"new_impression": "夜猫子"}', "不应被调用")
+        monkeypatch.setattr(core, "_get_clients", lambda: (client, None))
+        captured = {}
+        monkeypatch.setattr(core, "update_user_memory", lambda uid, updates: captured.update(updates))
+        await core.update_memory_task("u", "我是夜猫子", "好巧", {})
+        assert captured.get("new_impression") == "夜猫子"
+
+    async def test_null_skips(self, monkeypatch):
+        client = self._fake_client("null", "不应被调用")
+        monkeypatch.setattr(core, "_get_clients", lambda: (client, None))
+        called = []
+        monkeypatch.setattr(core, "update_user_memory", lambda uid, updates: called.append(updates))
+        await core.update_memory_task("u", "今天天气不错", "是啊", {})
+        assert called == []  # 无新信息，不写卡
+
+
+class TestVoiceSampleLabel:
+    """few-shot 标签要防'内容抄袭'（模型把样本里的礼物/衣服/人物抄进回复）。"""
+
+    def test_label_guards_against_content_copy(self, monkeypatch):
+        from types import SimpleNamespace
+        monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
+        sample = SimpleNamespace(
+            source="voice_sample", item_id="peer_5",
+            extra={"user": "粉丝问贺图", "reply": "是小雨前辈送的", "type": "daily"},
+        )
+        msgs = core.build_message_list("在吗", "p", [sample], "", [])
+        label = [m["content"] for m in msgs if "灰泽满的说话方式参考" in m["content"]]
+        assert label and "不要套用示例里的具体内容" in label[0]
+
+
+class TestEmotionOnlyQuery:
+    """纯情绪补全句检测：'可惜🤭'被 probe 补全成'用户发了个X的表情'时跳过语义检索。"""
+
+    def test_emoji_expansion_detected(self):
+        assert core._is_emotion_only_query("用户发了个偷笑的表情") is True
+        assert core._is_emotion_only_query("用户发了个无语的表情") is True
+
+    def test_normal_query_not_detected(self):
+        assert core._is_emotion_only_query("可惜🤭") is False
+        assert core._is_emotion_only_query("你唱歌好好听") is False
+        assert core._is_emotion_only_query("用户问灰泽满喜欢什么水果") is False
+        assert core._is_emotion_only_query("") is False
 
 
 class TestSplitDelay:
@@ -261,6 +446,44 @@ class TestBuildMessageListImage:
         assert msgs[-1]["content"] == "看看这张\n[图片：一碗面]"
 
 
+class TestHandleChatEmotionOnly:
+    """纯情绪消息（'可惜🤭'→probe补全成'用户发了个偷笑的表情'）应跳过语义检索，
+    防误命中无关样本（曾导致回'喜欢新衣服'）。"""
+
+    async def test_emotion_only_skips_retrieval(self, monkeypatch):
+        async def fake_probe(uid, msg, hist, client):
+            return "用户发了个偷笑的表情"
+        monkeypatch.setattr(core, "probe_session", fake_probe)
+
+        def _fail(*a, **k):
+            raise AssertionError("纯情绪消息不应触发检索/行为分类")
+
+        monkeypatch.setattr(core, "embed_query", _fail)
+        monkeypatch.setattr(core, "retrieve_corpus", _fail)
+        monkeypatch.setattr(core, "retrieve_voice_samples", _fail)
+        monkeypatch.setattr(core, "retrieve_phrases", _fail)
+        monkeypatch.setattr(core, "classify_behavior", _fail)
+
+        captured = {}
+
+        async def fake_reply(messages):
+            captured["msgs"] = messages
+            return "可惜啥"
+
+        monkeypatch.setattr(core, "generate_reply", fake_reply)
+        monkeypatch.setattr(core, "append_user_history", lambda *a, **k: None)
+        monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
+
+        async def _noop(*a, **k):
+            pass
+
+        monkeypatch.setattr(core, "update_memory_task", _noop)
+        reply = await core.handle_chat("u", "可惜🤭")
+        assert reply == "可惜啥"
+        # 语气提示仍注入（补全句给模型理解情绪）
+        assert any("用户发了个偷笑的表情" in m.get("content", "") for m in captured["msgs"])
+
+
 class TestHandleChatImageOnly:
     async def test_image_only_skips_retrieval_and_replies_to_image(self, monkeypatch):
         embed_called = []
@@ -275,7 +498,7 @@ class TestHandleChatImageOnly:
         monkeypatch.setattr(core, "embed_query", fake_embed)
         monkeypatch.setattr(core, "retrieve_corpus", _fail)
         monkeypatch.setattr(core, "retrieve_voice_samples", _fail)
-        monkeypatch.setattr(core, "retrieve_behaviors", _fail)
+        monkeypatch.setattr(core, "classify_behavior", _fail)  # L3：图片-only 也不做行为意图分类
         monkeypatch.setattr(core, "retrieve_phrases", _fail)
         monkeypatch.setattr(core, "fuse_and_truncate", _fail)
 

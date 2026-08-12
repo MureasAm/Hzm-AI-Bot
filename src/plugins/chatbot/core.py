@@ -26,8 +26,8 @@ from .memory import (
 )
 from .rag import embed_query
 from .retrieval import (
-    retrieve_corpus, retrieve_voice_samples, retrieve_behaviors, retrieve_phrases,
-    retrieve_preferences, retrieve_core_stories, fuse_and_truncate,
+    retrieve_corpus, retrieve_voice_samples, retrieve_phrases,
+    retrieve_preferences, retrieve_core_stories, fuse_and_truncate, select_behavior_item,
 )
 from .constants import (
     PHRASE_PHASES_MAX, SPLIT_MIN_LEN, SPLIT_MAX_PARTS, SPLIT_MERGE_MIN_CHARS,
@@ -169,6 +169,80 @@ async def _legendary_confirmed(user_msg: str, prompt_template: str, history: str
     except Exception as e:
         print(f"⚠️ 梗确认失败（默认放行）: {e}")
         return True
+
+
+# ==================== 🎭 行为意图分类（L3：LLM 判意图，不再用 embedding 猜） ====================
+# 背景：embedding 聚的是"句式"不是"意图"——'灰泽满你唱歌好听'（夸）和
+# '灰泽满你怎么又迟到了'（质问）句式相同，在向量空间挤成一团，余弦匹配会把
+# 夸奖误判成质疑（实测 0.70+）。治本：行为归属交给 LLM 理解（复用 LEGENDARY 双路由的
+# LLM 判定模式），判别性词汇（敷衍/骗/鸽/迟到）仍作关键词兜底。
+# 行为判定用原始用户消息 + 最近对话，一次调用（temperature 0），失败降级为不触发。
+
+BEHAVIOR_CLASSIFY_PROMPT = """你是灰泽满的行为意图分类器。判断用户刚发的这条消息是否明确落入某个"行为触发场景"。只有明确匹配才选，拿不准一律 null（宁可不触发，不误触发）。
+
+可选行为（name：触发情境）：
+{behavior_defs}
+
+判定要点：
+- 只看用户这条消息本身的内容和语气，结合最近对话判断语境。
+- "被夸"：消息确实在夸灰泽满（声音/外貌/才能/表现/生日祝福/唱歌好听等）。
+- "被质疑/失约被催"：用户在质问、戳穿或催问灰泽满（骗人/敷衍/迟到/没播/鸽）。
+- "被越界"：玩笑/幻想触及个人边界（黄段子/低俗/过度幻想等）。
+- "冷场"：提及或营造社交尴尬/冷场，要求灰泽满救场。
+- "立Flag/感性流露/主动抛梗"：消息必须明显对应那个情境（立Flag=灰泽满刚立承诺被打脸；感性流露=真诚感谢/脆弱；主动抛梗=明确要求灰泽满抛话题/来段子）。
+- 普通闲聊、提问、寒暄、表情、玩梗 → null。
+- 拿不准 → null。
+
+最近对话：
+{history}
+
+用户消息：{user_msg}
+
+只输出 JSON：{{"behavior": "<可选行为name>" 或 null}}"""
+
+
+async def classify_behavior(deepseek_client, user_msg: str, history_text: str, behaviors: list) -> str:
+    """LLM 判定用户消息落入哪个行为场景；拿不准或失败返回空串（不触发任何行为）。
+
+    返回的行为名必须是 behaviors 里的真实 name（防模型编造）。
+    """
+    if not behaviors or not user_msg:
+        return ""
+    # 行为定义带真实粉丝话样例：领域黑话（如"黑黑的/造黄桃"是越界梗）光靠 trigger 描述 LLM 认不出，
+    # 给真实样例当参照（素材驱动），分类更准（实测 b9 越界从漏判变命中）。
+    defs = []
+    for b in behaviors:
+        if not b.get("name"):
+            continue
+        line = f"- {b['name']}：{b.get('trigger', '')}"
+        for s in b.get("samples", [])[:2]:
+            u = (s.get("user") or "").strip()
+            if u:
+                line += f"\n    例：{u}"
+        defs.append(line)
+    prompt = BEHAVIOR_CLASSIFY_PROMPT.format(
+        behavior_defs="\n".join(defs), history=history_text or "（无）", user_msg=user_msg,
+    )
+    try:
+        resp = await deepseek_client.chat.completions.create(
+            model=_get_model_name(),
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            max_tokens=20,
+            **THINKING_DISABLED,
+        )
+        content = (resp.choices[0].message.content or "").strip()
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0].strip()
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0].strip()
+        parsed = json.loads(content)
+        behavior = str(parsed.get("behavior") or "").strip()
+        names = {b.get("name") for b in behaviors}
+        return behavior if behavior in names else ""
+    except Exception as e:
+        print(f"⚠️ 行为意图分类失败（降级不触发）: {e}")
+        return ""
 
 
 # ==================== 🎭 基础人设提示词 ====================
@@ -401,6 +475,28 @@ async def summarize_batch(msgs: list) -> str:
         return ""
 
 
+# 灰泽满以外的人（第三人称名字）：回复里出现这些名字时，"她/他"可能指别人，不动
+_OTHER_PERSON_NAMES_CACHE = None
+
+
+def _get_other_person_names() -> set:
+    """取"灰泽满以外的人"的名字集合：terms 的 person/family/relation 分类 + 常见补充。
+
+    用于 clean_reply 的"她/他自指兜底"保护——回复里出现这些名字时，"她/他"
+    大概率指这个人而不是灰泽满自己，故不替换。动态取自 terms，新增人物不用记两处。
+    """
+    global _OTHER_PERSON_NAMES_CACHE
+    if _OTHER_PERSON_NAMES_CACHE is not None:
+        return _OTHER_PERSON_NAMES_CACHE
+    names = {"女同学", "女仆女同学", "弥希", "真绯瑠", "瑞雅", "塔菲"}
+    for t in load_terms():
+        if t.get("category") in ("person", "family", "relation") and t.get("keyword"):
+            names.add(t["keyword"])
+            names.update(str(a) for a in t.get("aliases", []) if a)
+    _OTHER_PERSON_NAMES_CACHE = names
+    return names
+
+
 def clean_reply(reply: str) -> str:
     """输出清洗：去括号前缀、整条至多 1 个括号、省略号归一并限频。
 
@@ -444,7 +540,25 @@ def clean_reply(reply: str) -> str:
         text = text[:cut] + text[cut:].replace('……', '')
     # 结巴消融："那、那"→"那那"（真人快速打字是叠字，不是顿号；顿号结巴是 RP 腔）
     text = re.sub(r'(.)、\1', r'\1\1', text)
+    # 自指"她/他"兜底：对话里灰泽满用名字自称，不该出现"她"指自己。
+    # 仅当回复里没出现其他第三人称名字时才替换（这时的"她/他"几乎必指灰泽满自己）。
+    # "她"必是代词安全替换；"他"避开"其他/他人/他家"这类复合词。
+    if not any(n in text for n in _get_other_person_names()):
+        text = re.sub(r"她", "灰泽满", text)
+        text = re.sub(r"(?<!其|无)他(?!人|家|国|乡|方|日)", "灰泽满", text)
     return text
+
+
+def _is_emotion_only_query(query: str) -> bool:
+    """判断 probe 补全的检索 query 是否为"纯情绪"描述（如'用户发了个偷笑的表情'）。
+
+    表情/情绪为主的短消息（如'可惜🤭'）会被 probe 按表情规则补全成这类纯情绪句——
+    它没有话题词，做语义检索会误命中无关样本（实测'用户发了个偷笑的表情'→ voice_sample
+    peer_5'新衣服'，导致'可惜🤭'被回'喜欢新衣服'）。对齐纯表情消息的既有设计：
+    跳过语义检索，补全句只作语气提示（query_hint）注入。
+    """
+    q = (query or "").strip()
+    return q.startswith("用户发") and "表情" in q
 
 
 def _compose_record_msg(user_msg: str, vision_desc: str) -> str:
@@ -494,9 +608,16 @@ def load_terms() -> list:
 
 
 def build_terms_note(user_msg: str) -> str:
-    """根据用户消息命中名词库：核心词(always)每次注入 + 命中词(关键词在消息里)注入。
+    """根据用户消息命中名词库：核心词(always)每次注入 + 命中词(关键词/别名/正则)注入。
 
     返回注入文本【灰泽满的世界】。客观打底 + 带灰泽满态度，让模型既懂词义又有正确的相处态度。
+
+    命中检查：
+    - priority=always：每次注入
+    - keyword / aliases：子串命中
+    - pattern（可选）：正则命中。用于子串匹配做不到的场景——如'区'单字撞'小区/地区'，
+      用 `满区|(这么|太|好|很|真…)\\s*区` 只命中'满区'或形容词用法（'你怎么这么区'），
+      不误触普通名词里的'区'。
     """
     terms = load_terms()
     if not terms:
@@ -507,9 +628,12 @@ def build_terms_note(user_msg: str) -> str:
         kw = t.get("keyword", "")
         if not kw:
             continue
-        # 命中检查：keyword + aliases（别名，如"四时小路Komichi"的短名"四时小路"）
         keys = [kw] + [str(a) for a in t.get("aliases", []) if a]
-        if t.get("priority") == "always" or any(k in msg for k in keys):
+        pattern = t.get("pattern")
+        hit = (t.get("priority") == "always"
+               or any(k in msg for k in keys)
+               or (pattern and re.search(pattern, msg)))
+        if hit:
             parts = [t.get("meaning", "")]
             if t.get("reaction"):
                 parts.append(f"被提到时：{t['reaction']}")
@@ -651,7 +775,7 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
     if samples:
         messages.append({
             "role": "system",
-            "content": "【灰泽满的说话方式参考】以下是她真实的对话片段。模仿其中的语气、断句、省略号、自称（灰泽满/hzm）和措辞。括号是她的'心里话标注'，只在情绪顶点才用一个（如（小声）），日常回复默认一个都不用。内容要针对当前话题不要复述示例。日常回复保持短句（30字内），简短干脆。"
+            "content": "【灰泽满的说话方式参考】以下是她真实的对话片段。只学其中的语气、断句、省略号、自称（灰泽满/hzm）和措辞。括号是她的'心里话标注'，只在情绪顶点才用一个（如（小声）），日常回复默认一个都不用。内容要针对当前话题，不要复述、也不要套用示例里的具体内容（人物/礼物/衣服/事件等）。日常回复保持短句（30字内），简短干脆。"
         })
         for it in samples:
             user_part = it.extra.get("user", "")
@@ -695,7 +819,7 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
         else:
             messages.append({
                 "role": "system",
-                "content": f"【用户这条消息的语境】{query_hint}\n（用户发的是短消息，上面是它在当前语境下的完整意思，按这个理解回复；不要复述这句话）"
+                "content": f"【用户这条消息的语境】{query_hint}\n（上面是这条消息在当前语境下的完整意思——短消息或指代性消息（如'能读给我听听吗'）需要结合前文才能理解，按这个理解回复；不要复述这句话）"
             })
 
     messages.append({"role": "user", "content": final_user})
@@ -720,6 +844,44 @@ async def generate_reply(messages: list) -> str:
     return reply if reply else "……（沉默，可能是信号不好）"
 
 
+def _repair_llm_json(text: str) -> str:
+    """修复 LLM 常见的不规范 JSON（DeepSeek 偶发），尽力让 json.loads 能过。
+
+    常见病：键没加双引号（{name: "x"}）、单引号键/值、尾逗号、markdown 围栏、前后杂质。
+    修不好的原样返回，交给调用方兜底（重试/丢弃）。
+    """
+    if not text:
+        return text
+    t = text.strip()
+    # 剥 markdown 代码围栏
+    t = re.sub(r"^```[a-zA-Z]*\s*", "", t)
+    t = re.sub(r"\s*```$", "", t)
+    # 只取最外层 {…} / […]（剥掉前后杂质，如模型先写"好的"）
+    start = min((i for i in (t.find("{"), t.find("[")) if i != -1), default=-1)
+    end = max(t.rfind("}"), t.rfind("]"))
+    if start != -1 and end > start:
+        t = t[start:end + 1]
+    # 键补双引号：单引号键 {'a': …} 和裸键 {a: …}
+    t = re.sub(r"([{,]\s*)'([^']+)'(\s*:)", r'\1"\2"\3', t)
+    t = re.sub(r"([{,]\s*)([A-Za-z_][A-Za-z0-9_]*)(\s*:)", r'\1"\2"\3', t)
+    # 单引号字符串值 → 双引号
+    t = re.sub(r":\s*'([^']*)'", lambda m: ': "' + m.group(1).replace('"', '\\"') + '"', t)
+    # 尾逗号 ,} / ,]
+    t = re.sub(r",\s*([}\]])", r"\1", t)
+    return t
+
+
+def _parse_memory_extract(content: str) -> dict:
+    """把记忆提取 LLM 的输出解析为 dict：剥围栏 + 修复不规范 JSON。
+
+    内容为 "null" 返回 {}；修复后仍不是合法 JSON 则抛异常（调用方重试一次）。
+    """
+    content = (content or "").strip()
+    if content == "null":
+        return {}
+    return json.loads(_repair_llm_json(content))
+
+
 async def update_memory_task(user_id: str, user_msg: str, reply: str, user_memory_card: dict):
     """异步提取并更新长期记忆。"""
     # 密度门控：太短/纯表情的消息不值得提取（省成本减噪音）
@@ -730,16 +892,23 @@ async def update_memory_task(user_id: str, user_msg: str, reply: str, user_memor
         return
     try:
         deepseek_client, _ = _get_clients()
-        # 用可读画像摘要替代原生 JSON dump，让模型能可靠 dedup/冲突检测
-        current_summary = _format_profile_summary(user_memory_card)
-        prompt = MEMORY_EXTRACT_PROMPT.format(
-            current_summary=current_summary,
-            user_msg=user_msg,
-            reply=reply
-        )
-        # V1：停用 self_fact 提取。灰泽满的"自我"应来自真人素材（voice_samples/corpus），
-        # 而不是聊天时临时编造的自我披露，防止 AI 自嗨污染长期人格。
-        prompt += "\n【本轮的强制规则】new_self_fact 一律返回 null。只提取关于用户的信息（new_impression / new_user_fact），不要从灰泽满的回复中提取任何自我披露内容。"
+    except Exception as e:
+        print(f"[长期记忆] 客户端初始化失败: {e}")
+        return
+
+    # 用可读画像摘要替代原生 JSON dump，让模型能可靠 dedup/冲突检测
+    current_summary = _format_profile_summary(user_memory_card)
+    prompt = MEMORY_EXTRACT_PROMPT.format(
+        current_summary=current_summary,
+        user_msg=user_msg,
+        reply=reply
+    )
+    # V1：停用 self_fact 提取。灰泽满的"自我"应来自真人素材（voice_samples/corpus），
+    # 而不是聊天时临时编造的自我披露，防止 AI 自嗨污染长期人格。
+    prompt += "\n【本轮的强制规则】new_self_fact 一律返回 null。只提取关于用户的信息（new_impression / new_user_fact），不要从灰泽满的回复中提取任何自我披露内容。"
+
+    content = None
+    try:
         resp = await deepseek_client.chat.completions.create(
             model=_get_model_name(),
             messages=[{"role": "user", "content": prompt}],
@@ -749,17 +918,34 @@ async def update_memory_task(user_id: str, user_msg: str, reply: str, user_memor
         )
         content = resp.choices[0].message.content.strip()
         print(f"[长期记忆] 提取结果: {content}")
-        if content and content != "null":
-            if "```json" in content:
-                content = content.split("```json")[1].split("```")[0].strip()
-            elif "```" in content:
-                content = content.split("```")[1].split("```")[0].strip()
-            updates = json.loads(content)
-            update_user_memory(user_id, updates)
+        if content and content.strip() != "null":
+            updates = _parse_memory_extract(content)
+            if updates:
+                update_user_memory(user_id, updates)
     except Exception as e:
-        print(f"[长期记忆] 更新失败: {e}")
-        import traceback
-        traceback.print_exc()
+        # 首次失败（多为 JSON 不规范/偶发）：严格格式重试一次。记忆提取是异步后台任务，重试不阻塞聊天。
+        print(f"[长期记忆] 首次解析失败（{e}），严格格式重试一次")
+        try:
+            strict_prompt = prompt + (
+                "\n【强制格式】输出必须是严格 JSON：所有键和字符串值都加双引号，"
+                "null 不带引号，键后冒号，不要 markdown 围栏，不要任何额外文字。"
+            )
+            resp2 = await deepseek_client.chat.completions.create(
+                model=_get_model_name(),
+                messages=[{"role": "user", "content": strict_prompt}],
+                temperature=MEMORY_EXTRACT_TEMPERATURE,
+                max_tokens=MEMORY_EXTRACT_MAX_TOKENS,
+                **THINKING_DISABLED,
+            )
+            content2 = resp2.choices[0].message.content.strip()
+            print(f"[长期记忆] 重试提取: {content2}")
+            updates = _parse_memory_extract(content2)
+            if updates:
+                update_user_memory(user_id, updates)
+        except Exception as e2:
+            print(f"[长期记忆] 重试仍失败，本轮记忆丢弃。首次原始输出: {content!r}")
+            import traceback
+            traceback.print_exc()
 
 
 async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
@@ -807,14 +993,34 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     # 纯表情消息（emoji/[表情：xx]）也不做语义检索：表情只表达情绪不表达话题，
     # 扩充句会作为语气提示注入，但检索 memory 会跑偏（如😭命中"被夸"样本）
     if query_text and not is_emoji_msg(query_text):
-        query_vector = await embed_query(zhipu_client, retrieval_query or query_text)
-        corpus_items = retrieve_corpus(retrieval_query or query_text, query_vector)
-        sample_items = retrieve_voice_samples(retrieval_query or query_text, query_vector)
-        behavior_items = retrieve_behaviors(retrieval_query or query_text, query_vector, behaviors)
-        phrase_items = retrieve_phrases(retrieval_query or query_text, query_vector)
-        fused_items = fuse_and_truncate(corpus_items, sample_items, behavior_items, phrase_items)
-        preference_items = retrieve_preferences(retrieval_query or query_text, query_vector)  # 第 5 路：偏好
-        core_stories = retrieve_core_stories(retrieval_query or query_text, query_vector)     # 核心记忆（结晶）
+        # 纯情绪消息（如'可惜🤭'，被 probe 补全成'用户发了个偷笑的表情'）无话题词，
+        # 语义检索会误命中无关样本（实测→peer_5'新衣服'）。对齐纯表情设计：跳过检索，
+        # 补全句只作语气提示（query_hint）注入。
+        if _is_emotion_only_query(retrieval_query):
+            fused_items = []
+            preference_items = []
+            core_stories = []
+        else:
+            # L3：行为归属用 LLM 判意图（不再用 embedding 猜——embedding 按句式聚团，
+            # 会把'灰泽满你唱歌好听'（夸）和'灰泽满你怎么又迟到'（质问）挤在一起误判）。
+            # 判别词（敷衍/骗/鸽/迟到/黄桃/擦边…）命中则直接命中（可靠且省一次 LLM 调用）；
+            # 否则 LLM 判意图，判别词在 LLM 拿不准时兜底。
+            kw_item = select_behavior_item(query_text, "", behaviors)
+            if kw_item:
+                behavior_items = [kw_item]
+            else:
+                behavior_intent = await classify_behavior(deepseek_client, query_text, history_text, behaviors)
+                if behavior_intent:
+                    print(f"[行为] LLM 判定: {behavior_intent}")
+                behavior_item = select_behavior_item(query_text, behavior_intent, behaviors)
+                behavior_items = [behavior_item] if behavior_item else []
+            query_vector = await embed_query(zhipu_client, retrieval_query or query_text)
+            corpus_items = retrieve_corpus(retrieval_query or query_text, query_vector)
+            sample_items = retrieve_voice_samples(retrieval_query or query_text, query_vector)
+            phrase_items = retrieve_phrases(retrieval_query or query_text, query_vector)
+            fused_items = fuse_and_truncate(corpus_items, sample_items, behavior_items, phrase_items)
+            preference_items = retrieve_preferences(retrieval_query or query_text, query_vector)  # 第 5 路：偏好
+            core_stories = retrieve_core_stories(retrieval_query or query_text, query_vector)     # 核心记忆（结晶）
     else:
         fused_items = []
         preference_items = []

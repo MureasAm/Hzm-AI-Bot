@@ -82,7 +82,7 @@ SESSION_PROBE_PROMPT = """你是会话话题追踪器。用户在聊天中刚发
   "topic": "当前话题的一句话概括（如'用户在撒娇，灰泽满在傲娇推拉''聊灰泽满的香水'；话题没变就沿用上一轮的，变了就换成新的）",
   "topic_changed": true 或 false,
   "new_event": "这条消息值得记住的关键事件，一句话（如'用户发比爱心示好'）；纯寒暄无事件则 null",
-  "expanded_query": "如果这条消息很短（≤4字），先识别它的真实含义再补成完整句；非短消息则 null"
+  "expanded_query": "如果这条消息很短（≤4字）**或是指代性的**（必须结合前面聊的话题才能理解，如'能读给我听听吗''那个呢''然后呢'——单看这句不知道指什么），补全成既能检索到相关记忆、又能帮模型理解的一句话（如'用户让灰泽满念她写的小说乌色月'）；其他情况则 null"
 }}
 要求：
 - topic 要能体现**对话调性**（在干嘛、什么氛围），不是只复述内容
@@ -99,7 +99,7 @@ SESSION_PROBE_PROMPT = """你是会话话题追踪器。用户在聊天中刚发
   · 😳/😳 = 害羞/尴尬
   · 🤔 = 疑惑
   补全句应表达"用户发了【表情含义】"这个意思（如"用户发了个无语的表情"），用于检索记忆理解用户情绪，不要加引号。
-- 非表情的短消息（如"咋这样""真的吗"）才结合语境补全。
+- 非表情的短消息（如"咋这样""真的吗"）**或指代性消息**（如"能读给我听听吗""那个呢"——单看不知道指什么）才结合语境补全成完整句；普通长消息（自带话题）返回 null。
 只输出 JSON，不要多余内容。"""
 
 
@@ -159,6 +159,8 @@ async def probe_session(user_id: str, user_msg: str, history_text: str, client) 
         return expanded
 
     topic = str(parsed.get("topic", "")).strip()
+    if topic.lower() in ("null", "none"):
+        topic = ""  # 兜底：模型把"无话题"写成字符串 null 时不存
     changed = bool(parsed.get("topic_changed"))
     new_event = parsed.get("new_event")
     if new_event and isinstance(new_event, str):
@@ -180,13 +182,14 @@ async def probe_session(user_id: str, user_msg: str, history_text: str, client) 
         }
         _save(data)
 
-    # 短 query 扩充（≤4 字且模型给了扩充句）
-    if len(msg) <= SHORT_QUERY_MAX_CHARS:
-        ex = parsed.get("expanded_query")
-        if ex and isinstance(ex, str):
-            ex = ex.strip()
-            if 0 < len(ex) <= 60 and ex != msg:
-                expanded = ex
+    # 检索 query 扩充：短消息（≤4字）或指代性消息（必须结合话题才能懂，如"能读给我听听吗"）
+    # 时，用模型补全的完整句做检索——否则指代性消息检索不到任何记忆（曾导致"念乌色月"时模型没
+    # 记忆注入、只能编造内容）。
+    ex = parsed.get("expanded_query")
+    if ex and isinstance(ex, str):
+        ex = ex.strip()
+        if 0 < len(ex) <= 80 and ex != msg:
+            expanded = ex
     return expanded
 
 

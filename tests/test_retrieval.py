@@ -8,6 +8,7 @@ from src.plugins.chatbot.retrieval import (
     retrieve_corpus,
     retrieve_voice_samples,
     retrieve_behaviors,
+    select_behavior_item,
     rrf_fuse,
     truncate_by_budget,
     fuse_and_truncate,
@@ -95,21 +96,58 @@ class TestRetrieveCorpus:
         assert retrieve_corpus("q", None) == []
 
     def test_threshold_filters_and_top_n(self, monkeypatch):
+        # V6 关键词门：语义达标 + 有实质词重叠才保留；无词重叠（即使语义高）滤掉
         db = [
-            {"text": "高", "vector": [1, 0, 0, 0]},
-            {"text": "中", "vector": [1, 1, 0, 0]},
-            {"text": "低", "vector": [0, 0, 1, 0]},  # 与 query 正交 → 滤掉
+            {"text": "灰泽满和女同学一起上学", "vector": [1, 0, 0, 0]},   # 相关且有词重叠
+            {"text": "灰泽满喜欢看小说", "vector": [1, 1, 0, 0]},        # 语义达标但无词重叠
+            {"text": "今天天气不错", "vector": [0, 0, 1, 0]},            # 正交
         ]
         monkeypatch.setattr("src.plugins.chatbot.retrieval.load_vector_db", lambda: db)
-        items = retrieve_corpus("q", [1, 0, 0, 0], threshold=0.5, top_n=3)
-        sources = {i.item_id for i in items}
-        assert "0" in sources and "1" in sources  # 高、中留下
-        assert "2" not in sources                 # 低被滤
+        items = retrieve_corpus("你和女同学一起上学的事", [1, 0, 0, 0], threshold=0.48, top_n=3)
+        assert len(items) == 1
+        assert items[0].text == db[0]["text"]
         assert all(i.source == "corpus" for i in items)
 
     def test_empty_db_returns_empty(self, monkeypatch):
         monkeypatch.setattr("src.plugins.chatbot.retrieval.load_vector_db", lambda: [])
         assert retrieve_corpus("q", _vec()) == []
+
+
+class TestCorpusKeywordGate:
+    """V6：corpus 关键词门（语义降阈值 + 区分性词重叠，防'名词撞车但不相关'乱锁）。"""
+
+    def test_positive_relevant_kept(self, monkeypatch):
+        db = [{"text": "灰泽满和女同学一起上学，幸亏有女同学陪", "vector": [1, 0, 0, 0]}]
+        monkeypatch.setattr("src.plugins.chatbot.retrieval.load_vector_db", lambda: db)
+        items = retrieve_corpus("你和女同学一起上学的事", [0.5, 0.5, 0, 0], threshold=0.48, top_n=3)
+        assert len(items) == 1
+        assert items[0].text == db[0]["text"]
+
+    def test_strong_keyword_overrides_low_sim(self, monkeypatch):
+        # 专名"乌色月"在 query 和 statement 都有 → 语义低（0）也放行
+        db = [{"text": "灰泽满写的小说《乌色月》", "vector": [1, 0, 0, 0]}]
+        monkeypatch.setattr("src.plugins.chatbot.retrieval.load_vector_db", lambda: db)
+        items = retrieve_corpus("乌色月是什么", [0, 0, 0, 0], threshold=0.48, top_n=3)
+        assert len(items) == 1
+
+    def test_noun_collision_rejected(self, monkeypatch):
+        # "灰泽满是不是很懒"与直播陈述只共享名字"灰泽"，无实质词重叠 → 拒绝
+        db = [{"text": "灰泽满当时提到有人问可不可以直播，她说网速不确定", "vector": [1, 0, 0, 0]}]
+        monkeypatch.setattr("src.plugins.chatbot.retrieval.load_vector_db", lambda: db)
+        items = retrieve_corpus("灰泽满是不是很懒", [1, 0, 0, 0], threshold=0.48, top_n=3)
+        assert items == []
+
+    def test_time_query_rejected(self, monkeypatch):
+        # "9点是你那边"与"约了8点直播"无实质词重叠 → 拒绝（V5.3 当年伪关联回归案例）
+        db = [{"text": "灰泽满说约了8点聊天，家里磨叽到8点后推迟到10点", "vector": [1, 0, 0, 0]}]
+        monkeypatch.setattr("src.plugins.chatbot.retrieval.load_vector_db", lambda: db)
+        items = retrieve_corpus("9点是你那边", [1, 0, 0, 0], threshold=0.48, top_n=3)
+        assert items == []
+
+    def test_no_query_returns_empty(self, monkeypatch):
+        monkeypatch.setattr("src.plugins.chatbot.retrieval.load_vector_db",
+                            lambda: [{"text": "A", "vector": [1, 0, 0, 0]}])
+        assert retrieve_corpus("", [1, 0, 0, 0]) == []
 
 
 class TestRetrieveVoiceSamples:
@@ -181,6 +219,48 @@ class TestRetrieveBehaviors:
         assert len(items) == 1 and items[0].item_id == "被质疑时心虚辩解"
         items2 = retrieve_behaviors("说好的八点直播呢？你又鸽了", None, behaviors)
         assert len(items2) == 1 and items2[0].item_id == "失约被催时认栽滑跪"
+
+
+class TestSelectBehaviorItem:
+    """L3：LLM 判定的意图 → 行为注入项（关键词兜底）。"""
+
+    def test_llm_intent_wins(self):
+        behaviors = [
+            {"name": "被质疑时心虚辩解", "trigger": "质疑", "response": "先否认"},
+            {"name": "被夸时嘴硬否认", "trigger": "夸奖", "response": "否认"},
+        ]
+        item = select_behavior_item("你唱歌好好听", "被夸时嘴硬否认", behaviors)
+        assert item is not None
+        assert item.item_id == "被夸时嘴硬否认"
+        assert "否认" in item.text
+
+    def test_keyword_fallback_when_llm_null(self):
+        behaviors = [
+            {"name": "被质疑时心虚辩解", "trigger": "质疑", "response": "先否认"},
+            {"name": "失约被催时认栽滑跪", "trigger": "迟到", "response": "滑跪"},
+        ]
+        # LLM 拿不准（空）但有判别词 → 关键词兜底命中
+        item = select_behavior_item("说好的八点直播呢", "", behaviors)
+        assert item is not None and item.item_id == "失约被催时认栽滑跪"
+
+    def test_yuejie_keyword_fallback(self):
+        # 领域黑话（黄桃/擦边）是判别词：LLM 对"造个黄桃吧"判 null，关键词兜底可靠
+        behaviors = [{"name": "被越界时冷静推开", "trigger": "越界", "response": "推开"}]
+        item = select_behavior_item("给我们造个黄桃吧", "", behaviors)
+        assert item is not None and item.item_id == "被越界时冷静推开"
+        assert select_behavior_item("说点擦边的听听", "", behaviors).item_id == "被越界时冷静推开"
+
+    def test_keyword_does_not_hit_unrelated(self):
+        behaviors = [{"name": "被质疑时心虚辩解", "trigger": "质疑", "response": "先否认"}]
+        # "被骗"不在关键词表（敷衍/又骗/在骗…），不兜底
+        assert select_behavior_item("我是不是被骗了", "", behaviors) is None
+
+    def test_no_match_returns_none(self):
+        behaviors = [{"name": "被质疑时心虚辩解", "trigger": "质疑", "response": "先否认"}]
+        assert select_behavior_item("今天天气不错", "", behaviors) is None
+
+    def test_empty_input_returns_none(self):
+        assert select_behavior_item("", "", [{"name": "A", "trigger": "T", "response": "R"}]) is None
 
 
 # ==================== 环境变量开关 ====================

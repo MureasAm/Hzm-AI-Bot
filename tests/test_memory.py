@@ -56,3 +56,45 @@ class TestMergeMemoryCard:
         result = merge_memory_card(original, {"new_impression": "x"})
         assert original == {"total_interactions": 0}  # 输入未被污染
         assert result["total_interactions"] == 1
+
+    # ---- null 字符串清洗（提取模型常把"无"写成字符串 "null" 而非 JSON null） ----
+
+    def test_null_string_impression_not_stored(self):
+        card = merge_memory_card({}, {"new_impression": "null"})
+        assert "impressions" not in card or card["impressions"] == []
+
+    def test_null_string_all_fields_not_stored(self):
+        updates = {
+            "new_impression": "null",
+            "new_user_fact": "null",
+            "new_self_fact": "None",
+            "new_promise": "null",
+            "new_moment": "null",
+            "new_city": "null",
+            "new_name": "null",
+        }
+        card = merge_memory_card({}, updates)
+        for key in ("impressions", "user_facts", "self_facts", "promises",
+                    "significant_moments", "weather_city", "user_name"):
+            assert key not in card or not card[key]
+
+    def test_supersede_ignores_null_entries(self):
+        card = merge_memory_card({}, {"new_impression": "上班族"})
+        card = merge_memory_card(card, {"new_impression": "自由职业", "supersede": ["上班族", "null"]})
+        assert "上班族" not in build_memory_context(card)
+        assert "自由职业" in build_memory_context(card)
+
+    def test_legacy_null_polluted_card_not_injected(self):
+        """历史遗留的 'null' 数据不应注入上下文（兜底在注入边界过滤）。"""
+        card = {
+            "user_name": "null",
+            "weather_city": "null",
+            "impressions": [{"tag": "null", "confidence": 0.9}],
+            "user_facts": [{"fact": "null"}],
+            "self_facts": [{"fact": "null"}],
+            "significant_moments": [{"summary": "null"}],
+            "promises": [{"promise": "null"}],
+        }
+        ctx = build_memory_context(card)
+        assert ctx == ""
+        assert "null" not in ctx

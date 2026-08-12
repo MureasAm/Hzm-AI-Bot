@@ -110,6 +110,28 @@ class TestProbeSession:
         assert sess["topic"] == "聊起游泳"
         assert sess["events"] == ["说想去游泳"]  # 旧事件被清空
 
+    async def test_referential_message_expands_in_probe(self, tmp_path, monkeypatch):
+        """指代性消息（>4字，如"能读给我听听吗"）也补全检索 query——否则检索不到任何记忆。"""
+        f = tmp_path / "s.json"
+        monkeypatch.setattr(sm, "SESSION_MEMORY_FILE", f)
+        f.write_text(json.dumps({
+            "u1": {"topic": "聊灰泽满写的小说乌色月",
+                   "events": ["用户提起她写过小说"],
+                   "last_active": datetime.now().isoformat()}
+        }, ensure_ascii=False), encoding="utf-8")
+
+        async def fake_llm(client, prompt, max_tokens=250, temperature=0.2):
+            return json.dumps({
+                "topic": "聊灰泽满写的小说乌色月",
+                "topic_changed": False,
+                "new_event": None,
+                "expanded_query": "能读给我听听吗（用户让灰泽满念她写的小说乌色月）",
+            }, ensure_ascii=False)
+
+        monkeypatch.setattr(sm, "_llm", fake_llm)
+        out = await sm.probe_session("u1", "能读给我听听吗", "历史", object())
+        assert "乌色月" in out  # 指代性消息返回补全后的完整句（>4字也能扩充）
+
     async def test_short_query_expands_in_probe(self, tmp_path, monkeypatch):
         """短 query 的扩充与话题探测在同一次 LLM 调用里完成。"""
         f = tmp_path / "s.json"

@@ -32,9 +32,36 @@ def get_user_memory(user_id: str) -> dict:
     memory = load_memory()
     return memory.get(user_id, {})
 
+_NULL_STRINGS = ("", "null", "none")
+
+
+def _is_null_str(value) -> bool:
+    """判断值是否为 LLM 输出的"无"占位（字符串 'null'/'None'/空串）。
+
+    提取模型常把"没有"写成字符串 "null" 而非 JSON 的 null（无引号），
+    字符串是 truthy，若直接存卡会把 '这个绿冻在null' 注进上下文（历史踩坑）。
+    """
+    return isinstance(value, str) and value.strip().lower() in _NULL_STRINGS
+
+
+def _not_null_str(value) -> bool:
+    """值是否非空非'null'占位（build_memory_context 注入前兜底过滤）。"""
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return not _is_null_str(value)
+    return True
+
+
 def merge_memory_card(card: dict, updates: dict) -> dict:
     """纯函数：将 updates 增量合并到记忆卡，返回新的卡片。不做任何 IO。"""
     card = dict(card)  # 浅拷贝，避免污染外部引用
+
+    # 清洗提取结果：值为字符串 'null'/'None' 的字段直接丢弃（模型常把"无"写成字符串而非 JSON null）
+    updates = {
+        k: v for k, v in updates.items()
+        if not _is_null_str(v)
+    }
 
     # 基础统计
     card["total_interactions"] = card.get("total_interactions", 0) + 1
@@ -83,7 +110,8 @@ def merge_memory_card(card: dict, updates: dict) -> dict:
 
     # supersede：用户明确说某已知信息已变，作废对应的旧印象/事实（防止旧标签永远残留）
     if updates.get("supersede"):
-        gone = [str(x).strip() for x in updates["supersede"] if str(x).strip()]
+        gone = [str(x).strip() for x in updates["supersede"]
+                if str(x).strip() and not _is_null_str(x)]
         if gone:
             if card.get("impressions"):
                 card["impressions"] = [
@@ -170,12 +198,12 @@ def build_memory_context(card: dict) -> str:
 
     # 用户名字/昵称
     name = card.get("user_name")
-    if name:
+    if _not_null_str(name):
         parts.append(f"这个绿冻叫{name}，聊天时用TA的名字称呼TA，别老叫TA'这个绿冻'。")
 
     # 用户所在城市（天气感知用）
     city = card.get("weather_city")
-    if city:
+    if _not_null_str(city):
         parts.append(f"这个绿冻在{city}。聊天气时可以自然提及TA那边的天气。")
 
     # 印象标签
@@ -184,6 +212,8 @@ def build_memory_context(card: dict) -> str:
         high_conf = []
         for imp in impressions:
             tag = imp["tag"] if isinstance(imp, dict) else imp
+            if not _not_null_str(tag):
+                continue  # 兜底：过滤历史遗留的 'null' 标签
             conf = imp.get("confidence", 0.8) if isinstance(imp, dict) else 0.8
             if conf > 0.6:
                 high_conf.append(tag)
@@ -199,6 +229,7 @@ def build_memory_context(card: dict) -> str:
                 fact_strs.append(f.get("fact", ""))
             else:
                 fact_strs.append(str(f))
+        fact_strs = [s for s in fact_strs if _not_null_str(s)]
         if fact_strs:
             parts.append(f"这个绿冻曾提过：{'；'.join(fact_strs)}。可以自然提及。")
 
@@ -211,14 +242,16 @@ def build_memory_context(card: dict) -> str:
                 fact_strs.append(s.get("fact", ""))
             else:
                 fact_strs.append(str(s))
+        fact_strs = [s for s in fact_strs if _not_null_str(s)]
         if fact_strs:
             parts.append(f"你已跟TA说过：{'；'.join(fact_strs)}。不要再重复自曝这些事。")
 
     # 最近的亮点时刻
     moments = card.get("significant_moments", [])
     if moments:
-        recent = moments[-1]["summary"]
-        parts.append(f"你们之间最近的记忆：{recent}。聊到相关话题时可自然提起。")
+        recent = moments[-1]["summary"] if isinstance(moments[-1], dict) else str(moments[-1])
+        if _not_null_str(recent):
+            parts.append(f"你们之间最近的记忆：{recent}。聊到相关话题时可自然提起。")
 
     # 承诺/约定（跨会话记住）
     promises = card.get("promises", [])
@@ -229,7 +262,7 @@ def build_memory_context(card: dict) -> str:
                 promise_strs.append(p.get("promise", ""))
             else:
                 promise_strs.append(str(p))
-        promise_strs = [s for s in promise_strs if s]
+        promise_strs = [s for s in promise_strs if _not_null_str(s)]
         if promise_strs:
             parts.append(f"你答应过TA：{'；'.join(promise_strs)}。TA提到时要记得并回应，不要装作不知道。")
 
@@ -281,6 +314,7 @@ MEMORY_EXTRACT_PROMPT = """
 灰泽满：{reply}
 
 【提取要求】
+- **JSON 格式铁律**：某个字段"没有"时，输出真正的 JSON `null`（值直接写 null，**不带引号**）。禁止输出字符串 "null" 或 "None"——字符串 "null" 会被当有效内容存卡（曾导致上下文出现"这个绿冻在null"）。
 - **不要重复提取**：如果某条信息已在【当前已知画像】里（已经知道了），不要重复提取，对应字段返回 null。
 - 只提取本轮**新增**的信息。如果本轮没有值得记录的新内容，全部字段返回 null。
 - **只记用户明确陈述的长期事实**：用户没说出口的、靠推断的、一次性的，都别记。"刚下班"不能推断成"上班族"——除非用户明确说"我是上班族"。
