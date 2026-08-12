@@ -507,7 +507,9 @@ def build_terms_note(user_msg: str) -> str:
         kw = t.get("keyword", "")
         if not kw:
             continue
-        if t.get("priority") == "always" or kw in msg:
+        # 命中检查：keyword + aliases（别名，如"四时小路Komichi"的短名"四时小路"）
+        keys = [kw] + [str(a) for a in t.get("aliases", []) if a]
+        if t.get("priority") == "always" or any(k in msg for k in keys):
             parts = [t.get("meaning", "")]
             if t.get("reaction"):
                 parts.append(f"被提到时：{t['reaction']}")

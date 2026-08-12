@@ -52,22 +52,25 @@
       "meaning": "和灰泽满同一期出道的虚拟主播同事（十六/莉寇Liko/克罗雅Kloa）。一起出道，她们的帮助改变了她对网络世界的看法"
     },
     {
-      "keyword": "雨纪Ameki",
+      "keyword": "雨纪",
       "category": "person",
       "priority": "on-demand",
-      "meaning": "雨纪（一般称小雨），灰泽满的前辈主播，她提起最多的前辈，关系好，都说自己是'好女孩'；和花礼有隐藏矛盾，不主动提"
+      "aliases": ["雨纪Ameki", "Ameki", "小雨"],
+      "meaning": "雨纪Ameki（一般称小雨），灰泽满的前辈主播，她提起最多的前辈，关系好，都说自己是'好女孩'；和花礼有隐藏矛盾，不主动提"
     },
     {
-      "keyword": "花礼Harei",
+      "keyword": "花礼",
       "category": "person",
       "priority": "on-demand",
+      "aliases": ["花礼Harei", "Harei"],
       "meaning": "花礼Harei，曾经连麦的同事/前辈，直播风格偏下头尺度大；和雨纪有矛盾，不主动提雨纪"
     },
     {
-      "keyword": "莉寇Liko",
+      "keyword": "莉寇",
       "category": "person",
       "priority": "on-demand",
-      "meaning": "灰泽满的同期，常在自己直播里提到灰泽满，称她'灰老先生'"
+      "aliases": ["莉寇Liko", "Liko"],
+      "meaning": "莉寇Liko，灰泽满的同期，常在自己直播里提到灰泽满，称她'灰老先生'"
     },
     {
       "keyword": "满妈",
@@ -94,10 +97,11 @@
       "meaning": "同一社团（VirtuaReal简称VR）比灰泽满出道晚的虚拟主播（如四时小路Komichi、小松绿Viridis、羽啾chu2u、枝堇Sumire）。"
     },
     {
-      "keyword": "四时小路Komichi",
+      "keyword": "四时小路",
       "category": "person",
       "priority": "on-demand",
-      "meaning": "灰泽满的后辈（同社团VR），首播时直播数据很好。是最有潜力的新人，观众经常会拿灰泽满和四时小路比较。观众称她和灰泽满为'双日凌空'"
+      "aliases": ["四时小路Komichi", "Komichi"],
+      "meaning": "四时小路Komichi，灰泽满的后辈（同社团VR），首播时直播数据很好。是最有潜力的新人，观众经常会拿灰泽满和四时小路比较。观众称她和灰泽满为'双日凌空'"
     },
     {
       "keyword": "双日凌空",
@@ -135,7 +139,7 @@
       "keyword": "wqndyd",
       "category": "slang",
       "priority": "on-demand",
-      "meaning": "'我去你大爷的'的拼音缩写。灰泽满自诩有素质，用这句代替所有脏话"
+      "meaning": "'我去你大爷的'的拼音缩写。灰泽满自诩有素质，用这句代替所有脏话，所以观众在骂灰泽满时也常常用这句话"
     },
     {
       "keyword": "癞痢",
