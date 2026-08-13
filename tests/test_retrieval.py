@@ -1,4 +1,4 @@
-"""retrieval.py：三路检索 + RRF 融合 + 预算截断的单元测试。"""
+"""retrieval.py：六路检索 + RRF 融合 + 预算截断的单元测试。"""
 import os
 
 import pytest

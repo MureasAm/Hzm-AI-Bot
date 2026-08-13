@@ -1,11 +1,16 @@
-"""V3 检索抽象层：三路检索 + RRF 融合 + 预算控制。
+"""检索抽象层：六路检索 + RRF 融合 + 预算控制。
 
-三路检索（全部同步 CPU，query 向量由调用方传入，全程只调 1 次 embedding）：
-- corpus        直播记忆（persona/world/corpus_vectors.json）
-- voice_sample  风格样本（persona/speech/voice_sample_vectors.json）
-- behavior      行为触发（persona/behavior/trigger_vectors.json）
+六路来源（全部同步 CPU，query 向量由调用方传入，全程只调 1 次 embedding）：
+- corpus        背景记忆（persona/world/corpus_vectors.json）        → 走 RRF
+- voice_sample  风格样本（persona/speech/voice_sample_vectors.json） → 走 RRF
+- behavior      行为触发（persona/behavior/trigger_vectors.json）    → 走 RRF
+- phrase        措辞指纹（persona/speech/phrase_vectors.json）       → 走 RRF
+- preference    偏好事实（persona/world/preference_vectors.json）    → 命中才带，不走 RRF
+- core_story    核心记忆（persona/world/core_story_vectors.json）    → 命中才带，不走 RRF
 
-融合后按字符预算截断，只注入本轮真正相关的信息。
+corpus/voice_sample/behavior/phrase 四路走加权 RRF 融合（score = w/(k+rank)），
+再条数截断 + 字符预算截断，只注入本轮真正相关的信息；
+preference/core_story 是身份事实层，命中才带、不占检索预算。
 """
 import os
 import json

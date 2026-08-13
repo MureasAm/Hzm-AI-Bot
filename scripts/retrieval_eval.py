@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""检索层评测：量化五路检索（corpus/voice_sample/behavior/phrase + preference/core_story）
+"""检索层评测：量化六路检索（corpus/voice_sample/behavior/phrase 走 RRF + preference/core_story 命中才带）
 在不同 query 下的命中率，让阈值调参从"人肉肉眼看"变成"可测量的回归"。
 
 用法：

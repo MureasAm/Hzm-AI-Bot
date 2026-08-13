@@ -25,8 +25,8 @@
 - 删掉全部数字配额与语气词详解，保留核心人格/说话节奏/自我称呼/行为反应/脆弱时刻
 - 实测灵性明显提升；删除"按互动次数分关系等级"机制，默认当熟人
 
-### V3：五路融合检索（按需注入）
-- 新增 `retrieval.py`：corpus/voice_sample/behavior/phrase 四路向量检索 + RRF 加权融合 + 预算截断；长期/短期记忆两路确定性注入
+### V3：多路融合检索（按需注入）
+- 新增 `retrieval.py`：corpus/voice_sample/behavior/phrase 四路向量检索 + RRF 加权融合 + 预算截断；长期/短期记忆两路确定性注入（后扩为六路：+偏好/核心记忆）
 - query 全程只调 1 次 embedding，四路共用；预计算向量缓存
 
 ### V3.1：措辞指纹库 + 样本分层 + 长度控制
@@ -72,7 +72,7 @@
 - 测试 139 个全过
 
 ### V5.4（2026-08-11）：表情消息处理 + behaviors/voice 样本扩充
-- **表情消息识别与处理**：纯表情消息（emoji / QQ表情码 `[表情：xx]`）走独立路径——① probe 扩充时**按表情标准含义识别**（😅=无语/尴尬、😭=委屈/哭，不从对话历史臆测，曾误判😅为"傲娇调侃"）；② **跳过五路语义检索**（表情不表达话题，😭曾被命中"被夸"样本）；③ 注入专门提示：按情绪回应并体现态度（无语→攻击性反击"感觉你不是很服气？"、委屈→心软安慰但**不套当前话题模板**，曾硬接"夸你可爱"）
+- **表情消息识别与处理**：纯表情消息（emoji / QQ表情码 `[表情：xx]`）走独立路径——① probe 扩充时**按表情标准含义识别**（😅=无语/尴尬、😭=委屈/哭，不从对话历史臆测，曾误判😅为"傲娇调侃"）；② **跳过六路语义检索**（表情不表达话题，😭曾被命中"被夸"样本）；③ 注入专门提示：按情绪回应并体现态度（无语→攻击性反击"感觉你不是很服气？"、委屈→心软安慰但**不套当前话题模板**，曾硬接"夸你可爱"）
 - **behaviors samples 补充**（走"挑话轮→初筛→精修→convert→再筛→写入"流程）：冷场补"群冷场大王/直播间没人说话尴尬"4 条、感性补"此生无憾/打破网络世界妖魔化"2 条、被夸补"生日/反响"2 条、被质疑补"周表"2 条、立Flag补"早起"2 条；触发-响应从指令式升级为"指令+samples 真人示范"
 - **voice_samples 扩充**：0807 生日场新增 birth_1~8 / peer_1~7 共 15 条（生日祝福反应 + 同行/前辈关系，填补原有缺口）
 - **素材复用规则**：behaviors samples 尽量不复用 voice_samples 已有样本，避免同话题双注入（H1 同期祝福因已在 voice 而剔除）
@@ -150,7 +150,7 @@
 - `routing.py` 硬匹配路由（LEGENDARY 梗库双路由 + 行为意图分类 L3）
 - `config.py` 配置读取 + API 客户端工厂（_get_clients / _get_model_name）
 - `persona.py` 人格加载 + trigger 向量 + terms 名词库
-- `retrieval.py` 五路检索 + RRF 融合 + 预算 + 关键词门
+- `retrieval.py` 六路检索 + RRF 融合 + 预算 + 关键词门
 - `rag.py` embedding + 余弦
 - `memory.py` / `memory_manager.py` 短期 + 长期记忆
 - `session_memory.py` 会话级记忆（话题追踪 + 短query扩充）
@@ -168,7 +168,7 @@ VOICE_SAMPLE_TOP_N = 3         # few-shot 甜蜜点 2-5
 ```
 
 ### 检索层
-1 次 embedding → 四路检索 → RRF 融合（behavior 1.5 > phrase 1.2 > corpus/voice 1.0）→ topk → 预算截断。
+1 次 embedding → 六路检索（corpus/voice/behavior/phrase 走 RRF + preference/core_story 命中才带）→ RRF 融合（behavior 1.5 > phrase 1.2 > corpus/voice 1.0）→ topk → 预算截断。
 
 ---
 
