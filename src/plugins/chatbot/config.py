@@ -1,11 +1,17 @@
-"""NoneBot 全局配置读取助手（避免各模块重复 get_driver 样板）。
+"""NoneBot 全局配置读取助手 + API 客户端工厂。
 
 .env.prod 里的 `WEATHER_KEY` 会被 NoneBot 小写化为 config 属性 `weather_key`。
-此处统一提供带默认值的读取，供感知模块（context_probe / vision / bili_bridge）使用。
+此处统一提供带默认值的读取，供感知模块（context_probe / vision / bili_bridge）使用；
+API 客户端工厂（_get_clients / _get_model_name）也在此，core / routing 共用，
+避免 core ↔ routing 循环依赖。
 """
 from nonebot import get_driver
+from openai import AsyncOpenAI
 
-from .constants import VISION_MODEL, PUSH_INTERVAL, WEATHER_BASE_URL
+from .constants import (
+    VISION_MODEL, PUSH_INTERVAL, WEATHER_BASE_URL,
+    DEEPSEEK_BASE_URL, ZHIPU_BASE_URL, DEFAULT_MODEL,
+)
 
 
 def get_config(name: str, default=None):
@@ -15,6 +21,43 @@ def get_config(name: str, default=None):
         return value if value not in (None, "") else default
     except Exception:
         return default
+
+
+# ==================== API 客户端（惰性初始化） ====================
+# 延迟到首次使用时才读取 config 并创建客户端，
+# 保证模块可被独立导入（便于测试），不依赖 NoneBot 已初始化。
+_clients_cache = None
+
+
+def _get_clients():
+    """返回 (deepseek_client, zhipu_client)，首次调用时创建。"""
+    global _clients_cache
+    if _clients_cache is not None:
+        return _clients_cache
+
+    _global_config = get_driver().config
+    deepseek_api_key = getattr(_global_config, "openai_api_key", None)
+    deepseek_api_base = getattr(_global_config, "openai_api_base", DEEPSEEK_BASE_URL)
+    zhipu_api_key = getattr(_global_config, "zhipu_api_key", None)
+
+    if not deepseek_api_key:
+        raise ValueError("❌ 未检测到 OPENAI_API_KEY")
+    if not zhipu_api_key:
+        raise ValueError("❌ 未检测到 ZHIPU_API_KEY")
+
+    _clients_cache = (
+        AsyncOpenAI(api_key=deepseek_api_key, base_url=deepseek_api_base),
+        AsyncOpenAI(api_key=zhipu_api_key, base_url=ZHIPU_BASE_URL),
+    )
+    return _clients_cache
+
+
+def _get_model_name() -> str:
+    """解析对话模型名：优先 config.openai_model，回退到 DEFAULT_MODEL。"""
+    try:
+        return getattr(get_driver().config, "openai_model", None) or DEFAULT_MODEL
+    except Exception:
+        return DEFAULT_MODEL
 
 
 def get_weather_base_url() -> str:

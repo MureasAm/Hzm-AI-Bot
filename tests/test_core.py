@@ -1,51 +1,52 @@
 """core 层：图片消息记忆记录 + 图片消息处理逻辑的单元测试。"""
 from src.plugins.chatbot import core
 from src.plugins.chatbot import rag
+from src.plugins.chatbot import reply_style
 
 
 class TestSplitReply:
     def test_short_reply_not_split(self):
-        assert core.split_reply("好的") == ["好的"]
+        assert reply_style.split_reply("好的") == ["好的"]
 
     def test_single_sentence_not_split(self):
-        assert core.split_reply("今天天气真不错啊") == ["今天天气真不错啊"]
+        assert reply_style.split_reply("今天天气真不错啊") == ["今天天气真不错啊"]
 
     def test_short_clauses_merge_to_one(self):
         # 短句+短句合并成一条自然消息，不再拆成碎条（"哦？"不该单独成条）
-        assert core.split_reply("今天好冷。你那边呢？") == ["今天好冷。你那边呢？"]
+        assert reply_style.split_reply("今天好冷。你那边呢？") == ["今天好冷。你那边呢？"]
 
     def test_ellipsis_short_leadin_not_split(self):
         # 省略号前文太短（"唱拉了……"是犹豫前缀）不切，避免把"灰泽满……"单独发一条
-        assert core.split_reply("唱拉了……灰泽满先关上门悄悄听会儿。") == \
+        assert reply_style.split_reply("唱拉了……灰泽满先关上门悄悄听会儿。") == \
             ["唱拉了……灰泽满先关上门悄悄听会儿"]
 
     def test_trailing_short_text_merged(self):
         # 结尾短段（嗯）并入前段，不单独成条
-        assert core.split_reply("今天好冷。嗯", min_len=0) == ["今天好冷。嗯"]
+        assert reply_style.split_reply("今天好冷。嗯", min_len=0) == ["今天好冷。嗯"]
 
     def test_micro_fragments_merge_to_natural(self):
         # 核心：短惊讶碎片（哦？/睡醒了？/那倒是稀奇……）合并成一条自然消息，不再戏剧节拍
-        assert core.split_reply(
+        assert reply_style.split_reply(
             "哦？睡醒了？那倒是稀奇……灰泽满这个点刚准备睡，你却醒了", min_len=0
         ) == ["哦？睡醒了？那倒是稀奇……", "灰泽满这个点刚准备睡，你却醒了"]
 
     def test_min_len_respected(self):
         # 低于 min_len 不拆；末尾句号仍会被去掉
-        assert core.split_reply("好。", min_len=10) == ["好"]
+        assert reply_style.split_reply("好。", min_len=10) == ["好"]
 
     def test_comma_split_kept_when_long(self):
         # 长句的逗号拆分保留（只有短碎片才并回）
-        assert core.split_reply(
+        assert reply_style.split_reply(
             "灰泽满今天特别想出去玩，但是作业还没写完，明天还得早起去上第一节课", min_len=0
         ) == ["灰泽满今天特别想出去玩，但是作业还没写完", "明天还得早起去上第一节课"]
 
     def test_ellipsis_hesitation_preserved(self):
         # 省略号表"无语/语气"（后面没新内容）不切
-        assert core.split_reply("啊……这……", min_len=0) == ["啊……这……"]
+        assert reply_style.split_reply("啊……这……", min_len=0) == ["啊……这……"]
 
     def test_ellipsis_boundary_split_kept_when_both_long(self):
         # 省略号前后都有足够内容（都≥12字）时仍切分
-        assert core.split_reply(
+        assert reply_style.split_reply(
             "灰泽满今天嗓子特别不舒服……明天就想早点下播休息一下", min_len=0
         ) == ["灰泽满今天嗓子特别不舒服……", "明天就想早点下播休息一下"]
 
@@ -54,31 +55,31 @@ class TestEchoReply:
     """复读机防护：检测新回复是否复读最近自己说过的话。"""
 
     def test_exact_duplicate(self):
-        assert core._is_echo_reply(
+        assert reply_style.is_echo_reply(
             "灰泽满刚醒，你倒是精神好", ["灰泽满刚醒，你倒是精神好"]
         ) is True
 
     def test_shared_tail(self):
         # "你这话说的……灰泽满刚醒" 复读后半句，最长公共子串覆盖 >60%
-        assert core._is_echo_reply(
+        assert reply_style.is_echo_reply(
             "你这话说的……灰泽满刚醒，你倒是精神好", ["灰泽满刚醒，你倒是精神好"]
         ) is True
 
     def test_reverse_order(self):
         # 完整复读句（>8字）在更长旧句里，也判为复读
-        assert core._is_echo_reply(
+        assert reply_style.is_echo_reply(
             "灰泽满刚醒，你倒是精神好", ["大早上的玩这个……灰泽满刚醒，你倒是精神好"]
         ) is True
 
     def test_short_not_flagged(self):
         # 太短不判（"晚安" 常见短句，避免误伤）
-        assert core._is_echo_reply("晚安", ["晚安，做个好梦"]) is False
+        assert reply_style.is_echo_reply("晚安", ["晚安，做个好梦"]) is False
 
     def test_different_not_flagged(self):
-        assert core._is_echo_reply("今天天气真不错", ["灰泽满刚醒，你倒是精神好"]) is False
+        assert reply_style.is_echo_reply("今天天气真不错", ["灰泽满刚醒，你倒是精神好"]) is False
 
     def test_empty_not_flagged(self):
-        assert core._is_echo_reply("", ["灰泽满刚醒"]) is False
+        assert reply_style.is_echo_reply("", ["灰泽满刚醒"]) is False
 
 
 class TestSummarizeBatch:
@@ -125,55 +126,55 @@ class TestBatchSummaryInjection:
 
 class TestCleanReply:
     def test_strip_leading_prefix(self):
-        assert core.clean_reply("（咽口水）你这又是来投毒的吧……") == "你这又是来投毒的吧……"
+        assert reply_style.clean_reply("（咽口水）你这又是来投毒的吧……") == "你这又是来投毒的吧……"
 
     def test_strip_multiple_leading(self):
-        assert core.clean_reply("（心虚）（小声）灰泽满最近很忙……") == "灰泽满最近很忙……"
+        assert reply_style.clean_reply("（心虚）（小声）灰泽满最近很忙……") == "灰泽满最近很忙……"
 
     def test_cap_to_one_parenthetical(self):
         # "a（小声）b（心虚）c" → 保留第一个（小声），去掉其余
-        assert core.clean_reply("a（小声）b（心虚）c") == "a（小声）bc"
+        assert reply_style.clean_reply("a（小声）b（心虚）c") == "a（小声）bc"
 
     def test_keeps_single_inline(self):
-        assert core.clean_reply("刚啃完面包，别提了（咽口水）") == "刚啃完面包，别提了（咽口水）"
+        assert reply_style.clean_reply("刚啃完面包，别提了（咽口水）") == "刚啃完面包，别提了（咽口水）"
 
     def test_no_change_when_clean(self):
-        assert core.clean_reply("今天天气真不错啊") == "今天天气真不错啊"
+        assert reply_style.clean_reply("今天天气真不错啊") == "今天天气真不错啊"
 
     def test_all_stripped_returns_original(self):
-        assert core.clean_reply("（咽口水）") == "（咽口水）"
+        assert reply_style.clean_reply("（咽口水）") == "（咽口水）"
 
     def test_ellipsis_ascii_normalized(self):
         # 英文三点 ... 归一成中文省略号；开头"好冷……"短语+省略号犹豫 → 逗号
-        assert core.clean_reply("好冷……真的...手都僵了") == "好冷，真的……手都僵了"
+        assert reply_style.clean_reply("好冷……真的...手都僵了") == "好冷，真的……手都僵了"
 
     def test_ellipsis_preserves_double(self):
         # "啊……这……" 无语表达，2 次省略号在额度内，原样保留
-        assert core.clean_reply("啊……这……") == "啊……这……"
+        assert reply_style.clean_reply("啊……这……") == "啊……这……"
 
     def test_ellipsis_capped_keeps_two(self):
         # 刷屏式省略号，只保留前 2 个
-        assert core.clean_reply("a……b……c……d……") == "a……b……cd"
+        assert reply_style.clean_reply("a……b……c……d……") == "a……b……cd"
 
     def test_ellipsis_long_dots_normalized(self):
-        assert core.clean_reply("冷死了...........") == "冷死了……"
+        assert reply_style.clean_reply("冷死了...........") == "冷死了……"
 
 
 class TestSelfPronounCleanup:
     """clean_reply 的"她/他自指兜底"：灰泽满用名字自称，不该出现"她"指自己。"""
 
     def test_self_she_replaced(self):
-        assert core.clean_reply("她转开视线，声音闷闷的：行了") == \
+        assert reply_style.clean_reply("她转开视线，声音闷闷的：行了") == \
             "灰泽满转开视线，声音闷闷的：行了"
 
     def test_other_person_she_preserved(self):
         # 出现其他第三人称名字（女同学/满妈），"她"指别人，不动
-        assert "她" in core.clean_reply("女同学递了巧克力，她笑了")
-        assert "她" in core.clean_reply("满妈说让她早点睡")
+        assert "她" in reply_style.clean_reply("女同学递了巧克力，她笑了")
+        assert "她" in reply_style.clean_reply("满妈说让她早点睡")
 
     def test_qita_not_corrupted(self):
         # "其他"里的"他"是词不是代词，不能替换成灰泽满
-        out = core.clean_reply("其他的也别说了，就聊这个吧")
+        out = reply_style.clean_reply("其他的也别说了，就聊这个吧")
         assert "其他" in out
         assert "灰泽满" not in out
 
@@ -181,13 +182,13 @@ class TestSelfPronounCleanup:
         reply = ("灰泽满瞥了一眼屏幕，耳根有点热\n这人怎么还带图片攻击的……\n"
                  "她转开视线，声音闷闷的：行了行了\n"
                  "（小声）你这话倒是说得她心里挺暖的")
-        out = core.clean_reply(reply)
+        out = reply_style.clean_reply(reply)
         assert "她" not in out
         assert "灰泽满转开视线" in out
         assert "说得灰泽满心里挺暖" in out
 
     def test_male_self_reference_replaced(self):
-        assert "灰泽满" in core.clean_reply("他心里其实挺高兴的")
+        assert "灰泽满" in reply_style.clean_reply("他心里其实挺高兴的")
 
 
 class TestPreferences:
@@ -382,25 +383,25 @@ class TestEmotionOnlyQuery:
     """纯情绪补全句检测：'可惜🤭'被 probe 补全成'用户发了个X的表情'时跳过语义检索。"""
 
     def test_emoji_expansion_detected(self):
-        assert core._is_emotion_only_query("用户发了个偷笑的表情") is True
-        assert core._is_emotion_only_query("用户发了个无语的表情") is True
+        assert reply_style.is_emotion_only_query("用户发了个偷笑的表情") is True
+        assert reply_style.is_emotion_only_query("用户发了个无语的表情") is True
 
     def test_normal_query_not_detected(self):
-        assert core._is_emotion_only_query("可惜🤭") is False
-        assert core._is_emotion_only_query("你唱歌好好听") is False
-        assert core._is_emotion_only_query("用户问灰泽满喜欢什么水果") is False
-        assert core._is_emotion_only_query("") is False
+        assert reply_style.is_emotion_only_query("可惜🤭") is False
+        assert reply_style.is_emotion_only_query("你唱歌好好听") is False
+        assert reply_style.is_emotion_only_query("用户问灰泽满喜欢什么水果") is False
+        assert reply_style.is_emotion_only_query("") is False
 
 
 class TestSplitDelay:
     def test_bounds(self):
         for _ in range(50):
-            d = core.split_delay("今天天气不错")
+            d = reply_style.split_delay("今天天气不错")
             assert core.SPLIT_DELAY_MIN_MS / 1000 * 0.85 <= d <= core.SPLIT_DELAY_MAX_MS / 1000 * 1.15
 
     def test_longer_part_never_slower_than_min(self):
         # 长文本延迟应显著高于短文本的下限
-        assert core.split_delay("一" * 50) > core.SPLIT_DELAY_MIN_MS / 1000
+        assert reply_style.split_delay("一" * 50) > core.SPLIT_DELAY_MIN_MS / 1000
 
 
 class TestComposeRecordMsg:

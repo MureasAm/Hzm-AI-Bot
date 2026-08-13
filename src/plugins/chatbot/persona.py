@@ -1,4 +1,4 @@
-"""人格规则加载：traits/styles/behaviors + trigger 向量缓存。
+"""人格规则加载：traits/styles/behaviors + trigger 向量缓存 + terms 名词库。
 
 trigger 向量已离线预计算到 trigger_vectors.json，运行时读缓存。
 """
@@ -6,8 +6,27 @@ import json
 
 from .constants import (
     TRAITS_FILE, STYLES_FILE, BEHAVIORS_FILE,
-    TRIGGER_VECTOR_FILE,
+    TRIGGER_VECTOR_FILE, TERMS_FILE,
 )
+
+
+_terms_cache = None
+
+
+def load_terms() -> list:
+    """加载 persona/world/terms.json 名词库（模块级缓存）。"""
+    global _terms_cache
+    if _terms_cache is not None:
+        return _terms_cache
+    if not TERMS_FILE.exists():
+        _terms_cache = []
+        return _terms_cache
+    try:
+        data = json.loads(TERMS_FILE.read_text(encoding="utf-8"))
+        _terms_cache = data.get("terms", []) if isinstance(data, dict) else []
+    except (json.JSONDecodeError, OSError):
+        _terms_cache = []
+    return _terms_cache
 
 
 def load_persona_rules():

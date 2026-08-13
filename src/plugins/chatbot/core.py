@@ -12,7 +12,7 @@ from nonebot import get_driver
 from openai import AsyncOpenAI
 
 from .constants import (
-    SYSTEM_PROMPT_FILE, DEEPSEEK_BASE_URL, ZHIPU_BASE_URL, TERMS_FILE,
+    SYSTEM_PROMPT_FILE, DEEPSEEK_BASE_URL, ZHIPU_BASE_URL,
     DEFAULT_MODEL, THINKING_DISABLED,
     CHAT_TEMPERATURE, CHAT_FREQUENCY_PENALTY, CHAT_MAX_TOKENS,
     MEMORY_EXTRACT_TEMPERATURE, MEMORY_EXTRACT_MAX_TOKENS,
@@ -35,214 +35,15 @@ from .constants import (
     SPLIT_DELAY_MIN_MS, SPLIT_DELAY_MAX_MS, SPLIT_DELAY_JITTER,
 )
 from . import context_probe
+from .routing import (
+    LEGENDARY_REPLIES, LEGENDARY_CONFIRMS, legendary_confirmed, classify_behavior,
+)
+from .reply_style import (
+    split_reply, split_delay, clean_reply, is_echo_reply, is_emotion_only_query, _trim_text,
+)
 from .session_memory import (
     get_session, probe_session, build_session_context, is_emoji_msg,
 )
-
-# ==================== 💬 经典梗硬匹配库 ====================
-LEGENDARY_REPLIES = {
-    "爱不爱绿冻": [
-        "早就说过很爱了...你要是感觉不到，灰泽满也不知道该怎么证明了",
-        "爱是也可以的，不爱也可以的~（但其实是爱的，别不信）",
-    ],
-    "在和谁说话": [
-        "在和..在和你说话哦~",
-        "在和弹幕说话~"
-    ],
-    # "爱不爱"的跟进句：绿冻说感觉不到爱（带 LLM 确认，结合上下文判断是不是指感情）
-    "没感觉": [
-        "那灰泽满要怎么表现你才感觉得到？抱一下？",
-        "感觉不到吗……那灰泽满多说几次，真的很爱",
-    ],
-    "感觉不": [
-        "感觉不出来？那灰泽满只能天天说了，说到你信为止",
-    ],
-    # "绿冻永远是第二选择"（真实直播梗）：语义检索够不到口语化关系提问（实测~0.55），
-    # 用关键词子串精确触发。回复从她的原话出发。
-    "排第几": [
-        "绿冻永远是灰泽满的第二选择，这还用排吗",
-        "别排了，绿冻永远是灰泽满的第二选择",
-    ],
-    "你的粉丝": [
-        "不只是粉丝……绿冻永远是灰泽满的第二选择",
-        "谁说是普通粉丝了，绿冻永远是灰泽满的第二选择",
-    ],
-    "在乎我": [
-        "在乎的，绿冻永远是灰泽满的第二选择",
-        "绿冻永远是灰泽满的第二选择，怎么可能不在乎",
-    ],
-    "我重要": [
-        "重要啊，绿冻永远是灰泽满的第二选择",
-        "怎么会不重要，绿冻永远是灰泽满的第二选择",
-    ],
-    "绿冻算什么": [
-        "绿冻算什么……绿冻是灰泽满的第二选择啊",
-    ],
-    # 问"能不能叫你妈妈"（征求/求宠）：才16岁怎么做父母（先于"妈妈"命中，dict 顺序靠前）
-    "叫你妈妈": [
-        "灰泽满才16岁，怎么做父母啊",
-        "16岁当妈？灰泽满自己还是小孩呢",
-        "别别别，灰泽满担不起这个称呼",
-    ],
-    "叫你一声": [
-        "灰泽满才16岁，怎么做父母啊",
-        "16岁当妈？灰泽满自己还是小孩呢",
-    ],
-    "叫我妈妈": [
-        "灰泽满才16岁，怎么做父母啊",
-        "16岁当妈？灰泽满自己还是小孩呢",
-    ],
-    # 直接喊"妈妈"（玩梗撒娇，不征求意见）：单独回个😅
-    "妈妈": [
-        "😅",
-        "……😅",
-    ],
-}
-
-# ==================== 梗库双路由：LLM 语境确认 ====================
-# 仅宽泛关键词配确认（防误触发）；'排第几''绿冻算什么'等特定词不配。
-# 每个 trigger → 一个确认 prompt 模板；含 {context} 的会附带最近对话（判断需要上下文的语境）。
-_CONFIRM_SECOND = (
-    "判断这条消息是否属于'绿冻向灰泽满表达自我怀疑：自己只是普通粉丝、不被在乎、"
-    "在灰泽满心里没有位置'的语境，需要灰泽满用'绿冻永远是第二选择'来安抚。\n\n"
-    "属于（回复'是'）的例子：\n"
-    "- 我在你心里排第几\n- 我只是你的粉丝吧\n- 你是不是根本不在乎我\n- 你觉得我重要吗\n"
-    "- 我只是个路人而已吧\n- 我在你心里有位置吗\n\n"
-    "不属于（回复'否'）的例子：\n"
-    "- 你的粉丝好热情啊（是在夸粉丝，不是绿冻自我怀疑）\n"
-    "- 这个任务我重要吗（指任务，不是绿冻本人）\n"
-    "- 你还在乎我们宿舍吗（指宿舍/他人，不是绿冻本人）\n\n"
-    "结合最近对话判断语境——如果最近在聊感情/关系/被冷落，消息里的'重要吗''在乎吗'就是指灰泽满对TA的感情。\n\n"
-    "最近对话：\n{context}\n\n消息：{msg}\n只回复：是 或 否"
-)
-_CONFIRM_LOVE = (
-    "判断这条消息是否在'绿冻质疑灰泽满的感情（爱不爱、在不在乎、能不能感觉到爱）'的语境。\n"
-    "结合最近对话判断——如果最近在聊感情/爱不爱，消息里的'没感觉''感觉不到'就是指感情。\n\n"
-    "属于（回复'是'）的例子：\n"
-    "- 可是我没感觉出来（前面在聊爱不爱）\n- 你说爱我但我感觉不到\n\n"
-    "不属于（回复'否'）的例子：\n"
-    "- 这首歌我没感觉（指歌）\n- 这个菜没味道（指菜）\n\n"
-    "最近对话：\n{context}\n\n消息：{msg}\n只回复：是 或 否"
-)
-_CONFIRM_MOM = (
-    "判断这条消息是否在'绿冻玩梗喊灰泽满妈妈'——把灰泽满当妈/叫妈妈求宠/认妈'的语境，需要灰泽满装傻不接。\n\n"
-    "属于（回复'是'）的例子：\n"
-    "- 妈妈！\n- 喊你一声妈妈行不行\n- 我能叫你妈妈吗\n- 妈！我要抱抱\n\n"
-    "不属于（回复'否'）的例子：\n"
-    "- 我妈让我早点睡（指用户自己的妈妈）\n- 我妈妈叫我睡觉了（指用户自己的妈妈）\n"
-    "- 你妈妈也是这么说你的吗（指灰泽满的妈妈/满妈）\n"
-    "- 帮我妈个忙（'妈'是动词，非称呼灰泽满）\n\n"
-    "最近对话：\n{context}\n\n消息：{msg}\n只回复：是 或 否"
-)
-
-LEGENDARY_CONFIRMS = {
-    "你的粉丝": _CONFIRM_SECOND,
-    "在乎我": _CONFIRM_SECOND,
-    "我重要": _CONFIRM_SECOND,
-    "没感觉": _CONFIRM_LOVE,
-    "感觉不": _CONFIRM_LOVE,
-    "妈妈": _CONFIRM_MOM,
-}
-
-
-async def _legendary_confirmed(user_msg: str, prompt_template: str, history: str = "") -> bool:
-    """LLM 判断关键词命中的消息是否真是目标梗的语境（双路由第二层，防误触发）。
-
-    关键词命中是低频事件，为它加一次便宜 LLM 判断成本可控；确认失败默认放行（不阻塞）。
-    history 用于需要上下文的确认（如'没感觉出来'是否指感情）。
-    """
-    try:
-        content = prompt_template
-        if "{context}" in content:
-            content = content.replace("{context}", history or "（无）").replace("{msg}", user_msg)
-        else:
-            content = content.replace("{msg}", user_msg)
-        deepseek_client, _ = _get_clients()
-        resp = await deepseek_client.chat.completions.create(
-            model=_get_model_name(),
-            messages=[{"role": "user", "content": content}],
-            temperature=0,
-            max_tokens=10,
-            **THINKING_DISABLED,
-        )
-        return "是" in (resp.choices[0].message.content or "")
-    except Exception as e:
-        print(f"⚠️ 梗确认失败（默认放行）: {e}")
-        return True
-
-
-# ==================== 🎭 行为意图分类（L3：LLM 判意图，不再用 embedding 猜） ====================
-# 背景：embedding 聚的是"句式"不是"意图"——'灰泽满你唱歌好听'（夸）和
-# '灰泽满你怎么又迟到了'（质问）句式相同，在向量空间挤成一团，余弦匹配会把
-# 夸奖误判成质疑（实测 0.70+）。治本：行为归属交给 LLM 理解（复用 LEGENDARY 双路由的
-# LLM 判定模式），判别性词汇（敷衍/骗/鸽/迟到）仍作关键词兜底。
-# 行为判定用原始用户消息 + 最近对话，一次调用（temperature 0），失败降级为不触发。
-
-BEHAVIOR_CLASSIFY_PROMPT = """你是灰泽满的行为意图分类器。判断用户刚发的这条消息是否明确落入某个"行为触发场景"。只有明确匹配才选，拿不准一律 null（宁可不触发，不误触发）。
-
-可选行为（name：触发情境）：
-{behavior_defs}
-
-判定要点：
-- 只看用户这条消息本身的内容和语气，结合最近对话判断语境。
-- "被夸"：消息确实在夸灰泽满（声音/外貌/才能/表现/生日祝福/唱歌好听等）。
-- "被质疑/失约被催"：用户在质问、戳穿或催问灰泽满（骗人/敷衍/迟到/没播/鸽）。
-- "被越界"：玩笑/幻想触及个人边界（黄段子/低俗/过度幻想等）。
-- "冷场"：提及或营造社交尴尬/冷场，要求灰泽满救场。
-- "立Flag/感性流露/主动抛梗"：消息必须明显对应那个情境（立Flag=灰泽满刚立承诺被打脸；感性流露=真诚感谢/脆弱；主动抛梗=明确要求灰泽满抛话题/来段子）。
-- 普通闲聊、提问、寒暄、表情、玩梗 → null。
-- 拿不准 → null。
-
-最近对话：
-{history}
-
-用户消息：{user_msg}
-
-只输出 JSON：{{"behavior": "<可选行为name>" 或 null}}"""
-
-
-async def classify_behavior(deepseek_client, user_msg: str, history_text: str, behaviors: list) -> str:
-    """LLM 判定用户消息落入哪个行为场景；拿不准或失败返回空串（不触发任何行为）。
-
-    返回的行为名必须是 behaviors 里的真实 name（防模型编造）。
-    """
-    if not behaviors or not user_msg:
-        return ""
-    # 行为定义带真实粉丝话样例：领域黑话（如"黑黑的/造黄桃"是越界梗）光靠 trigger 描述 LLM 认不出，
-    # 给真实样例当参照（素材驱动），分类更准（实测 b9 越界从漏判变命中）。
-    defs = []
-    for b in behaviors:
-        if not b.get("name"):
-            continue
-        line = f"- {b['name']}：{b.get('trigger', '')}"
-        for s in b.get("samples", [])[:2]:
-            u = (s.get("user") or "").strip()
-            if u:
-                line += f"\n    例：{u}"
-        defs.append(line)
-    prompt = BEHAVIOR_CLASSIFY_PROMPT.format(
-        behavior_defs="\n".join(defs), history=history_text or "（无）", user_msg=user_msg,
-    )
-    try:
-        resp = await deepseek_client.chat.completions.create(
-            model=_get_model_name(),
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0,
-            max_tokens=20,
-            **THINKING_DISABLED,
-        )
-        content = (resp.choices[0].message.content or "").strip()
-        if "```json" in content:
-            content = content.split("```json")[1].split("```")[0].strip()
-        elif "```" in content:
-            content = content.split("```")[1].split("```")[0].strip()
-        parsed = json.loads(content)
-        behavior = str(parsed.get("behavior") or "").strip()
-        names = {b.get("name") for b in behaviors}
-        return behavior if behavior in names else ""
-    except Exception as e:
-        print(f"⚠️ 行为意图分类失败（降级不触发）: {e}")
-        return ""
 
 
 # ==================== 🎭 基础人设提示词 ====================
@@ -253,192 +54,8 @@ else:
     raise FileNotFoundError(f"❌ 未找到 {SYSTEM_PROMPT_FILE}")
 
 # ==================== 🛠️ API 客户端（惰性初始化） ====================
-# 延迟到首次使用时才读取 config 并创建客户端，
-# 保证模块可被独立导入（便于测试），不依赖 NoneBot 已初始化。
-_clients_cache = None
-
-
-def _get_clients():
-    """返回 (deepseek_client, zhipu_client)，首次调用时创建。"""
-    global _clients_cache
-    if _clients_cache is not None:
-        return _clients_cache
-
-    _global_config = get_driver().config
-    deepseek_api_key = getattr(_global_config, "openai_api_key", None)
-    deepseek_api_base = getattr(_global_config, "openai_api_base", DEEPSEEK_BASE_URL)
-    zhipu_api_key = getattr(_global_config, "zhipu_api_key", None)
-
-    if not deepseek_api_key:
-        raise ValueError("❌ 未检测到 OPENAI_API_KEY")
-    if not zhipu_api_key:
-        raise ValueError("❌ 未检测到 ZHIPU_API_KEY")
-
-    _clients_cache = (
-        AsyncOpenAI(api_key=deepseek_api_key, base_url=deepseek_api_base),
-        AsyncOpenAI(api_key=zhipu_api_key, base_url=ZHIPU_BASE_URL),
-    )
-    return _clients_cache
-
-
-def _get_model_name() -> str:
-    """解析对话模型名：优先 config.openai_model，回退到 DEFAULT_MODEL。"""
-    try:
-        return getattr(get_driver().config, "openai_model", None) or DEFAULT_MODEL
-    except Exception:
-        return DEFAULT_MODEL
-
-
-def _trim_text(text: str, max_chars: int) -> str:
-    """裁剪长文本，超长加省略号。"""
-    if len(text) <= max_chars:
-        return text
-    return text[:max_chars] + "……"
-
-
-def _lcs_len(a: str, b: str) -> int:
-    """最长公共子串长度（DP，O(n*m)）。复读检测用。"""
-    n, m = len(a), len(b)
-    if n == 0 or m == 0:
-        return 0
-    prev = [0] * (m + 1)
-    best = 0
-    for i in range(1, n + 1):
-        cur = [0] * (m + 1)
-        for j in range(1, m + 1):
-            if a[i - 1] == b[j - 1]:
-                cur[j] = prev[j - 1] + 1
-                if cur[j] > best:
-                    best = cur[j]
-        prev = cur
-    return best
-
-
-def _is_echo_reply(reply: str, recent_bot_replies: list, min_ratio: float = 0.6) -> bool:
-    """判断新回复是否复读了最近自己说过的话（复读机防护）。
-
-    复读是模型对情境相关句的执着（会在短期记忆里看到自己的原话再引用），
-    提示词的【防复读】拦不住，只能确定性检测：与最近回复完全一致，
-    或最长公共子串覆盖较短者的 60% 以上（如"你这话说的……灰泽满刚醒"
-    复读后半句"灰泽满刚醒"）。太短的句子（<8字）不判，避免误伤"晚安"类。
-    """
-    reply = (reply or "").strip()
-    if not reply:
-        return False
-    for old in (recent_bot_replies or [])[-3:]:
-        old = (old or "").strip()
-        if not old:
-            continue
-        if reply == old:
-            return True
-        shorter = min(len(reply), len(old))
-        if shorter < 8:
-            continue
-        if _lcs_len(reply, old) >= shorter * min_ratio:
-            return True
-    return False
-
-
-def _split_sentences(text: str) -> list:
-    """按句末标点切分（。！？）；省略号仅在"前后都有内容"时才当边界。
-
-    省略号常表"无语/语气"（如"啊……这……"）和犹豫前缀（如"灰泽满……"），不能乱切；
-    只有省略号后面跟着新内容（≥5 字）**且前面也有足够内容**（≥4 字）才当停顿边界
-    （如"……那你说说"这类，前文太短就不是边界，避免把"灰泽满……"单独切一条发出去）。
-    """
-    parts = []
-    i = 0
-    for m in re.finditer(r'[。！？]|…+', text):
-        end = m.end()
-        if m.group(0).startswith("…"):
-            rest = text[end:].lstrip()
-            before = text[i:m.start()].rstrip()
-            # 后文太少=语气/无语；前文太短=犹豫前缀（"灰泽满……"），都不是边界
-            if len(rest) < 5 or len(before) < 4:
-                continue
-        parts.append(text[i:end])
-        i = end
-    if i < len(text):
-        parts.append(text[i:])
-    return [p for p in parts if p.strip()]
-
-
-def _limit_commas(parts: list) -> list:
-    """每段至多 1 个逗号；超了从最后一个逗号拆开（逗号去掉），避免长串逗号连句。"""
-    result = []
-    for p in parts:
-        while True:
-            commas = [idx for idx, ch in enumerate(p) if ch in "，,"]
-            if len(commas) < 2:
-                break
-            idx = commas[-1]
-            result.append(p[:idx].strip())
-            p = p[idx + 1:].strip()
-        result.append(p)
-    return [x for x in result if x]
-
-
-def split_reply(reply: str, min_len: int = SPLIT_MIN_LEN,
-                max_parts: int = SPLIT_MAX_PARTS) -> list:
-    """把长回复按句子断开发送（打字感）。短回复/单句不拆，返回单元素列表。
-
-    切分规则：
-    - 句末标点（。！？）切分；省略号仅在后面还有新内容（≥5 字）时才切，保住"啊……"这类无语表达
-    - 逗号限制：每段至多 1 个逗号，超了从最后一个逗号拆开（防长串逗号连句）
-    - 聊天习惯不打句号：切分后去掉句尾"。"（保留？！…）
-    - 超出 max_parts 并入最后一段，避免刷屏
-    """
-    text = reply.strip().rstrip("。")  # 整条回复末尾的句号也去掉
-    if not text or len(text) < min_len:
-        return [text]
-
-    parts = _split_sentences(text)
-    parts = _limit_commas(parts)
-    parts = [p.strip().rstrip("。") for p in parts if p and p.strip()]
-
-    # 纯括号段（（小声嘀咕））并入上一段，避免单独发一条"舞台说明"——它没有实质内容，
-    # 单独发会让对方接不住（实测：单独"（小声嘀咕）"→ 对方问"你在说什么"→ 模型瞎编）
-    merged = []
-    for p in parts:
-        if merged and re.fullmatch(r'[（(][^）)]*[）)]', p):
-            merged[-1] += p
-        else:
-            merged.append(p)
-    parts = merged
-
-    # 短段并入下一段（业界：merge small chunks with neighbors，防"哦？""那倒是稀奇……"
-    # 这种微消息单独成条——按标点机械切碎=表演感/戏剧节拍，短惊讶应是一条自然消息）。
-    # 最后一段过短则并入前一段。
-    merged_short = []
-    i = 0
-    while i < len(parts):
-        if i + 1 < len(parts) and len(parts[i]) < SPLIT_MERGE_MIN_CHARS:
-            parts[i + 1] = parts[i] + parts[i + 1]
-        else:
-            merged_short.append(parts[i])
-        i += 1
-    parts = merged_short
-    if len(parts) > 1 and len(parts[-1]) < SPLIT_MERGE_MIN_CHARS:
-        parts[-2] += parts[-1]
-        parts.pop()
-
-    if len(parts) <= 1:
-        return [text]
-
-    if len(parts) > max_parts:
-        # 超限的分段用换行连接（不能直接拼接——会把两句焊成一句没标点的 run-on，
-        # 实测"好像是媒体研究。灰泽满只想打死自己"被拼成"研究灰泽满只想…"）
-        merged = "\n".join(p for p in parts[max_parts - 1:] if p).strip()
-        parts = parts[:max_parts - 1] + [merged]
-    return parts
-
-
-def split_delay(part_text: str) -> float:
-    """句间发送延迟（秒）：按段落长度模拟打字 + ±15% 随机抖动，避免机械等长。"""
-    ms = SPLIT_DELAY_BASE_MS + SPLIT_DELAY_PER_CHAR_MS * len(part_text)
-    ms = max(SPLIT_DELAY_MIN_MS, min(ms, SPLIT_DELAY_MAX_MS))
-    ms *= random.uniform(1 - SPLIT_DELAY_JITTER, 1 + SPLIT_DELAY_JITTER)
-    return round(ms / 1000.0, 3)
+# 挪到了 config.py（基础设施层）。core 从这里 import，routing 也从 config 取，避免循环依赖。
+from .config import _get_clients, _get_model_name  # noqa: E402
 
 
 async def summarize_batch(msgs: list) -> str:
@@ -475,91 +92,6 @@ async def summarize_batch(msgs: list) -> str:
         return ""
 
 
-# 灰泽满以外的人（第三人称名字）：回复里出现这些名字时，"她/他"可能指别人，不动
-_OTHER_PERSON_NAMES_CACHE = None
-
-
-def _get_other_person_names() -> set:
-    """取"灰泽满以外的人"的名字集合：terms 的 person/family/relation 分类 + 常见补充。
-
-    用于 clean_reply 的"她/他自指兜底"保护——回复里出现这些名字时，"她/他"
-    大概率指这个人而不是灰泽满自己，故不替换。动态取自 terms，新增人物不用记两处。
-    """
-    global _OTHER_PERSON_NAMES_CACHE
-    if _OTHER_PERSON_NAMES_CACHE is not None:
-        return _OTHER_PERSON_NAMES_CACHE
-    names = {"女同学", "女仆女同学", "弥希", "真绯瑠", "瑞雅", "塔菲"}
-    for t in load_terms():
-        if t.get("category") in ("person", "family", "relation") and t.get("keyword"):
-            names.add(t["keyword"])
-            names.update(str(a) for a in t.get("aliases", []) if a)
-    _OTHER_PERSON_NAMES_CACHE = names
-    return names
-
-
-def clean_reply(reply: str) -> str:
-    """输出清洗：去括号前缀、整条至多 1 个括号、省略号归一并限频。
-
-    人设规则是"每轮回复至多一个括号、省略号是例外"，但声音样本里带（小声）（心虚），
-    模型 few-shot 会学着用。这里做确定性过滤：
-    - 剥掉开头"（咽口水）"这类前缀；整条超过 1 个括号时只保留第一个（符合人设额度）
-    - 省略号归一（.../…… 串 → ……），整条至多 2 次——保住"啊……这……"这种无语表达，
-      掐掉刷屏式……。温度靠语气词/自嘲承载，不靠符号堆砌。
-    """
-    text = reply.strip()
-    # 去掉开头的连续括号前缀，如 （咽口水）你看...
-    while text.startswith("（"):
-        idx = text.find("）")
-        if idx == -1:
-            break
-        text = text[idx + 1:].lstrip()
-    if not text:
-        return reply  # 剥光了就回原样，避免空回复
-    # 若仍有 ≥2 个括号，只保留第一个，其余删除
-    matches = list(re.finditer(r'（[^）]*）', text))
-    if len(matches) >= 2:
-        first = matches[0]
-        before = text[:first.start()]
-        kept = first.group(0)
-        after = re.sub(r'（[^）]*）', '', text[first.end():])
-        text = before + kept + after
-    # 省略号纪律：归一连续省略号；剥掉开头省略号（"……那你说说"→"那你说说"，纯"……"无语保留）；
-    # 开头"词+省略号"犹豫（"早……灰泽满刚醒"）→ 省略号换逗号（"早，灰泽满刚醒"），保留语气词；
-    # 整条至多保留前 2 个
-    text = re.sub(r'\.{3,}|…+', '……', text)
-    text = re.sub(r'^……(?=\S)', '', text)
-    # 开头"短语+省略号"犹豫（"那倒不是……""只是……""早……"）→ 省略号换逗号。
-    # 覆盖 1-5 个中文字（短短语/语气词/犹豫开头），只转"后面还有≥4字实质内容"的，
-    # 保住"啊……这……"（无语）这类省略号后没内容的。
-    text = re.sub(r'^([一-鿿]{1,5})……(?=.{4,})', r'\1，', text)
-    if not text:
-        text = '……'
-    ell_pos = [m.start() for m in re.finditer('……', text)]
-    if len(ell_pos) > 2:
-        cut = ell_pos[2]
-        text = text[:cut] + text[cut:].replace('……', '')
-    # 结巴消融："那、那"→"那那"（真人快速打字是叠字，不是顿号；顿号结巴是 RP 腔）
-    text = re.sub(r'(.)、\1', r'\1\1', text)
-    # 自指"她/他"兜底：对话里灰泽满用名字自称，不该出现"她"指自己。
-    # 仅当回复里没出现其他第三人称名字时才替换（这时的"她/他"几乎必指灰泽满自己）。
-    # "她"必是代词安全替换；"他"避开"其他/他人/他家"这类复合词。
-    if not any(n in text for n in _get_other_person_names()):
-        text = re.sub(r"她", "灰泽满", text)
-        text = re.sub(r"(?<!其|无)他(?!人|家|国|乡|方|日)", "灰泽满", text)
-    return text
-
-
-def _is_emotion_only_query(query: str) -> bool:
-    """判断 probe 补全的检索 query 是否为"纯情绪"描述（如'用户发了个偷笑的表情'）。
-
-    表情/情绪为主的短消息（如'可惜🤭'）会被 probe 按表情规则补全成这类纯情绪句——
-    它没有话题词，做语义检索会误命中无关样本（实测'用户发了个偷笑的表情'→ voice_sample
-    peer_5'新衣服'，导致'可惜🤭'被回'喜欢新衣服'）。对齐纯表情消息的既有设计：
-    跳过语义检索，补全句只作语气提示（query_hint）注入。
-    """
-    q = (query or "").strip()
-    return q.startswith("用户发") and "表情" in q
-
 
 def _compose_record_msg(user_msg: str, vision_desc: str) -> str:
     """短期记忆里记录的用户消息：纯图片用视觉描述兜底，图文都有则拼接。"""
@@ -587,24 +119,8 @@ def _split_fused(fused_items):
 
 
 # ==================== 名词库（terms/lorebook） ====================
-
-_terms_cache = None
-
-
-def load_terms() -> list:
-    """加载 persona/world/terms.json 名词库（模块级缓存）。"""
-    global _terms_cache
-    if _terms_cache is not None:
-        return _terms_cache
-    if not TERMS_FILE.exists():
-        _terms_cache = []
-        return _terms_cache
-    try:
-        data = json.loads(TERMS_FILE.read_text(encoding="utf-8"))
-        _terms_cache = data.get("terms", []) if isinstance(data, dict) else []
-    except (json.JSONDecodeError, OSError):
-        _terms_cache = []
-    return _terms_cache
+# load_terms 挪到了 persona.py（人格数据加载的归属地），reply_style / build_terms_note 都从 persona 取。
+from .persona import load_terms  # noqa: E402
 
 
 def build_terms_note(user_msg: str) -> str:
@@ -974,7 +490,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
             if confirm_tpl:
                 if not _confirm_history:
                     _confirm_history = "\n".join(get_user_history(user_id)[-4:])
-                if not await _legendary_confirmed(user_msg, confirm_tpl, history=_confirm_history):
+                if not await legendary_confirmed(user_msg, confirm_tpl, history=_confirm_history):
                     print(f"[梗] 关键词 {trigger!r} 命中但 LLM 未确认，落到正常管线")
                     break  # 不是目标语境，放弃梗，走正常回复
             reply = random.choice(replies)
@@ -996,7 +512,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         # 纯情绪消息（如'可惜🤭'，被 probe 补全成'用户发了个偷笑的表情'）无话题词，
         # 语义检索会误命中无关样本（实测→peer_5'新衣服'）。对齐纯表情设计：跳过检索，
         # 补全句只作语气提示（query_hint）注入。
-        if _is_emotion_only_query(retrieval_query):
+        if is_emotion_only_query(retrieval_query):
             fused_items = []
             preference_items = []
             core_stories = []
@@ -1048,7 +564,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     # 模型会对情境相关句执着复读（自己说过的话进短期记忆后再被引用），提示词拦不住。
     # 检测到与最近自己说过的话重复，就加"别复读"提示强制重新生成（最多 2 次）。
     recent_bot = [ln[4:] for ln in get_user_history(user_id) if ln.startswith("灰泽满：")]
-    if _is_echo_reply(reply, recent_bot):
+    if is_echo_reply(reply, recent_bot):
         print(f"[防复读] 检测到复读『{reply[:20]}』，强制重新生成")
         nudge = {
             "role": "system",
@@ -1056,7 +572,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         }
         for _ in range(2):
             reply = await generate_reply(list(messages) + [nudge])
-            if not _is_echo_reply(reply, recent_bot):
+            if not is_echo_reply(reply, recent_bot):
                 break
 
     # --- 💾 更新短期记忆（带锁）：图片消息把视觉描述记进去，后续才记得聊过什么图 ---

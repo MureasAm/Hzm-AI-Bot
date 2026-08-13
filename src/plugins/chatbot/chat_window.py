@@ -15,7 +15,10 @@ import random
 from nonebot.adapters.onebot.v11 import Message
 
 from .core import (
-    handle_chat, split_reply, split_delay, summarize_batch, clean_reply, _get_clients,
+    handle_chat, summarize_batch, _get_clients,
+)
+from .reply_style import (
+    split_reply, split_delay, clean_reply,
 )
 from .vision import describe_image
 from .constants import (
