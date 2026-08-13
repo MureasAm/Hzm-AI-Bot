@@ -83,7 +83,7 @@ def _add_clean_transcript(sub):
     p.add_argument("-i", "--input", nargs="+", required=True, action="append",
                    help="原始转写 JSON，可传多个（-i a b 或 -i a -i b 均可）")
     p.add_argument("-o", "--output", default=None,
-                   help="输出路径（默认 outputs/transcribe/cleaned.json）")
+                   help="输出路径（默认 outputs/clean/cleaned.json）")
     p.add_argument("--turn-gap", type=float, default=2.0,
                    help="话轮聚合间隔阈值（秒），默认 2.0")
     p.set_defaults(func=_run_clean_transcript)
@@ -92,7 +92,7 @@ def _add_clean_transcript(sub):
 def _run_clean_transcript(args):
     import asyncio
     import clean_transcript
-    out = Path(args.output) if args.output else _common.OUT_TRANSCRIBE / "cleaned.json"
+    out = Path(args.output) if args.output else _common.OUT_CLEAN / "cleaned.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     asyncio.run(clean_transcript.run(_flatten_inputs(args.input), out, turn_gap=args.turn_gap))
     _common.report_saved(out)
@@ -105,14 +105,14 @@ def _add_convert_to_chat(sub):
     p.add_argument("-i", "--input", nargs="+", required=True, action="append",
                    help="原文 JSON（可传多个，-i a b 或 -i a -i b 均可）")
     p.add_argument("-o", "--output", default=None,
-                   help="输出路径（默认 outputs/transcribe/converted_chat.json）")
+                   help="输出路径（默认 outputs/convert/converted_chat.json）")
     p.set_defaults(func=_run_convert_to_chat)
 
 
 def _run_convert_to_chat(args):
     import asyncio
     import convert_to_chat
-    out = Path(args.output) if args.output else _common.OUT_TRANSCRIBE / "converted_chat.json"
+    out = Path(args.output) if args.output else _common.OUT_CONVERT / "converted_chat.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     asyncio.run(convert_to_chat.run(_flatten_inputs(args.input), out))
     _common.report_saved(out)
@@ -247,7 +247,7 @@ def _add_generate_statements(sub):
     p.add_argument("-i", "--input", nargs="+", required=True, action="append",
                    help="清洗后的素材 JSON，可传多个")
     p.add_argument("-o", "--output", default=None,
-                   help="输出路径（默认 outputs/transcribe/generated_statements.json）")
+                   help="输出路径（默认 outputs/statements/generated_statements.json）")
     p.add_argument("--batch-size", type=int, default=50,
                    help="每批话轮数，默认 50")
     p.set_defaults(func=_run_generate_statements)
@@ -256,7 +256,7 @@ def _add_generate_statements(sub):
 def _run_generate_statements(args):
     import asyncio
     import generate_statements
-    out = Path(args.output) if args.output else _common.OUT_TRANSCRIBE / "generated_statements.json"
+    out = Path(args.output) if args.output else _common.OUT_STATEMENTS / "generated_statements.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     asyncio.run(generate_statements.run(_flatten_inputs(args.input), out, batch_size=args.batch_size))
     _common.report_saved(out)
@@ -269,7 +269,7 @@ def _add_mine_phrases(sub):
     p.add_argument("-i", "--input", nargs="+", required=True, action="append",
                    help="清洗后的素材 JSON，可传多个")
     p.add_argument("-o", "--output", default=None,
-                   help="输出路径（默认 outputs/transcribe/mined_phrases.json）")
+                   help="输出路径（默认 outputs/mine/mined_phrases.json）")
     p.add_argument("--batch-size", type=int, default=60,
                    help="每批话轮数，默认 60")
     p.set_defaults(func=_run_mine_phrases)
@@ -278,7 +278,7 @@ def _add_mine_phrases(sub):
 def _run_mine_phrases(args):
     import asyncio
     import mine_phrases
-    out = Path(args.output) if args.output else _common.OUT_TRANSCRIBE / "mined_phrases.json"
+    out = Path(args.output) if args.output else _common.OUT_MINE / "mined_phrases.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     asyncio.run(mine_phrases.run(_flatten_inputs(args.input), out, batch_size=args.batch_size))
     _common.report_saved(out)

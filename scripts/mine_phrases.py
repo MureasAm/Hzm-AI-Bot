@@ -182,7 +182,7 @@ async def main():
         print("用法: python scripts/mine_phrases.py <cleaned1.json> [cleaned2.json ...] [--out 输出.json]")
         return
     inputs = [p for p in sys.argv[1:] if not p.startswith("--")]
-    out = Path("outputs/transcribe/mined_phrases.json")
+    out = Path("outputs/mine/mined_phrases.json")
     if "--out" in sys.argv:
         out = Path(sys.argv[sys.argv.index("--out") + 1])
     await run(inputs, out)

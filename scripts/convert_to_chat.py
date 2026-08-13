@@ -195,7 +195,7 @@ async def main():
         print("用法: python scripts/convert_to_chat.py <原文.json> [输出.json]")
         return
     inputs = [p for p in sys.argv[1:] if not p.startswith("--")]
-    out = Path("outputs/transcribe/converted_chat.json")
+    out = Path("outputs/convert/converted_chat.json")
     if "--out" in sys.argv:
         out = Path(sys.argv[sys.argv.index("--out") + 1])
     await run(inputs, out)

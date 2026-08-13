@@ -19,7 +19,7 @@
 相近 trigger 会自动聚到同一场景，避免 behaviors 拆太细。
 
 用法：
-    python scripts/convert_to_chat.py -i cleaned_0807.json -o outputs/transcribe/converted_0807.json
+    python scripts/convert_to_chat.py -i cleaned_0807.json -o outputs/convert/converted_0807.json
     python scripts/extract_persona.py -i converted_0807.json converted_0726.json ...
              [--out outputs/persona_extract/behaviors_candidates.json]
 

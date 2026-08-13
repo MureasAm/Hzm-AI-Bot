@@ -17,10 +17,14 @@ ASSETS_DIR = PROJECT_ROOT / "assets"
 AUDIO_DIR = ASSETS_DIR / "audio"          # 原始音频（拖入处）
 TRANSCRIPTS_DIR = ASSETS_DIR / "transcripts"  # 手动放置的转写 JSON
 
-# ==================== 输出侧：分析产物 ====================
+# ==================== 输出侧：分析产物（按流水线阶段单开文件夹） ====================
 OUTPUTS_DIR = PROJECT_ROOT / "outputs"
-OUT_TRANSCRIBE = OUTPUTS_DIR / "transcribe"
-OUT_PACE = OUTPUTS_DIR / "pace"
+OUT_TRANSCRIBE = OUTPUTS_DIR / "transcribe"    # 转写产物
+OUT_CLEAN = OUTPUTS_DIR / "clean"              # 清洗产物
+OUT_PACE = OUTPUTS_DIR / "pace"                # 节奏地图
+OUT_CONVERT = OUTPUTS_DIR / "convert"          # 直播→聊天转化
+OUT_MINE = OUTPUTS_DIR / "mine"                # 挖措辞/挖主题
+OUT_STATEMENTS = OUTPUTS_DIR / "statements"    # 场景化陈述
 OUT_PIPELINE = OUTPUTS_DIR / "pipeline"
 OUT_REGRESSION = OUTPUTS_DIR / "regression"
 

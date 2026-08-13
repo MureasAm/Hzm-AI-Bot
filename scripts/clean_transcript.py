@@ -130,7 +130,7 @@ async def main():
         print("用法: python scripts/clean_transcript.py <转写.json> [输出.json]")
         return
     input_paths = [p for p in sys.argv[1:] if not p.startswith("--")]
-    output_file = Path("outputs/transcribe/cleaned.json")
+    output_file = Path("outputs/clean/cleaned.json")
     if "--out" in sys.argv:
         output_file = Path(sys.argv[sys.argv.index("--out") + 1])
     await run(input_paths, output_file)

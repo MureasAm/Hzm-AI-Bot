@@ -149,7 +149,7 @@ async def main():
         print("用法: python scripts/generate_statements.py <cleaned1.json> [cleaned2.json ...] [--out 输出.json]")
         return
     inputs = [p for p in sys.argv[1:] if not p.startswith("--")]
-    out = Path("outputs/transcribe/generated_statements.json")
+    out = Path("outputs/statements/generated_statements.json")
     if "--out" in sys.argv:
         out = Path(sys.argv[sys.argv.index("--out") + 1])
     await run(inputs, out)

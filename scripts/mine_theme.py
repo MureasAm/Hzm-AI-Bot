@@ -127,7 +127,7 @@ async def run(input_path: str, theme: str, output_file: str | None = None):
         if hits:
             results.extend(hits)
             print(f"  ✓ 批 {no}: {len(hits)} 个命中")
-    out = Path(output_file) if output_file else Path("outputs/transcribe/mined_theme.json")
+    out = Path(output_file) if output_file else Path("outputs/mine/mined_theme.json")
     out.parent.mkdir(parents=True, exist_ok=True)
     json.dump(results, open(out, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
     print(f"\n✅ 共命中 {len(results)} 条 → {out}")
