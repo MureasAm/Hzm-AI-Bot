@@ -1,7 +1,7 @@
 """直播记忆 RAG：余弦相似度 + 语义检索。"""
 import json
 
-from .constants import VECTOR_FILE, RAG_THRESHOLD, RAG_TOP_K, EMBEDDING_MODEL
+from .constants import VECTOR_FILE, EMBEDDING_MODEL
 
 
 async def embed_query(zhipu_client, text: str):
@@ -40,25 +40,3 @@ def load_vector_db():
         return data if isinstance(data, list) else []
     except (json.JSONDecodeError, OSError):
         return []
-
-
-async def retrieve_semantic_contexts(user_query: str, query_vector, top_k: int = RAG_TOP_K) -> str:
-    """基于 query 向量检索最相关的直播记忆片段。
-
-    query_vector 由调用方传入（已在 persona 匹配中计算过，避免重复 embedding）。
-    返回拼接好的文本，没有超过阈值的片段时返回空串。
-    """
-    vector_db = load_vector_db()
-    if not vector_db or query_vector is None:
-        return ""
-
-    scored = []
-    for item in vector_db:
-        sim = cosine_similarity(query_vector, item["vector"])
-        scored.append((sim, item["text"]))
-
-    scored.sort(key=lambda x: x[0], reverse=True)
-    valid = [text for score, text in scored[:top_k] if score > RAG_THRESHOLD]
-    if not valid:
-        return ""
-    return "\n".join([f"- {text}" for text in valid])

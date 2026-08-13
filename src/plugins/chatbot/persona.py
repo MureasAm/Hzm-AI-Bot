@@ -1,15 +1,13 @@
-"""人格规则加载与语义行为匹配。
+"""人格规则加载：traits/styles/behaviors + trigger 向量缓存。
 
-行为匹配的 trigger 向量已离线预计算到 trigger_vectors.json，
-运行时只对用户消息计算 1 次 embedding，避免逐条调用 embedding API。
+trigger 向量已离线预计算到 trigger_vectors.json，运行时读缓存。
 """
 import json
 
 from .constants import (
     TRAITS_FILE, STYLES_FILE, BEHAVIORS_FILE,
-    TRIGGER_VECTOR_FILE, BEHAVIOR_MATCH_THRESHOLD,
+    TRIGGER_VECTOR_FILE,
 )
-from .rag import cosine_similarity
 
 
 def load_persona_rules():
@@ -86,38 +84,8 @@ def load_trigger_vectors() -> dict:
     return _trigger_vectors
 
 
-async def match_behaviors_semantic(user_query: str, query_vector, behaviors: list,
-                                   threshold: float = BEHAVIOR_MATCH_THRESHOLD) -> str:
-    """基于缓存的 trigger 向量匹配行为规则。
-
-    query_vector 由调用方传入（已在 RAG 阶段算好），此处不再调用 embedding API。
-    """
-    if not behaviors or query_vector is None:
-        return ""
-
-    trigger_vectors = load_trigger_vectors()
-
-    best_sim = -1
-    best_rule = None
-    for b in behaviors:
-        t = b.get("trigger", "")
-        if not t:
-            continue
-        trigger_vec = trigger_vectors.get(t)
-        if trigger_vec is None:
-            continue  # 该 trigger 未预计算，跳过
-        sim = cosine_similarity(query_vector, trigger_vec)
-        if sim > best_sim:
-            best_sim = sim
-            best_rule = b
-
-    if best_rule and best_sim >= threshold:
-        return _format_behavior_rule(best_rule)
-    return ""
-
-
 def _format_behavior_rule(rule: dict) -> str:
-    """将一条行为规则格式化为注入文本。供 match_behaviors_semantic 与检索层共用。
+    """将一条行为规则格式化为注入文本。供检索层（select_behavior_item）使用。
 
     新版格式含 samples（真人原话示范，few-shot）：
     - response 给行为指令

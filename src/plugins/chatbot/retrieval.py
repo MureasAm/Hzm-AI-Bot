@@ -18,7 +18,6 @@ from .constants import (
     VOICE_SAMPLE_THRESHOLD, VOICE_SAMPLE_TOP_N, VOICE_SAMPLE_KEEPALIVE, VOICE_SAMPLE_MIN_K,
     VOICE_SAMPLE_KEEPALIVE_MIN_SIM,
     PHRASE_THRESHOLD, PHRASE_TOP_N, PHRASE_PHASES_MAX,
-    BEHAVIOR_MATCH_THRESHOLD, BEHAVIOR_TOP_N,
     PREFERENCE_THRESHOLD, PREFERENCE_TOP_N,
     CORE_STORY_THRESHOLD, CORE_STORY_TOP_N,
     RRF_K, SOURCE_WEIGHTS, RETRIEVAL_TOPK,
@@ -196,43 +195,6 @@ _BEHAVIOR_KEYWORDS = {
     # 关键词兜底可靠（实测 LLM 对"造个黄桃吧"判 null，加兜底后命中）
     "被越界时冷静推开": ["黄桃", "擦边", "低俗", "黄段子", "开黄腔", "色色", "涩涩"],
 }
-
-
-def retrieve_behaviors(user_query: str, query_vector, behaviors: list,
-                       threshold: float = BEHAVIOR_MATCH_THRESHOLD,
-                       top_n: int = BEHAVIOR_TOP_N) -> list:
-    """行为触发检索。与 match_behaviors_semantic 同源，只返回最高分达标行为。
-
-    先做关键词兜底（口语质问词强制命中），再做语义检索（top-1 达阈值）。
-    """
-    if not behaviors or not user_query:
-        return []
-    # 关键词兜底：明确的质问词直接命中对应行为（语义检索够不到口语质问）
-    for b in behaviors:
-        name = b.get("name", "")
-        kws = _BEHAVIOR_KEYWORDS.get(name)
-        if kws and any(k in user_query for k in kws):
-            return [RetrievalItem(source="behavior", item_id=name, score=1.0,
-                                  text=_format_behavior_rule(b))]
-    if not query_vector:
-        return []
-    tv = load_trigger_vectors()
-    scored = []
-    for b in behaviors:
-        t = b.get("trigger", "")
-        vec = tv.get(t)
-        if not t or vec is None:
-            continue
-        sim = cosine_similarity(query_vector, vec)
-        scored.append((sim, b))
-    if not scored:
-        return []
-    scored.sort(key=lambda x: x[0], reverse=True)
-    best_sim, best = scored[0]
-    if best_sim < threshold:
-        return []
-    return [RetrievalItem(source="behavior", item_id=best.get("name", ""),
-                          score=best_sim, text=_format_behavior_rule(best))]
 
 
 def select_behavior_item(user_msg: str, behavior_intent: str, behaviors: list) -> "RetrievalItem | None":

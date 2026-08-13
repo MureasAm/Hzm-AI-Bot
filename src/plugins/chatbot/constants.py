@@ -39,9 +39,7 @@ MEMORY_EXTRACT_TEMPERATURE = 0.1
 MEMORY_EXTRACT_MAX_TOKENS = 100
 
 # ==================== 检索阈值 ====================
-BEHAVIOR_MATCH_THRESHOLD = 0.55  # 口语质问的语义相似度有~0.55天花板(ROADMAP记录), 0.65太高导致被质疑/失约被催几乎不触发
 RAG_THRESHOLD = 0.48  # corpus 语义下限。原 0.55 对自然问句过高（问句 vs 陈述式嵌入鸿沟，实测相关 0.51 也被卡掉）→ 降后靠关键词门挡噪声
-RAG_TOP_K = 2
 
 # ==================== V6 corpus 关键词门 ====================
 # 纯 cosine 无法区分"真相关(0.51)"与"名词撞车但不相关(0.62)"，任何单一阈值都两难。
@@ -55,7 +53,6 @@ CORPUS_STRONG_KEYWORD = 0.8        # 强关键词重叠直接放行（专名/罕
 CORPUS_TOP_N = 3              # 直播记忆每路取 top（315 条库后 2→3，相关背景更容易命中）
 VOICE_SAMPLE_TOP_N = 3        # 风格样本每路取 top
 VOICE_SAMPLE_THRESHOLD = 0.60 # 风格样本阈值（0.60：真直播命中≈0.70，日常"聊时间"伪关联≈0.575，取中间值切断伪关联）
-BEHAVIOR_TOP_N = 1            # 行为指令只取 1 条（保持 V2 语义）
 VOICE_SAMPLE_KEEPALIVE = True # 样本全低于阈值时保底注入 1 条（保住口癖）
 VOICE_SAMPLE_KEEPALIVE_MIN_SIM = 0.60  # 保底注入的最低相关度：与主阈值一致，低于则不注入（宁断档不错话题，防"日常聊时间"被塞直播样本）
 VOICE_SAMPLE_MIN_K = 1        # 保底注入条数

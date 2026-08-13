@@ -7,7 +7,6 @@ from src.plugins.chatbot.retrieval import (
     RetrievalItem,
     retrieve_corpus,
     retrieve_voice_samples,
-    retrieve_behaviors,
     select_behavior_item,
     rrf_fuse,
     truncate_by_budget,
@@ -183,42 +182,6 @@ class TestRetrieveVoiceSamples:
         assert len(items) == 1
         assert items[0].item_id == "a"
         assert items[0].extra["reply"] == "答A"
-
-
-class TestRetrieveBehaviors:
-    def test_no_behaviors_returns_empty(self):
-        assert retrieve_behaviors("q", _vec(), []) == []
-
-    def test_below_threshold_returns_empty(self, monkeypatch):
-        behaviors = [{"name": "B", "trigger": "情境", "response": "反应"}]
-        monkeypatch.setattr("src.plugins.chatbot.retrieval.load_trigger_vectors",
-                            lambda: {"情境": [0, 1, 0, 0]})
-        # query 正交于 trigger → 相似度 0 < 0.65 → 空
-        assert retrieve_behaviors("q", [1, 0, 0, 0], behaviors, threshold=0.65) == []
-
-    def test_returns_best_behavior(self, monkeypatch):
-        behaviors = [
-            {"name": "B1", "trigger": "情境1", "response": "反应1"},
-            {"name": "B2", "trigger": "情境2", "response": "反应2"},
-        ]
-        monkeypatch.setattr("src.plugins.chatbot.retrieval.load_trigger_vectors",
-                            lambda: {"情境1": [1, 0, 0, 0], "情境2": [0, 1, 0, 0]})
-        items = retrieve_behaviors("q", [1, 0, 0, 0], behaviors, threshold=0.5)
-        assert len(items) == 1
-        assert items[0].item_id == "B1"
-        assert "B1" in items[0].text
-        assert "反应1" in items[0].text
-
-    def test_keyword_fallback_forces_behavior(self):
-        # 口语质问词（敷衍/鸽/迟到）→ 关键词兜底强制命中，即使 query 语义 miss（None）
-        behaviors = [
-            {"name": "被质疑时心虚辩解", "trigger": "质疑", "response": "先否认再心虚"},
-            {"name": "失约被催时认栽滑跪", "trigger": "迟到", "response": "认栽滑跪"},
-        ]
-        items = retrieve_behaviors("你是不是在敷衍我", None, behaviors)
-        assert len(items) == 1 and items[0].item_id == "被质疑时心虚辩解"
-        items2 = retrieve_behaviors("说好的八点直播呢？你又鸽了", None, behaviors)
-        assert len(items2) == 1 and items2[0].item_id == "失约被催时认栽滑跪"
 
 
 class TestSelectBehaviorItem:

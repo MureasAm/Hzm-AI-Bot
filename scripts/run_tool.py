@@ -357,6 +357,55 @@ def _run_mine_theme(args):
     asyncio.run(mine_theme.run(args.input, args.theme, args.output))
 
 
+# ==================== 子命令：extract-persona ====================
+
+def _add_extract_persona(sub):
+    p = sub.add_parser("extract-persona", help="从 convert-to-chat 产物提取触发-响应行为（validation 铁律）")
+    p.add_argument("-i", "--input", nargs="+", required=True, action="append",
+                   help="convert-to-chat 产物 JSON（可传多个）")
+    p.add_argument("-o", "--output", default=None, help="输出路径")
+    p.set_defaults(func=_run_extract_persona)
+
+
+def _run_extract_persona(args):
+    import asyncio
+    import extract_persona
+    asyncio.run(extract_persona.run(_flatten_inputs(args.input), out_file=args.output))
+
+
+# ==================== 子命令：persona-eval ====================
+
+def _add_persona_eval(sub):
+    p = sub.add_parser("persona-eval", help="人格一致性评测（大五人格开放题 + 匿名化）")
+    p.add_argument("--anonymous", action="store_true", help="匿名版（替换自称防名字作弊）")
+    p.add_argument("--traits", default=None, help="只测指定特质（逗号分隔，如 嘴硬,自嘲）")
+    p.add_argument("--full", action="store_true", help="输出每题的完整回答")
+    p.set_defaults(func=_run_persona_eval)
+
+
+def _run_persona_eval(args):
+    import asyncio
+    import persona_eval
+    traits = [t.strip() for t in args.traits.split(",")] if args.traits else None
+    asyncio.run(persona_eval.run(anonymous=args.anonymous, traits_filter=traits, full=args.full))
+
+
+# ==================== 子命令：retrieval-eval ====================
+
+def _add_retrieval_eval(sub):
+    p = sub.add_parser("retrieval-eval", help="检索命中率评测（各 source 的 hit rate）")
+    p.add_argument("--case", default=None, help="只看某个 case id 前缀")
+    p.add_argument("--verbose", action="store_true", help="失败 case 打印实际命中项")
+    p.set_defaults(func=_run_retrieval_eval)
+
+
+def _run_retrieval_eval(args):
+    import asyncio
+    import retrieval_eval
+    cases = retrieval_eval.load_cases()
+    asyncio.run(retrieval_eval.run(cases, verbose=args.verbose, only_id=args.case))
+
+
 # ==================== 主入口 ====================
 
 def build_parser() -> argparse.ArgumentParser:
@@ -379,6 +428,9 @@ def build_parser() -> argparse.ArgumentParser:
     _add_bili_check(sub)
     _add_vision_test(sub)
     _add_mine_theme(sub)
+    _add_extract_persona(sub)
+    _add_persona_eval(sub)
+    _add_retrieval_eval(sub)
     return parser
 
 

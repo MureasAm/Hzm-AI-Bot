@@ -34,7 +34,7 @@ from src.plugins.chatbot.persona import load_persona_rules  # noqa: E402
 from src.plugins.chatbot.retrieval import select_behavior_item  # noqa: E402
 from src.plugins.chatbot.core import classify_behavior  # noqa: E402  (L3：LLM 判行为意图)
 
-CASES_FILE = PROJECT_ROOT / "data" / "retrieval_eval_cases.json"
+CASES_FILE = PROJECT_ROOT / "scripts" / "retrieval_eval_cases.json"
 ENV_FILE = PROJECT_ROOT / ".env.prod"
 OUT_DIR = PROJECT_ROOT / "outputs" / "eval" / "retrieval"
 
@@ -127,34 +127,31 @@ async def run(cases, verbose: bool, only_id: str = None):
             print(f"[SKIP] {case['id']}  {query}  （embedding 失败）")
             continue
         got = {
-            "behavior": retrieval.retrieve_behaviors(query, qv, behaviors),  # 旧基线（embedding）
             "corpus": retrieval.retrieve_corpus(query, qv),
             "voice_sample": retrieval.retrieve_voice_samples(query, qv),
             "phrase": retrieval.retrieve_phrases(query, qv),
             "preference": retrieval.retrieve_preferences(query, qv),
             "core_story": retrieval.retrieve_core_stories(query, qv),
+            "behavior": [],
         }
-        # L3 新路径：LLM 判意图 → 关键词兜底 → 行为注入项
-        behavior_new = {"behavior": got["behavior"]}  # 无行为期望的 case 用旧值（无影响）
+        # L3：行为走 LLM 判意图 → 关键词兜底（不再有 embedding 基线）
+        behavior_intent = ""
         if "behavior" in case.get("expect", {}):
-            intent = await classify_behavior(ds_client, query, "", behaviors) if ds_client else ""
-            item = select_behavior_item(query, intent, behaviors)
-            behavior_new = {"behavior": [item] if item else [], "_intent": intent}
+            behavior_intent = await classify_behavior(ds_client, query, "", behaviors) if ds_client else ""
+            item = select_behavior_item(query, behavior_intent, behaviors)
+            got["behavior"] = [item] if item else []
 
-        got_for_check = dict(got)
-        got_for_check["behavior"] = behavior_new["behavior"]
-        verdict = check_case(case, got_for_check)
+        verdict = check_case(case, got)
         results.append(verdict)
 
         flag = "PASS" if verdict["passed"] else "FAIL"
         print(f"\n[{flag}] {case['id']}  {query}")
         for c in verdict["checks"]:
             print(f"      {c['source']:>11}: {'✓' if c['ok'] else '✗'} {c['detail']}")
-        if "_intent" in behavior_new:
-            old_ids = [i.item_id for i in got["behavior"]]
-            print(f"      · 行为 旧(embedding)={old_ids or '无'}  新(L3 LLM)={behavior_new.get('_intent') or '无'}")
+        if behavior_intent:
+            print(f"      · 行为 L3 判定: {behavior_intent}")
         if verbose and not verdict["passed"]:
-            for source, items in _summarize_got(got_for_check).items():
+            for source, items in _summarize_got(got).items():
                 if items:
                     print(f"      · 实际 {source}: {items}")
 
@@ -185,6 +182,11 @@ async def run(cases, verbose: bool, only_id: str = None):
     return 0
 
 
+def load_cases() -> list:
+    """加载标注集（query → 期望命中的样本），供 run_tool 与本脚本共用。"""
+    return json.loads(CASES_FILE.read_text(encoding="utf-8")).get("cases", [])
+
+
 def main():
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -194,8 +196,7 @@ def main():
     ap.add_argument("--case", default=None, help="只看某个 case id 前缀")
     ap.add_argument("--verbose", action="store_true", help="失败 case 打印实际命中项")
     args = ap.parse_args()
-    cases = json.loads(CASES_FILE.read_text(encoding="utf-8")).get("cases", [])
-    sys.exit(asyncio.run(run(cases, verbose=args.verbose, only_id=args.case)))
+    sys.exit(asyncio.run(run(load_cases(), verbose=args.verbose, only_id=args.case)))
 
 
 if __name__ == "__main__":
