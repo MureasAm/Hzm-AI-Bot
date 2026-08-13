@@ -16,10 +16,10 @@ VOICE_SAMPLES_FILE = PROJECT_ROOT / "persona" / "speech" / "voice_samples.json" 
 TERMS_FILE = PROJECT_ROOT / "persona" / "world" / "terms.json"                 # 灰泽满名词库(lorebook)：核心词always注入+命中注入
 
 MEMORY_FILE = PROJECT_ROOT / "data" / "memory.json"                 # 用户短期记忆
-VECTOR_FILE = PROJECT_ROOT / "data" / "corpus_vectors.json"         # 直播记忆向量库
-TRIGGER_VECTOR_FILE = PROJECT_ROOT / "data" / "trigger_vectors.json"  # trigger 向量缓存
-VOICE_SAMPLE_VECTOR_FILE = PROJECT_ROOT / "data" / "voice_sample_vectors.json"  # 声音样本向量缓存
-PHRASE_VECTOR_FILE = PROJECT_ROOT / "data" / "phrase_vectors.json"   # 措辞指纹向量缓存
+VECTOR_FILE = PROJECT_ROOT / "data" / "corpus_vectors.json"         # 直播记忆向量库（源在 outputs/，留 data/）
+TRIGGER_VECTOR_FILE = PROJECT_ROOT / "persona" / "behavior" / "trigger_vectors.json"  # trigger 向量缓存（跟 behaviors.json）
+VOICE_SAMPLE_VECTOR_FILE = PROJECT_ROOT / "persona" / "speech" / "voice_sample_vectors.json"  # 声音样本向量缓存（跟 voice_samples.json）
+PHRASE_VECTOR_FILE = PROJECT_ROOT / "persona" / "speech" / "phrase_vectors.json"   # 措辞指纹向量缓存（跟 phrases.json）
 
 # ==================== API ====================
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
@@ -116,11 +116,11 @@ BILI_STATE_FILE = PROJECT_ROOT / "data" / "bili_state.json"   # 开播/动态去
 AUTO_ACCEPT_FRIEND = True
 
 # 偏好档案（第 5 路语义检索）
-PREFERENCE_VECTOR_FILE = PROJECT_ROOT / "data" / "preference_vectors.json"
+PREFERENCE_VECTOR_FILE = PROJECT_ROOT / "persona" / "world" / "preference_vectors.json"
 PREFERENCE_THRESHOLD = 0.55       # 偏好命中阈值（实测：真实命中 0.58+，短句偏好向量泛化过头会误命中，取 0.55 压误命中）
 PREFERENCE_TOP_N = 2              # 最多注入几条偏好条目
 
 # 核心记忆（印象最深的结晶，独立于 corpus 单独检索，低阈值高浮现）
-CORE_STORY_VECTOR_FILE = PROJECT_ROOT / "data" / "core_story_vectors.json"
+CORE_STORY_VECTOR_FILE = PROJECT_ROOT / "persona" / "world" / "core_story_vectors.json"
 CORE_STORY_THRESHOLD = 0.42       # 比偏好/行为低，核心故事更容易浮出（但低于此不注入，防乱触发）
 CORE_STORY_TOP_N = 2              # 最多注入几条核心记忆

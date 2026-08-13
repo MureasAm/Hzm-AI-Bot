@@ -16,7 +16,7 @@ from openai import AsyncOpenAI
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = PROJECT_ROOT / ".env.prod"
 BEHAVIORS_FILE = PROJECT_ROOT / "persona" / "behavior/behaviors.json"
-OUTPUT_FILE = PROJECT_ROOT / "data" / "trigger_vectors.json"
+OUTPUT_FILE = PROJECT_ROOT / "persona" / "behavior" / "trigger_vectors.json"
 EMBEDDING_MODEL = "embedding-3"
 ZHIPU_BASE_URL = "https://open.bigmodel.cn/api/paas/v4/"
 

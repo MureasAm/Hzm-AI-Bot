@@ -1,6 +1,6 @@
 """离线预计算 persona/speech/voice_samples.json 中每条样本的 embedding 向量。
 
-输出 data/voice_sample_vectors.json（自包含格式：连同 user/reply 一起存），
+输出 persona/speech/voice_sample_vectors.json（自包含格式：连同 user/reply 一起存），
 运行时 retrieval.py 直接读缓存，按当前用户消息情境检索相关的 few-shot 样本。
 
 用法：
@@ -18,7 +18,7 @@ from openai import AsyncOpenAI
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = PROJECT_ROOT / ".env.prod"
 VOICE_FILE = PROJECT_ROOT / "persona" / "persona/speech/voice_samples.json"
-OUTPUT_FILE = PROJECT_ROOT / "data" / "voice_sample_vectors.json"
+OUTPUT_FILE = PROJECT_ROOT / "persona" / "speech" / "voice_sample_vectors.json"
 EMBEDDING_MODEL = "embedding-3"
 ZHIPU_BASE_URL = "https://open.bigmodel.cn/api/paas/v4/"
 

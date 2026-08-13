@@ -138,7 +138,7 @@
 - `speech/` 说话（怎么说，few-shot）：`voice_samples.json`（样本，改后 precompute voice-samples）/ `phrases.json`（措辞，改后 precompute phrases）
 - `world/` 世界/记忆（经历/懂什么）：`terms.json`（名词库）/ `core_stories.json`（核心记忆，印象最深的结晶）/ `preferences.json`（偏好条目，一条一话题，第5路语义检索）
 
-**data/**：`corpus_vectors.json`（直播记忆 RAG）/ `trigger_vectors.json` / `voice_sample_vectors.json` / `phrase_vectors.json` / `memory.json`（短期）/ `long_term_memory.json`（长期）/ `session_memory.json`（会话级记忆：当前话题+本场事件，V5.2）
+**data/**：`corpus_vectors.json`（直播记忆 RAG，源在 outputs/statement_final.json）/ `memory.json`（短期）/ `long_term_memory.json`（长期）/ `session_memory.json`（会话级记忆：当前话题+本场事件，V5.2）/ `bili_state.json`（B站状态）。其余向量缓存已移到 persona/ 对应子目录（跟源文件放一起）。
 
 **src/plugins/chatbot/**：`core.py`（主循环组装）/ `persona.py` / `memory.py`（短期读写带锁）/ `session_memory.py`（会话级记忆：话题追踪+短query扩充，V5.2）/ `rag.py`（embedding+余弦）/ `retrieval.py`（四路融合+预算 + 偏好第5路 + 核心记忆检索）/ `constants.py`（所有可调参数）/ `config.py`（配置读取）/ `context_probe.py`（时间/天气感知）/ `vision.py`（glm-4.6v 视觉）/ `chat_window.py`（读秒窗口+分批发送+智能归纳）/ `bili_bridge.py`（B站联动推送 + 自动通过好友）
 

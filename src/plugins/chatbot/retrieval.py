@@ -2,8 +2,8 @@
 
 三路检索（全部同步 CPU，query 向量由调用方传入，全程只调 1 次 embedding）：
 - corpus        直播记忆（data/corpus_vectors.json）
-- voice_sample  风格样本（data/voice_sample_vectors.json）
-- behavior      行为触发（data/trigger_vectors.json）
+- voice_sample  风格样本（persona/speech/voice_sample_vectors.json）
+- behavior      行为触发（persona/behavior/trigger_vectors.json）
 
 融合后按字符预算截断，只注入本轮真正相关的信息。
 """
@@ -132,7 +132,7 @@ _sample_vectors = None
 
 
 def load_voice_sample_vectors() -> list:
-    """读 data/voice_sample_vectors.json（缓存）。环境变量 VOICE_SAMPLES=0 时返回 []。"""
+    """读 persona/speech/voice_sample_vectors.json（缓存）。环境变量 VOICE_SAMPLES=0 时返回 []。"""
     global _sample_vectors
     if _sample_vectors is not None:
         return _sample_vectors
@@ -265,7 +265,7 @@ _phrase_vectors = None
 
 
 def load_phrase_vectors() -> list:
-    """读 data/phrase_vectors.json（缓存）。环境变量 PHRASES=0 时返回 []。"""
+    """读 persona/speech/phrase_vectors.json（缓存）。环境变量 PHRASES=0 时返回 []。"""
     global _phrase_vectors
     if _phrase_vectors is not None:
         return _phrase_vectors
@@ -305,7 +305,7 @@ _pref_vectors = None
 
 
 def load_preference_vectors() -> list:
-    """读 data/preference_vectors.json（缓存）。"""
+    """读 persona/world/preference_vectors.json（缓存）。"""
     global _pref_vectors
     if _pref_vectors is not None:
         return _pref_vectors
@@ -355,7 +355,7 @@ _core_story_vectors = None
 
 
 def load_core_story_vectors() -> list:
-    """读 data/core_story_vectors.json（缓存）。"""
+    """读 persona/world/core_story_vectors.json（缓存）。"""
     global _core_story_vectors
     if _core_story_vectors is not None:
         return _core_story_vectors
