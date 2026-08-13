@@ -6,7 +6,7 @@
 
 说明：
 - 弹幕为虚构，覆盖被夸/被催播/被越界/表达依赖/日常等典型场景
-- 使用临时记忆文件，不污染线上 data/memory.json 与 long_term_memory.json
+- 使用临时记忆文件，不污染线上 user_memory/short_term.json 与 long_term.json
 - 长期记忆提取被禁用（只测回复质量，不测记忆副作用）
 """
 import asyncio
@@ -56,9 +56,9 @@ def _init():
     # 把记忆文件指向临时目录，避免污染线上数据
     tmp = tempfile.mkdtemp(prefix="hzm_test_")
     import memory_manager as mm
-    mm.MEMORY_FILE = Path(tmp) / "long_term_memory.json"
+    mm.MEMORY_FILE = Path(tmp) / "long_term.json"
     import src.plugins.chatbot.memory as mem
-    mem.MEMORY_FILE = Path(tmp) / "memory.json"
+    mem.MEMORY_FILE = Path(tmp) / "short_term.json"
     return core
 
 

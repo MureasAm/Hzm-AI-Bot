@@ -35,8 +35,8 @@ WORLD_DIR = PERSONA_DIR / "world"
 ENV_FILE = PROJECT_ROOT / ".env.prod"
 
 # 机器人启动要读的固定文件（与 src/plugins/chatbot/constants.py 对齐）
-# 向量缓存跟源文件放一起（persona/*/），只有 corpus 向量留 data/（源在 outputs/）
-VECTOR_FILE = DATA_DIR / "corpus_vectors.json"
+# 向量缓存跟源文件放一起（persona/*/），corpus 向量也归 persona/world/（人物记忆）
+VECTOR_FILE = WORLD_DIR / "corpus_vectors.json"
 TRIGGER_VECTOR_FILE = BEHAVIOR_DIR / "trigger_vectors.json"
 VOICE_SAMPLE_VECTOR_FILE = SPEECH_DIR / "voice_sample_vectors.json"
 PHRASE_VECTOR_FILE = SPEECH_DIR / "phrase_vectors.json"

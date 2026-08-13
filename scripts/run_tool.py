@@ -160,7 +160,7 @@ def _add_generate_vectors(sub):
     p.add_argument("-i", "--input", default=None,
                    help="场景化陈述 JSON（缺省用内置 RAW_CORPUS）")
     p.add_argument("-o", "--output", default=None,
-                   help="输出路径（默认 data/corpus_vectors.json，机器人读取）")
+                   help="输出路径（默认 persona/world/corpus_vectors.json，机器人读取）")
     p.set_defaults(func=_run_generate_vectors)
 
 

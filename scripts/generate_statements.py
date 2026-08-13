@@ -3,7 +3,7 @@
 """场景化陈述（statement）生成工具。
 
 从清洗后的直播素材里，把有代表性的高质量话轮浓缩成第三人称"场景化陈述"
-（灰泽满当时……她……），作为直播记忆 RAG 的背景记忆（data/corpus_vectors.json 的输入）。
+（灰泽满当时……她……），作为直播记忆 RAG 的背景记忆（persona/world/corpus_vectors.json 的输入）。
 
 与旧 statement（平均 261 字）不同，新 statement 控制在 50-120 字，
 避免长文本挤占 few-shot 注入预算、且短陈述与短查询的语义匹配更好。

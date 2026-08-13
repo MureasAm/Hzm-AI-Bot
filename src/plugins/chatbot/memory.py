@@ -1,4 +1,4 @@
-"""短期记忆（memory.json）读写，带进程内文件锁。
+"""短期记忆（short_term.json）读写，带进程内文件锁。
 
 NoneBot 单进程运行，同一时刻可能有多条消息触发写入，
 用 threading.Lock 保证「读-改-写」原子化，防止并发互相覆盖。
@@ -27,7 +27,7 @@ _memory_lock = threading.Lock()
 
 
 def load_short_memory() -> dict:
-    """读取 memory.json；文件缺失/空/格式错误时返回空字典。"""
+    """读取 short_term.json；文件缺失/空/格式错误时返回空字典。"""
     if not MEMORY_FILE.exists():
         return {}
     try:

@@ -7,7 +7,7 @@ import re
 # 项目根目录（scripts/ 的上一级），所有路径基于它构建
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = PROJECT_ROOT / ".env.prod"
-OUTPUT_VECTOR_FILE = PROJECT_ROOT / "data" / "corpus_vectors.json"
+OUTPUT_VECTOR_FILE = PROJECT_ROOT / "persona" / "world" / "corpus_vectors.json"
 
 def clean_timestamps(text: str) -> str:
     """

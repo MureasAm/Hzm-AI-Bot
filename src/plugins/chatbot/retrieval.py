@@ -1,7 +1,7 @@
 """V3 检索抽象层：三路检索 + RRF 融合 + 预算控制。
 
 三路检索（全部同步 CPU，query 向量由调用方传入，全程只调 1 次 embedding）：
-- corpus        直播记忆（data/corpus_vectors.json）
+- corpus        直播记忆（persona/world/corpus_vectors.json）
 - voice_sample  风格样本（persona/speech/voice_sample_vectors.json）
 - behavior      行为触发（persona/behavior/trigger_vectors.json）
 

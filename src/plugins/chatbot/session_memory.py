@@ -9,7 +9,7 @@
 - 短 query（≤4字）先在会话语境里扩充成完整句，再做 embedding+检索，
   避免短向量"糊"导致误命中不相关样本
 
-数据：data/session_memory.json，按 user_id 存 {"topic","events","last_active"}
+数据：user_memory/session.json，按 user_id 存 {"topic","events","last_active"}
 """
 import json
 import threading
@@ -18,7 +18,7 @@ from datetime import datetime
 
 from .constants import PROJECT_ROOT
 
-SESSION_MEMORY_FILE = PROJECT_ROOT / "data" / "session_memory.json"
+SESSION_MEMORY_FILE = PROJECT_ROOT / "user_memory" / "session.json"
 
 # 短消息阈值：≤4 字视为"口语回应"，需要上下文扩充
 SHORT_QUERY_MAX_CHARS = 4

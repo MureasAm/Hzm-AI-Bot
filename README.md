@@ -126,12 +126,16 @@ src/plugins/chatbot/         # 运行时核心
 ├── chat_window.py           # 读秒窗口 + 分批发送
 ├── bili_bridge.py           # B站开播/动态联动推送
 └── constants.py             # 所有可调参数 ★
-persona/                     # 人格数据（按分层职责分子目录，源文件 + 向量缓存放一起）
+persona/                     # 角色人格 + 她的记忆（按分层职责分子目录，源文件 + 向量放一起）
 ├── core/                    #   核心人设：system_prompt + traits + styles（她是谁）
 ├── behavior/                #   行为：behaviors + trigger_vectors（怎么反应）
 ├── speech/                  #   说话：voice_samples(83)+phrases(11) + 向量（怎么说）
-└── world/                   #   世界：terms(25)+core_stories(5)+preferences(24) + 向量（经历/懂什么）
-data/                        # 运行时数据：corpus 向量(315) + 记忆 + B站状态
+└── world/                   #   世界：terms(25)+core_stories(5)+preferences(24)+corpus向量(315)（经历/懂什么）
+user_memory/                 # 对用户的记忆
+├── short_term.json          #   短期（最近 5 轮原文）
+├── long_term.json           #   长期（用户画像 + 承诺）
+└── session.json             #   会话级（当前话题 + 本场事件）
+data/                        # 运行时状态：bili_state.json（B站联动）
 scripts/                     # 离线工具箱 + 评测（run_tool.py 统一入口）
 tests/                       # 207 个单元测试
 ```

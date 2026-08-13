@@ -4,7 +4,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, Any
 
-MEMORY_FILE = Path(__file__).resolve().parent / "data" / "long_term_memory.json"
+MEMORY_FILE = Path(__file__).resolve().parent / "user_memory" / "long_term.json"
 
 # 长期记忆文件锁：保证「读-改-写」原子化，防止多消息并发互相覆盖
 _memory_lock = threading.Lock()

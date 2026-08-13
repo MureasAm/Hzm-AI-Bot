@@ -138,7 +138,11 @@
 - `speech/` 说话（怎么说，few-shot）：`voice_samples.json`（样本，改后 precompute voice-samples）/ `phrases.json`（措辞，改后 precompute phrases）
 - `world/` 世界/记忆（经历/懂什么）：`terms.json`（名词库）/ `core_stories.json`（核心记忆，印象最深的结晶）/ `preferences.json`（偏好条目，一条一话题，第5路语义检索）
 
-**data/**：`corpus_vectors.json`（直播记忆 RAG，源在 outputs/statement_final.json）/ `memory.json`（短期）/ `long_term_memory.json`（长期）/ `session_memory.json`（会话级记忆：当前话题+本场事件，V5.2）/ `bili_state.json`（B站状态）。其余向量缓存已移到 persona/ 对应子目录（跟源文件放一起）。
+**persona/world/** 另含 `corpus_vectors.json`（直播记忆 RAG，灰泽满的人物记忆，源在 outputs/statement_final.json）。
+
+**user_memory/**：`short_term.json`（短期）/ `long_term.json`（长期）/ `session.json`（会话级记忆：当前话题+本场事件，V5.2）—— 对用户的记忆，与 persona/（角色人格）分开。
+
+**data/**：`bili_state.json`（B站状态，运行时生成）。
 
 **src/plugins/chatbot/**：`core.py`（主循环组装）/ `persona.py` / `memory.py`（短期读写带锁）/ `session_memory.py`（会话级记忆：话题追踪+短query扩充，V5.2）/ `rag.py`（embedding+余弦）/ `retrieval.py`（四路融合+预算 + 偏好第5路 + 核心记忆检索）/ `constants.py`（所有可调参数）/ `config.py`（配置读取）/ `context_probe.py`（时间/天气感知）/ `vision.py`（glm-4.6v 视觉）/ `chat_window.py`（读秒窗口+分批发送+智能归纳）/ `bili_bridge.py`（B站联动推送 + 自动通过好友）
 
@@ -164,8 +168,8 @@ VOICE_SAMPLE_TOP_N = 3         # few-shot 甜蜜点 2-5
 
 | 层 | 内容 | 注入 |
 |---|---|---|
-| **短期**（memory.json，5轮） | 最近对话原文 | 【最近对话记录】+ 一致性规则 |
-| **长期**（long_term_memory.json） | 印象标签/用户事实/重要时刻/**承诺约定** | 【关于这个绿冻的长期记忆】 |
+| **短期**（user_memory/short_term.json，5轮） | 最近对话原文 | 【最近对话记录】+ 一致性规则 |
+| **长期**（user_memory/long_term.json） | 印象标签/用户事实/重要时刻/**承诺约定** | 【关于这个绿冻的长期记忆】 |
 
 - **self_fact 停用**：V1 起不提取 AI 自嗨的自我披露，防污染真实人格
 - **承诺记忆**（V4 加）：`new_promise` 跨会话记住她答应过用户的事（"明天一定""这周不鸽"）

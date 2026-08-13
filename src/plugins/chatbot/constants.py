@@ -15,8 +15,8 @@ BEHAVIORS_FILE = PROJECT_ROOT / "persona" / "behavior" / "behaviors.json"
 VOICE_SAMPLES_FILE = PROJECT_ROOT / "persona" / "speech" / "voice_samples.json"  # 声音样本库(few-shot)
 TERMS_FILE = PROJECT_ROOT / "persona" / "world" / "terms.json"                 # 灰泽满名词库(lorebook)：核心词always注入+命中注入
 
-MEMORY_FILE = PROJECT_ROOT / "data" / "memory.json"                 # 用户短期记忆
-VECTOR_FILE = PROJECT_ROOT / "data" / "corpus_vectors.json"         # 直播记忆向量库（源在 outputs/，留 data/）
+MEMORY_FILE = PROJECT_ROOT / "user_memory" / "short_term.json"                 # 用户短期记忆
+VECTOR_FILE = PROJECT_ROOT / "persona" / "world" / "corpus_vectors.json"         # 直播记忆向量库（灰泽满的人物记忆，归 world/）
 TRIGGER_VECTOR_FILE = PROJECT_ROOT / "persona" / "behavior" / "trigger_vectors.json"  # trigger 向量缓存（跟 behaviors.json）
 VOICE_SAMPLE_VECTOR_FILE = PROJECT_ROOT / "persona" / "speech" / "voice_sample_vectors.json"  # 声音样本向量缓存（跟 voice_samples.json）
 PHRASE_VECTOR_FILE = PROJECT_ROOT / "persona" / "speech" / "phrase_vectors.json"   # 措辞指纹向量缓存（跟 phrases.json）
