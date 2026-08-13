@@ -97,30 +97,33 @@ pip install -r requirements.txt
 
 ## 人格蒸馏流水线（离线工具箱）
 
-从直播素材到人格数据的全链路：`python scripts/run_tool.py <工具>` 统一入口。
+从直播素材到人格数据的全链路：`python scripts/run_tool.py <工具>` 统一入口（16 子命令按阶段分组）。
 
 ```
-1. transcribe         音频 → 转写（faster-whisper）
-2. clean-transcript    清洗（繁体→简体/修错字）
-3. analyze-pace        节奏地图（先判噪声，只留高质量话轮）
-4. convert-to-chat     直播 → 聊天（分离转述/回答、切分压缩）
-5. mine-phrases        挖措辞指纹（从素材提取，不手工编）
-6. generate-statements → generate-vectors → corpus 向量库
-7. precompute          预计算行为/声音样本/措辞/偏好/核心记忆向量
-8. regression / retrieval-eval / persona-eval   评测回归
+【蒸馏】transcribe → clean-transcript → analyze-pace → convert-to-chat → mine-phrases
+【生成】generate-statements → generate-vectors → generate-persona → extract-persona
+【向量】precompute
+【评测】regression / persona-eval / retrieval-eval
+【工具】bili-check / vision-test / mine-theme
 ```
 
-> 改过 `persona_behaviors.json` / `voice_samples.json` / `phrases.json` 等后需重跑对应 `precompute`。
+产物按阶段落盘到 `outputs/` 对应文件夹（transcribe/clean/pace/convert/mine/statements/eval），最终源数据 `persona/world/statement_final.json` → `persona/world/corpus_vectors.json`。
+
+> 改过 `persona/behavior/behaviors.json` / `persona/speech/voice_samples.json` / `persona/speech/phrases.json` 等后需重跑对应 `precompute`。
 
 ## 项目结构
 
 ```
 bot.py                       # 启动入口
 src/plugins/chatbot/         # 运行时核心
-├── core.py                  # 主循环（组装 + 生成 + 复读防护 + 输出清洗）
-├── retrieval.py             # 五路检索 + RRF 融合 + 预算截断 + 关键词门 + 行为L3
+├── core.py                  # 主循环（组装 + 生成 + 记忆更新）
+├── reply_style.py           # 回复风格后处理（clean_reply / split_reply / 复读检测）
+├── routing.py               # 硬匹配路由（梗库双路由 + 行为意图分类 L3）
+├── retrieval.py             # 五路检索 + RRF 融合 + 预算截断 + 关键词门
+├── config.py                # 配置读取 + API 客户端工厂
+├── persona.py               # 人格数据加载 + trigger 向量缓存 + terms
+├── memory.py                # 短期记忆 + 长期封装
 ├── session_memory.py        # 会话级记忆（话题追踪 + 指代性消息补全）
-├── memory_manager.py        # 长期记忆卡 merge + 提取
 ├── context_probe.py         # 时间/农历/天气感知
 ├── vision.py                # glm-4.6v 看图
 ├── chat_window.py           # 读秒窗口 + 分批发送
@@ -130,14 +133,16 @@ persona/                     # 角色人格 + 她的记忆（按分层职责分�
 ├── core/                    #   核心人设：system_prompt + traits + styles（她是谁）
 ├── behavior/                #   行为：behaviors + trigger_vectors（怎么反应）
 ├── speech/                  #   说话：voice_samples(83)+phrases(11) + 向量（怎么说）
-└── world/                   #   世界：terms(25)+core_stories(5)+preferences(24)+corpus向量(315)（经历/懂什么）
+└── world/                   #   世界：terms(25)+core_stories(5)+preferences(24)+corpus(315)（经历/懂什么）
 user_memory/                 # 对用户的记忆
 ├── short_term.json          #   短期（最近 5 轮原文）
 ├── long_term.json           #   长期（用户画像 + 承诺）
 └── session.json             #   会话级（当前话题 + 本场事件）
+outputs/                     # 分析产物（按阶段分文件夹，gitignore）
+assets/                      # 原始素材（音频）
 data/                        # 运行时状态：bili_state.json（B站联动）
 scripts/                     # 离线工具箱 + 评测（run_tool.py 统一入口）
-tests/                       # 207 个单元测试
+tests/                       # 194 个单元测试
 ```
 
 ## 结语

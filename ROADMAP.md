@@ -144,9 +144,17 @@
 
 **data/**：`bili_state.json`（B站状态，运行时生成）。
 
-**src/plugins/chatbot/**：`core.py`（主循环组装）/ `persona.py` / `memory.py`（短期读写带锁）/ `session_memory.py`（会话级记忆：话题追踪+短query扩充，V5.2）/ `rag.py`（embedding+余弦）/ `retrieval.py`（四路融合+预算 + 偏好第5路 + 核心记忆检索）/ `constants.py`（所有可调参数）/ `config.py`（配置读取）/ `context_probe.py`（时间/天气感知）/ `vision.py`（glm-4.6v 视觉）/ `chat_window.py`（读秒窗口+分批发送+智能归纳）/ `bili_bridge.py`（B站联动推送 + 自动通过好友）
-
-**memory_manager.py**：长期记忆卡 merge + build_memory_context + 记忆提取 prompt
+**src/plugins/chatbot/**（2026-08-13 起模块职责清晰）：
+- `core.py` 主循环组装+生成+记忆更新（1069→584 行瘦身）
+- `reply_style.py` 回复风格后处理（clean_reply / split_reply / split_delay / 复读检测 / 纯情绪判定）
+- `routing.py` 硬匹配路由（LEGENDARY 梗库双路由 + 行为意图分类 L3）
+- `config.py` 配置读取 + API 客户端工厂（_get_clients / _get_model_name）
+- `persona.py` 人格加载 + trigger 向量 + terms 名词库
+- `retrieval.py` 五路检索 + RRF 融合 + 预算 + 关键词门
+- `rag.py` embedding + 余弦
+- `memory.py` / `memory_manager.py` 短期 + 长期记忆
+- `session_memory.py` 会话级记忆（话题追踪 + 短query扩充）
+- `context_probe.py` / `vision.py` / `chat_window.py` / `bili_bridge.py` 感知 + 节奏 + B站
 
 ### 最终参数（constants.py）
 
@@ -180,21 +188,28 @@ VOICE_SAMPLE_TOP_N = 3         # few-shot 甜蜜点 2-5
 
 ## 第五部分：离线工具箱（run_tool.py）
 
-统一入口：`python scripts/run_tool.py <工具> [参数]`
+统一入口：`python scripts/run_tool.py <工具> [参数]`（16 子命令，2026-08-13 起按阶段分组显示）
 
-| 子命令 | 干什么 |
-|---|---|
-| transcribe | 音频 → 原始转写（faster-whisper GPU） |
-| clean-transcript | 转写清洗（繁体转简体 + 固定错字表） |
-| convert-to-chat | 直播 → 聊天（V3 五步：分离转述/回答 → 提特征 → 切分 → 压缩） |
-| analyze-pace | 节奏地图（`--focus` 聚焦 2-3 场景 + reasoning） |
-| mine-phrases | 从素材批量挖措辞指纹（多维度，输出待审批） |
-| generate-statements | 从素材生成场景化陈述（50-120字，供 corpus RAG） |
-| generate-vectors | 场景化陈述 → corpus 向量库 |
-| generate-persona | 场景化陈述 → 人格三件套 |
-| precompute | 预计算 trigger/声音样本/措辞向量 |
-| pipeline | 四步人格蒸馏流水线 |
-| regression | 回复灵性 A/B 回归测试 |
+| 分组 | 子命令 | 干什么 |
+|---|---|---|
+| 【蒸馏】 | transcribe | 音频 → 原始转写（faster-whisper GPU） |
+| | clean-transcript | 转写清洗（繁体转简体 + 固定错字表） |
+| | convert-to-chat | 直播 → 聊天（分离转述/回答 → 切分 → 压缩） |
+| | analyze-pace | 节奏地图（`--focus` 聚焦场景 + reasoning） |
+| | mine-phrases | 从素材批量挖措辞指纹（多维度，输出待审批） |
+| 【生成】 | generate-statements | 从素材生成场景化陈述（50-120字，供 corpus RAG） |
+| | generate-vectors | 场景化陈述 → corpus 向量库 |
+| | generate-persona | 场景化陈述 → 人格三件套 |
+| | extract-persona | 从 convert-to-chat 产物提取触发-响应行为（validation 铁律） |
+| 【向量】 | precompute | 预计算 trigger/声音样本/措辞/偏好/核心记忆向量 |
+| 【评测】 | regression | 回复灵性 A/B 回归测试 |
+| | persona-eval | 人格一致性评测（大五人格 + 匿名化） |
+| | retrieval-eval | 检索命中率评测（各 source hit rate） |
+| 【工具】 | bili-check | B站直播/动态验证 |
+| | vision-test | glm-4.6v 视觉验证 |
+| | mine-theme | 主题素材挖掘（立Flag/失约/被表白…） |
+
+> 产物按阶段落盘 `outputs/`（transcribe/clean/pace/convert/mine/statements/eval）；最终源数据 `persona/world/statement_final.json`。
 
 ---
 
