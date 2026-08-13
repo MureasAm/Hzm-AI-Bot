@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """专属 behaviors 挖掘工具：从 convert-to-chat 产物提取新格式行为规则。
 
-新格式（persona_behaviors.json）：
+新格式（behavior/behaviors.json）：
   {name, trigger, response, samples[], evidence[]}
   - name       行为名（如"被夸时嘴硬否认"）
   - trigger    触发情境（向量匹配用，要具体）
@@ -23,7 +23,7 @@
     python scripts/extract_persona.py -i converted_0807.json converted_0726.json ...
              [--out outputs/persona_extract/behaviors_candidates.json]
 
-输出候选 → 人工审批 → 并入 persona/persona_behaviors.json → precompute triggers
+输出候选 → 人工审批 → 并入 persona/behavior/behaviors.json → precompute triggers
 """
 import json
 import sys
@@ -41,7 +41,7 @@ BASE_URL = "https://api.deepseek.com/v1"
 THINKING_DISABLED = {"extra_body": {"thinking": {"type": "disabled"}}}
 BATCH_SIZE = 50
 
-# 现有 behaviors 的 8 大场景（对齐 persona_behaviors.json 的 name 归类）
+# 现有 behaviors 的 8 大场景（对齐 behavior/behaviors.json 的 name 归类）
 SCENE_GROUPS = {
     "被夸": "被夸时嘴硬否认",
     "被质疑": "被质疑时心虚辩解",
@@ -271,7 +271,7 @@ async def run(input_paths, out_file=None):
     print(f"   场景分布: {dict(scenes)}")
     for b in merged:
         print(f"   [{b.get('scene','')}] {b['name']} | trigger={b['trigger'][:30]} | {len(b.get('samples',[]))} 示范")
-    print("\n💡 下一步：人工审批后并入 persona/persona_behaviors.json，再跑 precompute triggers")
+    print("\n💡 下一步：人工审批后并入 persona/behavior/behaviors.json，再跑 precompute triggers")
 
 
 async def main():

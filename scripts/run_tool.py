@@ -190,8 +190,8 @@ def _run_generate_persona(args):
     import generate_persona
     out_dir = Path(args.out_dir) if args.out_dir else _common.PERSONA_DIR
     asyncio.run(generate_persona.run(input_path=args.input, out_dir=str(out_dir)))
-    _common.report_saved(out_dir / "persona_traits.json", out_dir / "persona_styles.json",
-                         out_dir / "persona_behaviors.json")
+    _common.report_saved(out_dir / "core/traits.json", out_dir / "core/styles.json",
+                         out_dir / "behavior/behaviors.json")
     if not args.out_dir:
         _common.warn_fixed_path(out_dir)
 

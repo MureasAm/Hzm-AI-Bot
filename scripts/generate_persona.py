@@ -159,6 +159,9 @@ def _load_corpus(input_path):
 async def run(input_path: str | None = None, out_dir: str | None = None):
     """参数化入口（供 run_tool 调用）。"""
     out = Path(out_dir) if out_dir else PERSONA_DIR
+    # 三件套按分层输出到 core/ 和 behavior/ 子目录
+    (out / "core").mkdir(parents=True, exist_ok=True)
+    (out / "behavior").mkdir(parents=True, exist_ok=True)
     corpus = _load_corpus(input_path)
 
     key = get_deepseek_key()
@@ -224,7 +227,7 @@ async def run(input_path: str | None = None, out_dir: str | None = None):
 
 
     with open(
-        out / "persona_traits.json",
+        out / "core/traits.json",
         "w",
         encoding="utf-8"
     ) as f:
@@ -238,7 +241,7 @@ async def run(input_path: str | None = None, out_dir: str | None = None):
 
 
     with open(
-        out / "persona_styles.json",
+        out / "core/styles.json",
         "w",
         encoding="utf-8"
     ) as f:
@@ -252,7 +255,7 @@ async def run(input_path: str | None = None, out_dir: str | None = None):
 
 
     with open(
-        out / "persona_behaviors.json",
+        out / "behavior/behaviors.json",
         "w",
         encoding="utf-8"
     ) as f:
@@ -268,9 +271,9 @@ async def run(input_path: str | None = None, out_dir: str | None = None):
     print("✅ 人格拆分完成")
     print("")
     print(f"已写入 {out} :")
-    print(" - persona_traits.json")
-    print(" - persona_styles.json")
-    print(" - persona_behaviors.json")
+    print(" - core/traits.json")
+    print(" - core/styles.json")
+    print(" - behavior/behaviors.json")
 
 
 async def main():

@@ -1,4 +1,4 @@
-"""离线预计算 persona_behaviors.json 中所有 trigger 的 embedding 向量。
+"""离线预计算 behavior/behaviors.json 中所有 trigger 的 embedding 向量。
 
 输出 trigger_vectors.json（{trigger_text: vector}），运行时 persona.py 直接读缓存，
 用户消息只对 query 调 1 次 embedding，避免每条消息对每个 trigger 都调 API。
@@ -15,7 +15,7 @@ from openai import AsyncOpenAI
 # 项目根目录（scripts/ 的上一级），所有路径基于它构建
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = PROJECT_ROOT / ".env.prod"
-BEHAVIORS_FILE = PROJECT_ROOT / "persona" / "persona_behaviors.json"
+BEHAVIORS_FILE = PROJECT_ROOT / "persona" / "behavior/behaviors.json"
 OUTPUT_FILE = PROJECT_ROOT / "data" / "trigger_vectors.json"
 EMBEDDING_MODEL = "embedding-3"
 ZHIPU_BASE_URL = "https://open.bigmodel.cn/api/paas/v4/"

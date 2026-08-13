@@ -1,4 +1,4 @@
-"""离线预计算 persona/voice_samples.json 中每条样本的 embedding 向量。
+"""离线预计算 persona/speech/voice_samples.json 中每条样本的 embedding 向量。
 
 输出 data/voice_sample_vectors.json（自包含格式：连同 user/reply 一起存），
 运行时 retrieval.py 直接读缓存，按当前用户消息情境检索相关的 few-shot 样本。
@@ -6,7 +6,7 @@
 用法：
     python scripts/precompute_voice_sample_vectors.py
 
-注意：改过 persona/voice_samples.json 后需重跑本脚本。
+注意：改过 persona/speech/voice_samples.json 后需重跑本脚本。
 """
 import json
 import asyncio
@@ -17,7 +17,7 @@ from openai import AsyncOpenAI
 # 项目根目录（scripts/ 的上一级），所有路径基于它构建
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = PROJECT_ROOT / ".env.prod"
-VOICE_FILE = PROJECT_ROOT / "persona" / "voice_samples.json"
+VOICE_FILE = PROJECT_ROOT / "persona" / "persona/speech/voice_samples.json"
 OUTPUT_FILE = PROJECT_ROOT / "data" / "voice_sample_vectors.json"
 EMBEDDING_MODEL = "embedding-3"
 ZHIPU_BASE_URL = "https://open.bigmodel.cn/api/paas/v4/"

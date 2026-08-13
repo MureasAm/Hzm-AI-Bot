@@ -8,12 +8,12 @@ from pathlib import Path
 # constants.py -> chatbot -> plugins -> src -> 项目根
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
-SYSTEM_PROMPT_FILE = PROJECT_ROOT / "persona" / "system_prompt.txt"
-TRAITS_FILE = PROJECT_ROOT / "persona" / "persona_traits.json"
-STYLES_FILE = PROJECT_ROOT / "persona" / "persona_styles.json"
-BEHAVIORS_FILE = PROJECT_ROOT / "persona" / "persona_behaviors.json"
-VOICE_SAMPLES_FILE = PROJECT_ROOT / "persona" / "voice_samples.json"  # 声音样本库(few-shot)
-TERMS_FILE = PROJECT_ROOT / "persona" / "terms.json"                 # 灰泽满名词库(lorebook)：核心词always注入+命中注入
+SYSTEM_PROMPT_FILE = PROJECT_ROOT / "persona" / "core" / "system_prompt.txt"
+TRAITS_FILE = PROJECT_ROOT / "persona" / "core" / "traits.json"
+STYLES_FILE = PROJECT_ROOT / "persona" / "core" / "styles.json"
+BEHAVIORS_FILE = PROJECT_ROOT / "persona" / "behavior" / "behaviors.json"
+VOICE_SAMPLES_FILE = PROJECT_ROOT / "persona" / "speech" / "voice_samples.json"  # 声音样本库(few-shot)
+TERMS_FILE = PROJECT_ROOT / "persona" / "world" / "terms.json"                 # 灰泽满名词库(lorebook)：核心词always注入+命中注入
 
 MEMORY_FILE = PROJECT_ROOT / "data" / "memory.json"                 # 用户短期记忆
 VECTOR_FILE = PROJECT_ROOT / "data" / "corpus_vectors.json"         # 直播记忆向量库

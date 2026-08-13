@@ -47,11 +47,11 @@ def get_deepseek_key():
 def load_persona(anonymous=False):
     """加载人设（system_prompt + traits/styles）。anonymous=True 时替换自称。"""
     parts = []
-    sys_prompt = PERSONA_DIR / "system_prompt.txt"
+    sys_prompt = PERSONA_DIR / "core" / "system_prompt.txt"
     if sys_prompt.exists():
         parts.append(sys_prompt.read_text(encoding="utf-8"))
 
-    for fname in ["persona_traits.json", "persona_styles.json"]:
+    for fname in ["core/traits.json", "core/styles.json"]:
         f = PERSONA_DIR / fname
         if not f.exists():
             continue
@@ -65,7 +65,7 @@ def load_persona(anonymous=False):
             elif desc:
                 lines.append(f"- {desc}")
         if lines:
-            label = "【性格基底】" if fname == "persona_traits.json" else "【语言风格】"
+            label = "【性格基底】" if fname == "core/traits.json" else "【语言风格】"
             parts.append(label + "\n" + "\n".join(lines))
 
     persona = "\n\n".join(parts)

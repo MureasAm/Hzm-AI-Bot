@@ -27,6 +27,11 @@ OUT_REGRESSION = OUTPUTS_DIR / "regression"
 # ==================== 运行时固定契约（勿改默认值）====================
 DATA_DIR = PROJECT_ROOT / "data"
 PERSONA_DIR = PROJECT_ROOT / "persona"
+# persona/ 按分层职责分子目录：core 核心人设 / behavior 行为 / speech 说话 / world 世界
+CORE_DIR = PERSONA_DIR / "core"
+BEHAVIOR_DIR = PERSONA_DIR / "behavior"
+SPEECH_DIR = PERSONA_DIR / "speech"
+WORLD_DIR = PERSONA_DIR / "world"
 ENV_FILE = PROJECT_ROOT / ".env.prod"
 
 # 机器人启动要读的固定文件（与 src/plugins/chatbot/constants.py 对齐）
@@ -36,13 +41,13 @@ VOICE_SAMPLE_VECTOR_FILE = DATA_DIR / "voice_sample_vectors.json"
 PHRASE_VECTOR_FILE = DATA_DIR / "phrase_vectors.json"
 PREFERENCE_VECTOR_FILE = DATA_DIR / "preference_vectors.json"
 CORE_STORY_VECTOR_FILE = DATA_DIR / "core_story_vectors.json"
-TRAITS_FILE = PERSONA_DIR / "persona_traits.json"
-STYLES_FILE = PERSONA_DIR / "persona_styles.json"
-BEHAVIORS_FILE = PERSONA_DIR / "persona_behaviors.json"
-VOICE_SAMPLES_FILE = PERSONA_DIR / "voice_samples.json"
-PHRASES_FILE = PERSONA_DIR / "phrases.json"
-PREFERENCES_FILE = PERSONA_DIR / "preferences.json"
-CORE_STORIES_FILE = PERSONA_DIR / "core_stories.json"
+TRAITS_FILE = CORE_DIR / "traits.json"
+STYLES_FILE = CORE_DIR / "styles.json"
+BEHAVIORS_FILE = BEHAVIOR_DIR / "behaviors.json"
+VOICE_SAMPLES_FILE = SPEECH_DIR / "voice_samples.json"
+PHRASES_FILE = SPEECH_DIR / "phrases.json"
+PREFERENCES_FILE = WORLD_DIR / "preferences.json"
+CORE_STORIES_FILE = WORLD_DIR / "core_stories.json"
 
 
 def get_api_key(name: str) -> str | None:

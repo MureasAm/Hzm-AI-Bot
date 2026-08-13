@@ -1,4 +1,4 @@
-"""离线预计算 persona/phrases.json 中每个措辞组的 trigger 向量。
+"""离线预计算 persona/speech/phrases.json 中每个措辞组的 trigger 向量。
 
 输出 data/phrase_vectors.json（自包含：连同 phrases 一起存），
 运行时 retrieval.py 按当前用户消息情境检索相关措辞组。
@@ -6,7 +6,7 @@
 用法：
     python scripts/precompute_phrase_vectors.py
 
-注意：改过 persona/phrases.json 后需重跑本脚本。
+注意：改过 persona/speech/phrases.json 后需重跑本脚本。
 """
 import json
 import asyncio
@@ -16,7 +16,7 @@ from openai import AsyncOpenAI
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = PROJECT_ROOT / ".env.prod"
-PHRASES_FILE = PROJECT_ROOT / "persona" / "phrases.json"
+PHRASES_FILE = PROJECT_ROOT / "persona" / "persona/speech/phrases.json"
 OUTPUT_FILE = PROJECT_ROOT / "data" / "phrase_vectors.json"
 EMBEDDING_MODEL = "embedding-3"
 ZHIPU_BASE_URL = "https://open.bigmodel.cn/api/paas/v4/"

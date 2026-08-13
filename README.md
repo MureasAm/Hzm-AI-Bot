@@ -126,7 +126,11 @@ src/plugins/chatbot/         # 运行时核心
 ├── chat_window.py           # 读秒窗口 + 分批发送
 ├── bili_bridge.py           # B站开播/动态联动推送
 └── constants.py             # 所有可调参数 ★
-persona/                     # 人格数据（system_prompt / traits / styles / behaviors / voice_samples(83) / phrases(11) / preferences(24) / core_stories(5) / terms(25)）
+persona/                     # 人格数据（按分层职责分子目录）
+├── core/                    #   核心人设：system_prompt + traits + styles（她是谁）
+├── behavior/                #   行为：behaviors（怎么反应）
+├── speech/                  #   说话：voice_samples(83) + phrases(11)（怎么说）
+└── world/                   #   世界：terms(25) + core_stories(5) + preferences(24)（经历/懂什么）
 data/                        # 运行时数据 + 向量缓存（corpus 315 条等）
 scripts/                     # 离线工具箱 + 评测（run_tool.py 统一入口）
 tests/                       # 207 个单元测试

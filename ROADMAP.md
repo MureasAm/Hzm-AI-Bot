@@ -132,13 +132,15 @@
 
 ### 各文件作用
 
-**persona/**：`system_prompt.txt`（人设核心）/ `persona_traits.json`（性格基底）/ `persona_styles.json`（语言风格）/ `persona_behaviors.json`（触发行为，改后 precompute triggers）/ `voice_samples.json`（样本，改后 precompute voice-samples）/ `phrases.json`（措辞，改后 precompute phrases）
+**persona/**（2026-08-13 起按分层职责分 4 个子目录）：
+- `core/` 核心人设（她是谁，always-on）：`system_prompt.txt`（人设核心）/ `traits.json`（性格基底）/ `styles.json`（语言风格）
+- `behavior/` 行为（怎么反应，触发命中才带）：`behaviors.json`（触发行为，改后 precompute triggers）
+- `speech/` 说话（怎么说，few-shot）：`voice_samples.json`（样本，改后 precompute voice-samples）/ `phrases.json`（措辞，改后 precompute phrases）
+- `world/` 世界/记忆（经历/懂什么）：`terms.json`（名词库）/ `core_stories.json`（核心记忆，印象最深的结晶）/ `preferences.json`（偏好条目，一条一话题，第5路语义检索）
 
 **data/**：`corpus_vectors.json`（直播记忆 RAG）/ `trigger_vectors.json` / `voice_sample_vectors.json` / `phrase_vectors.json` / `memory.json`（短期）/ `long_term_memory.json`（长期）/ `session_memory.json`（会话级记忆：当前话题+本场事件，V5.2）
 
 **src/plugins/chatbot/**：`core.py`（主循环组装）/ `persona.py` / `memory.py`（短期读写带锁）/ `session_memory.py`（会话级记忆：话题追踪+短query扩充，V5.2）/ `rag.py`（embedding+余弦）/ `retrieval.py`（四路融合+预算 + 偏好第5路 + 核心记忆检索）/ `constants.py`（所有可调参数）/ `config.py`（配置读取）/ `context_probe.py`（时间/天气感知）/ `vision.py`（glm-4.6v 视觉）/ `chat_window.py`（读秒窗口+分批发送+智能归纳）/ `bili_bridge.py`（B站联动推送 + 自动通过好友）
-
-**persona/** 新增：`preferences.json`（偏好条目，一条一话题，第5路语义检索）/ `core_stories.json`（核心记忆，印象最深的结晶，低阈值高浮现）
 
 **memory_manager.py**：长期记忆卡 merge + build_memory_context + 记忆提取 prompt
 
@@ -272,7 +274,7 @@ VOICE_SAMPLE_TOP_N = 3         # few-shot 甜蜜点 2-5
 ## 第九部分：风险与注意
 
 - **DeepSeek V4**：`deepseek-v4-flash`；聊天调用需 `extra_body={"thinking":{"type":"disabled"}}` 保留 temperature
-- 改 `persona_behaviors.json` / `voice_samples.json` / `phrases.json` 后需重跑对应 precompute
+- 改 `persona/behavior/behaviors.json` / `persona/speech/voice_samples.json` / `persona/speech/phrases.json` 后需重跑对应 precompute
 - 改主循环前先备份（core.py 有 backup_test1）
 - `.env.prod` 含 API key，已在 .gitignore
 - 素材质量决定样本上限——先快速判定场次价值

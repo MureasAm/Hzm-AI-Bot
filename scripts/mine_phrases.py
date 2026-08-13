@@ -4,7 +4,7 @@
 
 从清洗后的直播素材里批量挖掘灰泽满的标志性措辞指纹，
 按"同一意思/同一情境"分组，输出候选 JSON（带 evidence 证明措辞来自素材），
-供人工审批后并入 persona/phrases.json。
+供人工审批后并入 persona/speech/phrases.json。
 
 用法：
     python scripts/run_tool.py mine-phrases -i cleaned_0626.json cleaned_0608.json ...
@@ -170,7 +170,7 @@ async def run(input_paths, output_file, batch_size=BATCH_SIZE):
     print(f"   共 {len(merged)} 组措辞指纹")
     for g in merged:
         print(f"   - {g['meaning']}：{g['phrases'][:4]}")
-    print("   💡 下一步：人工审批后并入 persona/phrases.json，再重跑 precompute phrases")
+    print("   💡 下一步：人工审批后并入 persona/speech/phrases.json，再重跑 precompute phrases")
 
 
 async def main():

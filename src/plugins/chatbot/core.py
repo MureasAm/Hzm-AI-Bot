@@ -592,7 +592,7 @@ _terms_cache = None
 
 
 def load_terms() -> list:
-    """加载 persona/terms.json 名词库（模块级缓存）。"""
+    """加载 persona/world/terms.json 名词库（模块级缓存）。"""
     global _terms_cache
     if _terms_cache is not None:
         return _terms_cache

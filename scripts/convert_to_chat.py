@@ -183,7 +183,7 @@ async def run(input_paths, output_file):
         json.dump(results, f, ensure_ascii=False, indent=2)
     print(f"\n✅ 转化完成：{output_file}")
     print(f"   原文 {len(texts)} 条 → 样本 {len(results)} 条（跳过噪声 {skipped}）")
-    print(f"   💡 下一步：人工筛选后补进 persona/voice_samples.json，再重跑 precompute voice-samples")
+    print(f"   💡 下一步：人工筛选后补进 persona/speech/voice_samples.json，再重跑 precompute voice-samples")
 
 
 async def main():

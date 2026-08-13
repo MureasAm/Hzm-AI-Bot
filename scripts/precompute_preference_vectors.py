@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""离线预计算 persona/preferences.json 的偏好向量（第 5 路检索）。
+"""离线预计算 persona/world/preferences.json 的偏好向量（第 5 路检索）。
 
 输出 data/preference_vectors.json（entries 数组：id/category/text/vector）。
 运行时 retrieval.py 读缓存，按当前消息语义检索命中的偏好条目，注入【灰泽满的偏好】。
@@ -9,7 +9,7 @@
     python scripts/precompute_preference_vectors.py
     python scripts/run_tool.py precompute preferences
 
-注意：改过 persona/preferences.json 后需重跑本脚本。
+注意：改过 persona/world/preferences.json 后需重跑本脚本。
 """
 import asyncio
 import json
@@ -20,7 +20,7 @@ from openai import AsyncOpenAI
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = PROJECT_ROOT / ".env.prod"
-PREF_FILE = PROJECT_ROOT / "persona" / "preferences.json"
+PREF_FILE = PROJECT_ROOT / "persona" / "persona/world/preferences.json"
 OUTPUT_FILE = PROJECT_ROOT / "data" / "preference_vectors.json"
 EMBEDDING_MODEL = "embedding-3"
 ZHIPU_BASE_URL = "https://open.bigmodel.cn/api/paas/v4/"

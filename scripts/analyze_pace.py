@@ -29,7 +29,7 @@ MODEL = "deepseek-v4-flash"
 BASE_URL = "https://api.deepseek.com/v1"
 TURN_GAP_SEC = 2.0  # 间隔 ≤2s 视为同一句话
 
-# 场景分类（对齐 persona_behaviors + 直播常见场景）
+# 场景分类（对齐 behavior/behaviors + 直播常见场景）
 SCENARIOS = [
     "被夸时", "被戳穿/被质疑", "被越界/被调戏", "被催播/催更",
     "日常闲聊", "感性流露/孤独", "摆烂/拖延", "分享倒霉事",
