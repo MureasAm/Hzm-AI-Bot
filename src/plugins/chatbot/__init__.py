@@ -12,17 +12,40 @@
 - chat_window.py  读秒窗口（方案B：消息攒批，回复前统一读图+归纳）
 - bili_bridge.py  B站直播/动态监听 + 私聊广播（启动时注册后台任务）
 """
+import asyncio
 import ast
 import re
+from pathlib import Path
 
-from nonebot import on_message, on_request
+from nonebot import get_driver, on_message, on_request
 from nonebot.adapters.onebot.v11 import Bot, Event, FriendRequestEvent, RequestEvent
 
-from .constants import AUTO_ACCEPT_FRIEND
+from .constants import AUTO_ACCEPT_FRIEND, PROJECT_ROOT
 from . import bili_bridge  # noqa: F401  导入即注册启动时的后台监听任务
 from . import chat_window
 
 chat = on_message(priority=10, block=True)
+
+# ==================== 💓 心跳（watchdog 自愈用） ====================
+# NapCat 可能"假死"（进程活着、QQ 显示在线，但收不到消息）。watchdog 脚本靠心跳
+# 判断 bot 是否还活着：bot 每 30s touch data/heartbeat，watchdog 检测心跳过期就
+# 重启 NapCat + bot。纯文件操作，无副作用，不依赖网络。
+HEARTBEAT_FILE = PROJECT_ROOT / "data" / "heartbeat"
+
+
+async def _heartbeat_loop() -> None:
+    while True:
+        try:
+            HEARTBEAT_FILE.parent.mkdir(parents=True, exist_ok=True)
+            HEARTBEAT_FILE.touch()
+        except OSError:
+            pass  # 心跳写失败不影响 bot 运行
+        await asyncio.sleep(30)
+
+
+@get_driver().on_startup
+async def _start_heartbeat() -> None:
+    asyncio.create_task(_heartbeat_loop())
 
 # 自动通过好友申请：新加的绿冻立即变双向好友，B站推送才能到达（NapCat 无法给单向好友发消息）
 friend_req = on_request(priority=1, block=False)
