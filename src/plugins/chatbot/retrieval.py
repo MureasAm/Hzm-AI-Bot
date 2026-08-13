@@ -12,6 +12,7 @@ import json
 from dataclasses import dataclass, field
 
 from .constants import (
+    PROJECT_ROOT,
     VOICE_SAMPLE_VECTOR_FILE, PHRASE_VECTOR_FILE, PREFERENCE_VECTOR_FILE, CORE_STORY_VECTOR_FILE,
     RAG_THRESHOLD, CORPUS_TOP_N,
     CORPUS_KEYWORD_FLOOR, CORPUS_STRONG_KEYWORD,
@@ -186,15 +187,30 @@ def retrieve_voice_samples(user_query: str, query_vector,
     return _ensure_min_samples(items, samples, query_vector)
 
 
-# 口语质问关键词 → 强制命中行为（语义检索对"敷衍/鸽/迟到"这类口语有~0.55天花板且易错配，
-# 对齐 LEGENDARY 的思路：固定质问词 → 固定反应）
-_BEHAVIOR_KEYWORDS = {
-    "被质疑时心虚辩解": ["敷衍", "又骗", "在骗", "装的", "撒谎", "骗子"],
-    "失约被催时认栽滑跪": ["又迟到", "说好的", "又鸽", "鸽了", "放鸽子", "爽约", "又没播"],
-    # 被越界：领域黑话（黄桃梗/擦边/低俗）是判别性内容词，LLM 未必认识"黄桃"这类梗，
-    # 关键词兜底可靠（实测 LLM 对"造个黄桃吧"判 null，加兜底后命中）
-    "被越界时冷静推开": ["黄桃", "擦边", "低俗", "黄段子", "开黄腔", "色色", "涩涩"],
-}
+# 行为判别词 → 强制命中行为（语义检索对"敷衍/鸽/迟到"这类口语有~0.55天花板且易错配，
+# 对齐 LEGENDARY 的思路：固定判别词 → 固定反应）。
+# 数据化：从 persona/behavior/behavior_keywords.json 加载，填 JSON 不用改代码。
+_BEHAVIOR_KEYWORDS_FILE = PROJECT_ROOT / "persona" / "behavior" / "behavior_keywords.json"
+_behavior_keywords_cache = None
+
+
+def load_behavior_keywords() -> dict:
+    """加载行为判别词（行为名 → 判别词列表）。行为名必须与 behaviors.json 的 name 一致。"""
+    global _behavior_keywords_cache
+    if _behavior_keywords_cache is not None:
+        return _behavior_keywords_cache
+    if not _BEHAVIOR_KEYWORDS_FILE.exists():
+        _behavior_keywords_cache = {}
+        return _behavior_keywords_cache
+    try:
+        data = json.loads(_BEHAVIOR_KEYWORDS_FILE.read_text(encoding="utf-8"))
+        _behavior_keywords_cache = {k: v for k, v in data.items() if not k.startswith("_")}
+    except (json.JSONDecodeError, OSError):
+        _behavior_keywords_cache = {}
+    return _behavior_keywords_cache
+
+
+_BEHAVIOR_KEYWORDS = load_behavior_keywords()
 
 
 def select_behavior_item(user_msg: str, behavior_intent: str, behaviors: list) -> "RetrievalItem | None":

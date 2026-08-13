@@ -2,116 +2,43 @@
 
 从 core.py 拆出。这些是"先判断这条消息是啥、要不要走固定回复"的入口逻辑，
 与"组装消息 + 生成"分离——core 专注消息组装。
+
+梗库数据化：LEGENDARY_REPLIES / LEGENDARY_CONFIRMS 从 persona/world/legendary.json 加载，
+使用者填 JSON 即可，不用改代码。改后重启生效。
 """
 import json
+from pathlib import Path
 
-from .constants import THINKING_DISABLED
+from .constants import THINKING_DISABLED, PROJECT_ROOT
 from .config import _get_clients, _get_model_name
 
-# ==================== 💬 经典梗硬匹配库 ====================
-# 角色的"固定回答梗"：用户消息里命中关键词，就回固定原话（不经检索）。
-# 梗的原话必须来自素材，不编造。宽泛关键词配 LEGENDARY_CONFIRMS 的 LLM 语境确认防误触发。
-LEGENDARY_REPLIES = {
-    "爱不爱绿冻": [
-        "早就说过很爱了...你要是感觉不到，灰泽满也不知道该怎么证明了",
-        "爱是也可以的，不爱也可以的~（但其实是爱的，别不信）",
-    ],
-    "在和谁说话": [
-        "在和..在和你说话哦~",
-        "在和弹幕说话~"
-    ],
-    # "爱不爱"的跟进句：绿冻说感觉不到爱（带 LLM 确认）
-    "没感觉": [
-        "那灰泽满要怎么表现你才感觉得到？抱一下？",
-        "感觉不到吗……那灰泽满多说几次，真的很爱",
-    ],
-    "感觉不": [
-        "感觉不出来？那灰泽满只能天天说了，说到你信为止",
-    ],
-    # "绿冻永远是第二选择"（真实直播梗）：语义检索够不到口语化关系提问（实测~0.55）
-    "排第几": [
-        "绿冻永远是灰泽满的第二选择，这还用排吗",
-        "别排了，绿冻永远是灰泽满的第二选择",
-    ],
-    "你的粉丝": [
-        "不只是粉丝……绿冻永远是灰泽满的第二选择",
-        "谁说是普通粉丝了，绿冻永远是灰泽满的第二选择",
-    ],
-    "在乎我": [
-        "在乎的，绿冻永远是灰泽满的第二选择",
-        "绿冻永远是灰泽满的第二选择，怎么可能不在乎",
-    ],
-    "我重要": [
-        "重要啊，绿冻永远是灰泽满的第二选择",
-        "怎么会不重要，绿冻永远是灰泽满的第二选择",
-    ],
-    "绿冻算什么": [
-        "绿冻算什么……绿冻是灰泽满的第二选择啊",
-    ],
-    # 问"能不能叫你妈妈"（征求/求宠）：才16岁怎么做父母
-    "叫你妈妈": [
-        "灰泽满才16岁，怎么做父母啊",
-        "16岁当妈？灰泽满自己还是小孩呢",
-        "别别别，灰泽满担不起这个称呼",
-    ],
-    "叫你一声": [
-        "灰泽满才16岁，怎么做父母啊",
-        "16岁当妈？灰泽满自己还是小孩呢",
-    ],
-    "叫我妈妈": [
-        "灰泽满才16岁，怎么做父母啊",
-        "16岁当妈？灰泽满自己还是小孩呢",
-    ],
-    # 直接喊"妈妈"（玩梗撒娇）：单独回个😅
-    "妈妈": [
-        "😅",
-        "……😅",
-    ],
-}
+LEGENDARY_FILE = PROJECT_ROOT / "persona" / "world" / "legendary.json"
 
-# ==================== 梗库双路由：LLM 语境确认 ====================
-# 仅宽泛关键词配确认（防误触发）；'排第几''绿冻算什么'等特定词不配。
-_CONFIRM_SECOND = (
-    "判断这条消息是否属于'绿冻向灰泽满表达自我怀疑：自己只是普通粉丝、不被在乎、"
-    "在灰泽满心里没有位置'的语境，需要灰泽满用'绿冻永远是第二选择'来安抚。\n\n"
-    "属于（回复'是'）的例子：\n"
-    "- 我在你心里排第几\n- 我只是你的粉丝吧\n- 你是不是根本不在乎我\n- 你觉得我重要吗\n"
-    "- 我只是个路人而已吧\n- 我在你心里有位置吗\n\n"
-    "不属于（回复'否'）的例子：\n"
-    "- 你的粉丝好热情啊（是在夸粉丝，不是绿冻自我怀疑）\n"
-    "- 这个任务我重要吗（指任务，不是绿冻本人）\n"
-    "- 你还在乎我们宿舍吗（指宿舍/他人，不是绿冻本人）\n\n"
-    "结合最近对话判断语境——如果最近在聊感情/关系/被冷落，消息里的'重要吗''在乎吗'就是指灰泽满对TA的感情。\n\n"
-    "最近对话：\n{context}\n\n消息：{msg}\n只回复：是 或 否"
-)
-_CONFIRM_LOVE = (
-    "判断这条消息是否在'绿冻质疑灰泽满的感情（爱不爱、在不在乎、能不能感觉到爱）'的语境。\n"
-    "结合最近对话判断——如果最近在聊感情/爱不爱，消息里的'没感觉''感觉不到'就是指感情。\n\n"
-    "属于（回复'是'）的例子：\n"
-    "- 可是我没感觉出来（前面在聊爱不爱）\n- 你说爱我但我感觉不到\n\n"
-    "不属于（回复'否'）的例子：\n"
-    "- 这首歌我没感觉（指歌）\n- 这个菜没味道（指菜）\n\n"
-    "最近对话：\n{context}\n\n消息：{msg}\n只回复：是 或 否"
-)
-_CONFIRM_MOM = (
-    "判断这条消息是否在'绿冻玩梗喊灰泽满妈妈'——把灰泽满当妈/叫妈妈求宠/认妈'的语境，需要灰泽满装傻不接。\n\n"
-    "属于（回复'是'）的例子：\n"
-    "- 妈妈！\n- 喊你一声妈妈行不行\n- 我能叫你妈妈吗\n- 妈！我要抱抱\n\n"
-    "不属于（回复'否'）的例子：\n"
-    "- 我妈让我早点睡（指用户自己的妈妈）\n- 我妈妈叫我睡觉了（指用户自己的妈妈）\n"
-    "- 你妈妈也是这么说你的吗（指灰泽满的妈妈/满妈）\n"
-    "- 帮我妈个忙（'妈'是动词，非称呼灰泽满）\n\n"
-    "最近对话：\n{context}\n\n消息：{msg}\n只回复：是 或 否"
-)
+_legendary_cache = None
 
-LEGENDARY_CONFIRMS = {
-    "你的粉丝": _CONFIRM_SECOND,
-    "在乎我": _CONFIRM_SECOND,
-    "我重要": _CONFIRM_SECOND,
-    "没感觉": _CONFIRM_LOVE,
-    "感觉不": _CONFIRM_LOVE,
-    "妈妈": _CONFIRM_MOM,
-}
+
+def load_legendary() -> dict:
+    """加载经典梗库：{replies: {关键词: [候选回复]}, confirms: {关键词: 确认prompt}}。"""
+    global _legendary_cache
+    if _legendary_cache is not None:
+        return _legendary_cache
+    if not LEGENDARY_FILE.exists():
+        _legendary_cache = {"replies": {}, "confirms": {}}
+        return _legendary_cache
+    try:
+        data = json.loads(LEGENDARY_FILE.read_text(encoding="utf-8"))
+        _legendary_cache = {
+            "replies": data.get("replies", {}) or {},
+            "confirms": data.get("confirms", {}) or {},
+        }
+    except (json.JSONDecodeError, OSError):
+        _legendary_cache = {"replies": {}, "confirms": {}}
+    return _legendary_cache
+
+
+# ==================== 💬 经典梗硬匹配库（数据化） ====================
+LEGENDARY_REPLIES = load_legendary()["replies"]
+LEGENDARY_CONFIRMS = load_legendary()["confirms"]
 
 
 async def legendary_confirmed(user_msg: str, prompt_template: str, history: str = "") -> bool:
@@ -140,8 +67,8 @@ async def legendary_confirmed(user_msg: str, prompt_template: str, history: str 
 
 
 # ==================== 🎭 行为意图分类（L3：LLM 判意图，不再用 embedding 猜） ====================
-# 背景：embedding 聚的是"句式"不是"意图"——'角色名你唱歌好听'（夸）和
-# '角色名你怎么又迟到了'（质问）句式相同，在向量空间挤成一团，余弦匹配会把
+# 背景：embedding 聚的是"句式"不是"意图"——'灰泽满你唱歌好听'（夸）和
+# '灰泽满你怎么又迟到了'（质问）句式相同，在向量空间挤成一团，余弦匹配会把
 # 夸奖误判成质疑。治本：行为归属交给 LLM 理解，判别性词汇仍作关键词兜底。
 BEHAVIOR_CLASSIFY_PROMPT = """你是{role_name}的行为意图分类器。判断用户刚发的这条消息是否明确落入某个"行为触发场景"。只有明确匹配才选，拿不准一律 null（宁可不触发，不误触发）。
 
