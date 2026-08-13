@@ -411,7 +411,13 @@ def _run_retrieval_eval(args):
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="run_tool",
-        description="灰泽满离线工具箱：统一所有离线脚本的入口",
+        description="灰泽满离线工具箱：统一所有离线脚本的入口。\n"
+                    "子命令按流水线阶段分组：\n"
+                    "  【蒸馏】transcribe · clean-transcript · convert-to-chat · analyze-pace · mine-phrases\n"
+                    "  【生成】generate-statements · generate-vectors · generate-persona · extract-persona\n"
+                    "  【向量】precompute\n"
+                    "  【评测】regression · persona-eval · retrieval-eval\n"
+                    "  【工具】bili-check · vision-test · mine-theme",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sub = parser.add_subparsers(dest="command", required=True, title="可用工具")
