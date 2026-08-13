@@ -13,7 +13,7 @@
     python scripts/persona_eval.py --traits 嘴硬,自嘲   # 只测指定特质
     python scripts/persona_eval.py --full          # 输出每题的完整回答
 
-输出：outputs/persona_eval/eval_<时间戳>.json + .md
+输出：outputs/eval/persona/eval_<时间戳>.json + .md
 
 注意：这是项目之外的测试脚本，不 import 任何运行代码，不读写线上记忆文件。
 """
@@ -27,7 +27,7 @@ from openai import AsyncOpenAI
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = PROJECT_ROOT / ".env.prod"
 PERSONA_DIR = PROJECT_ROOT / "persona"
-OUT_DIR = PROJECT_ROOT / "outputs" / "persona_eval"
+OUT_DIR = PROJECT_ROOT / "outputs" / "eval" / "persona"
 
 MODEL = "deepseek-v4-flash"
 BASE_URL = "https://api.deepseek.com/v1"

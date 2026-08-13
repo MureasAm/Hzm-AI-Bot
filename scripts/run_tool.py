@@ -293,7 +293,7 @@ def _add_regression(sub):
     p.add_argument("-i", "--danmaku", default=None,
                    help="自定义弹幕 JSON/文本（缺省用内置虚构弹幕）")
     p.add_argument("-o", "--out-dir", default=None,
-                   help="输出目录（默认 outputs/regression/）")
+                   help="输出目录（默认 outputs/eval/regression/）")
     p.set_defaults(func=_run_regression)
 
 

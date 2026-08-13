@@ -25,8 +25,8 @@ OUT_PACE = OUTPUTS_DIR / "pace"                # 节奏地图
 OUT_CONVERT = OUTPUTS_DIR / "convert"          # 直播→聊天转化
 OUT_MINE = OUTPUTS_DIR / "mine"                # 挖措辞/挖主题
 OUT_STATEMENTS = OUTPUTS_DIR / "statements"    # 场景化陈述
-OUT_PIPELINE = OUTPUTS_DIR / "pipeline"
-OUT_REGRESSION = OUTPUTS_DIR / "regression"
+OUT_EVAL = OUTPUTS_DIR / "eval"                    # 评测（persona/retrieval/regression 子目录）
+OUT_REGRESSION = OUT_EVAL / "regression"
 
 # ==================== 运行时固定契约（勿改默认值）====================
 DATA_DIR = PROJECT_ROOT / "data"

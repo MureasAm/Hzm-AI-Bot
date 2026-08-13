@@ -96,7 +96,7 @@ def run(ab_mode=False, danmaku_file=None, out_dir=None):
     """参数化入口（供 run_tool 调用）。"""
     global DANMAKU
     danmaku = _load_danmaku(danmaku_file)
-    out = Path(out_dir) if out_dir else Path("outputs/regression")
+    out = Path(out_dir) if out_dir else Path("outputs/eval/regression")
     out.mkdir(parents=True, exist_ok=True)
 
     core = _init()

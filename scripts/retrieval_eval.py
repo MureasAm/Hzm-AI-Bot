@@ -36,7 +36,7 @@ from src.plugins.chatbot.core import classify_behavior  # noqa: E402  (L3：LLM 
 
 CASES_FILE = PROJECT_ROOT / "data" / "retrieval_eval_cases.json"
 ENV_FILE = PROJECT_ROOT / ".env.prod"
-OUT_DIR = PROJECT_ROOT / "outputs" / "retrieval_eval"
+OUT_DIR = PROJECT_ROOT / "outputs" / "eval" / "retrieval"
 
 
 def _env_key(name: str) -> str:
