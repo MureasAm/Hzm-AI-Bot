@@ -20,7 +20,7 @@ from .core import (
 from .reply_style import (
     split_reply, split_delay, clean_reply,
 )
-from .vision import describe_image
+from .vision import describe_image, describe_image_bytes, _read_image_bytes
 from .constants import (
     READ_WINDOW_MIN_SECONDS, READ_WINDOW_MAX_SECONDS, SPLIT_REPLY_ENABLED,
 )
@@ -40,6 +40,27 @@ class _UserWindow:
 
 
 _windows: dict[str, _UserWindow] = {}
+
+# 图片字节缓存：enqueue 时立刻下载（rkey 时效内），flush 时直接用。
+# 根治"读秒窗口攒批后 rkey 过期 → gchat.qpic.cn 400"（QQ 图链 rkey 时效很短）。
+_image_bytes_cache: dict[str, bytes] = {}
+_IMAGE_CACHE_MAX = 16
+
+
+async def _eager_download(source: str) -> None:
+    """收到消息立刻下载图片字节存缓存。失败留空，flush 走原逻辑兜底。"""
+    if not source or not source.startswith(("http://", "https://")):
+        return
+    if source in _image_bytes_cache:
+        return
+    try:
+        data = await _read_image_bytes(source)
+        if data:
+            if len(_image_bytes_cache) > _IMAGE_CACHE_MAX:
+                _image_bytes_cache.clear()
+            _image_bytes_cache[source] = data
+    except Exception:
+        pass  # 下载失败不阻塞，flush 时再试
 
 
 def _combine_text(msgs: list[tuple[str, str]]) -> str:
@@ -63,8 +84,13 @@ async def _describe_image_src(bot, src: str) -> str:
         return ""
     try:
         _, zhipu_client = _get_clients()
-        print(f"[视觉] 图片url: {url[:100]}")
-        desc = await describe_image(zhipu_client, url)
+        cached = _image_bytes_cache.get(url)
+        if cached:
+            print(f"[视觉] 命中图片缓存（enqueue 时已下载，rkey 新鲜）")
+            desc = await describe_image_bytes(zhipu_client, cached)
+        else:
+            print(f"[视觉] 图片url: {url[:100]}")
+            desc = await describe_image(zhipu_client, url)
         print(f"[视觉] 图片描述: {desc[:80]}")
         return desc
     except Exception as e:
@@ -90,6 +116,9 @@ def enqueue(user_id: str, text: str, image_source: str,
     win.is_private = is_private
     win.target_id = target_id
     win.pending.append((text, image_source))
+    # 图片立刻缓存下载（rkey 新鲜），读秒窗口后不因过期 400
+    if image_source:
+        asyncio.create_task(_eager_download(image_source))
     win.task = asyncio.create_task(_process(win, gen))
 
 

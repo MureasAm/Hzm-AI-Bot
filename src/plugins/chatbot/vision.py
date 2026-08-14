@@ -56,20 +56,30 @@ async def _read_image_bytes(source: str) -> bytes:
     if source.startswith("file://"):
         source = source[len("file://"):]
     if source.startswith(("http://", "https://")):
-        headers = {
-            "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                           "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"),
-        }
+        ua = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+              "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
         referer = _referer_for(source)
-        if referer:
-            headers["Referer"] = referer
         # trust_env=False：强制直连，不受环境变量代理影响
         # （踩坑：bot 环境曾有失效代理 HTTP_PROXY=127.0.0.1:50454，导致 B站图链下载 ConnectError）
-        async with httpx.AsyncClient(timeout=DOWNLOAD_TIMEOUT, follow_redirects=True,
-                                     headers=headers, trust_env=False) as client:
-            resp = await client.get(source)
-            resp.raise_for_status()
-            return resp.content
+        # 重试策略：先带 Referer；400/403/404 时降级为不带 Referer 再试一次
+        # （QQ CDN hotlink 校验策略会变，曾统一 referer 后导致 400）
+        attempts = [{"User-Agent": ua, "Referer": referer} if referer else {"User-Agent": ua},
+                    {"User-Agent": ua}]
+        last_err: Exception | None = None
+        for hdrs in attempts:
+            try:
+                async with httpx.AsyncClient(timeout=DOWNLOAD_TIMEOUT, follow_redirects=True,
+                                             headers=hdrs, trust_env=False) as client:
+                    resp = await client.get(source)
+                    resp.raise_for_status()
+                    return resp.content
+            except httpx.HTTPStatusError as e:
+                last_err = e
+                if e.response.status_code in (400, 403, 404):
+                    continue  # 换 referer 策略重试一次
+                raise
+        assert last_err is not None
+        raise last_err
     # 本地文件路径
     p = Path(source)
     if p.exists():
@@ -118,33 +128,19 @@ def _to_data_uri(data: bytes, mime: str = "image/jpeg") -> str:
     return f"data:{mime};base64," + base64.b64encode(data).decode("ascii")
 
 
-async def describe_image(zhipu_client, source: str, model: str = None) -> str:
-    """描述图片。zhipu_client 由调用方传入（core._get_clients 里的 zhipu client）。"""
+async def describe_image_bytes(zhipu_client, data: bytes, model: str = None) -> str:
+    """描述已下载的图片字节（供 chat_window 的"收到即缓存"路径复用，避免重复下载）。"""
     model = model or get_vision_model()
-
-    if source.startswith("data:"):
-        data_uri = source
-    else:
-        try:
-            print(f"[视觉] 下载图片: {source[:100]}")
-            data = await _read_image_bytes(source)
-            print(f"[视觉] 下载成功，{len(data)} 字节")
-        except Exception as e:
-            print(f"⚠️ 图片下载失败: {e}")
-            return ""
-        if not data or len(data) > MAX_IMAGE_BYTES:
-            print("⚠️ 图片为空或超 15MB，跳过视觉描述")
-            return ""
-        mime = _detect_image_mime(data)
-        print(f"[视觉] 原始格式: {mime or '未知'}")
-        try:
-            data = _normalize_image(data)  # 统一转 JPEG，避开模型不支持的 WEBP 等
-            print(f"[视觉] 已转码 JPEG，{len(data)} 字节")
-        except Exception as e:
-            print(f"⚠️ 图片解码/转码失败（忽略）: {e}")
-            return ""
-        data_uri = _to_data_uri(data, "image/jpeg")
-
+    if not data or len(data) > MAX_IMAGE_BYTES:
+        print("⚠️ 图片为空或超 15MB，跳过视觉描述")
+        return ""
+    mime = _detect_image_mime(data)
+    try:
+        data = _normalize_image(data)  # 统一转 JPEG，避开模型不支持的 WEBP 等
+    except Exception as e:
+        print(f"⚠️ 图片解码/转码失败（忽略）: {e}")
+        return ""
+    data_uri = _to_data_uri(data, "image/jpeg")
     try:
         resp = await zhipu_client.chat.completions.create(
             model=model,
@@ -158,8 +154,38 @@ async def describe_image(zhipu_client, source: str, model: str = None) -> str:
             max_tokens=VISION_MAX_TOKENS,
             **VISION_THINKING_DISABLED,
         )
-        desc = (resp.choices[0].message.content or "").strip()
-        return desc
+        return (resp.choices[0].message.content or "").strip()
     except Exception as e:
         print(f"⚠️ 视觉模型调用失败: {e}")
         return ""
+
+
+async def describe_image(zhipu_client, source: str, model: str = None) -> str:
+    """描述图片。zhipu_client 由调用方传入（core._get_clients 里的 zhipu client）。"""
+    if source.startswith("data:"):
+        data_uri = source
+        try:
+            resp = await zhipu_client.chat.completions.create(
+                model=model or get_vision_model(),
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": VISION_PROMPT},
+                        {"type": "image_url", "image_url": {"url": data_uri}},
+                    ],
+                }],
+                max_tokens=VISION_MAX_TOKENS,
+                **VISION_THINKING_DISABLED,
+            )
+            return (resp.choices[0].message.content or "").strip()
+        except Exception as e:
+            print(f"⚠️ 视觉模型调用失败: {e}")
+            return ""
+    try:
+        print(f"[视觉] 下载图片: {source[:100]}")
+        data = await _read_image_bytes(source)
+        print(f"[视觉] 下载成功，{len(data)} 字节")
+    except Exception as e:
+        print(f"⚠️ 图片下载失败: {e}")
+        return ""
+    return await describe_image_bytes(zhipu_client, data, model)
