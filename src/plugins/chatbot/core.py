@@ -123,7 +123,7 @@ def _split_fused(fused_items):
 from .persona import load_terms  # noqa: E402
 
 
-def build_terms_note(user_msg: str) -> str:
+def build_terms_note(user_msg: str, denied_terms: set | None = None) -> str:
     """根据用户消息命中名词库：核心词(always)每次注入 + 命中词(关键词/别名/正则)注入。
 
     返回注入文本【灰泽满的世界】。客观打底 + 带灰泽满态度，让模型既懂词义又有正确的相处态度。
@@ -134,7 +134,16 @@ def build_terms_note(user_msg: str) -> str:
     - pattern（可选）：正则命中。用于子串匹配做不到的场景——如'区'单字撞'小区/地区'，
       用 `满区|(这么|太|好|很|真…)\\s*区` 只命中'满区'或形容词用法（'你怎么这么区'），
       不误触普通名词里的'区'。
+
+    双向（v2）：
+    - usage：该词的"主动用词规则"——回复里表达这个概念时用这个词（意思→词）。
+    - usage_triggers：概念触发词。消息出现这些词（关键词没命中）时只注入 usage，
+      让模型讨论这个概念时主动用黑话称呼，而不是只会听懂。
+    usage 只在"关键词命中 或 概念词出现"时才注入（不常驻），避免"每条都蹦黑话"。
+
+    denied_terms：LLM 语境确认后应剔除的词条 keyword 集合（见 confirm_ambiguous_terms）。
     """
+    denied = denied_terms or set()
     terms = load_terms()
     if not terms:
         return ""
@@ -144,17 +153,83 @@ def build_terms_note(user_msg: str) -> str:
         kw = t.get("keyword", "")
         if not kw:
             continue
+        if kw in denied:
+            continue
         keys = [kw] + [str(a) for a in t.get("aliases", []) if a]
         pattern = t.get("pattern")
-        hit = (t.get("priority") == "always"
-               or any(k in msg for k in keys)
-               or (pattern and re.search(pattern, msg)))
+        usage = t.get("usage")
+        key_hit = any(k in msg for k in keys) or (pattern and re.search(pattern, msg))
+        concept_hit = any(w in msg for w in (t.get("usage_triggers") or []))
+        hit = t.get("priority") == "always" or key_hit
         if hit:
             parts = [t.get("meaning", "")]
             if t.get("reaction"):
                 parts.append(f"被提到时：{t['reaction']}")
+            if usage and (key_hit or concept_hit):
+                parts.append(f"用词规则：{usage}")
             notes.append(f"{kw}：{'；'.join(parts)}")
+        elif usage and concept_hit:
+            # 概念命中：消息没提关键词，但提到概念词 → 只注入用词规则
+            notes.append(f"用词规则：{usage}")
     return "；".join(notes) if notes else ""
+
+
+async def confirm_ambiguous_terms(user_msg: str, deepseek_client=None) -> set:
+    """LLM 语境确认（词→意思的准确性守卫）。
+
+    对 `confirm:true` 且本轮命中的术语，用一次便宜 LLM 判断"这个词在这个语境下是否真指它定义的含义"，
+    返回应剔除的 keyword 集合（交给 build_terms_note 跳过）。防止 pattern/短词命中误触
+    （如'满区'命中'怎么这么区'，可能是普通形容词用法而非黑话）。
+
+    失败/无客户端默认放行（返回空集，不丢注入）——和 legendary_confirmed 同策略。
+    """
+    msg = (user_msg or "").strip()
+    if not msg:
+        return set()
+    terms = load_terms()
+    candidates = []
+    for t in terms:
+        kw = t.get("keyword", "")
+        if not kw or not t.get("confirm"):
+            continue
+        keys = [kw] + [str(a) for a in t.get("aliases", []) if a]
+        pattern = t.get("pattern")
+        if any(k in msg for k in keys) or (pattern and re.search(pattern, msg)):
+            candidates.append(t)
+    if not candidates:
+        return set()
+    if deepseek_client is None:
+        try:
+            deepseek_client, _ = _get_clients()
+        except Exception:
+            return set()
+    lines = "\n".join(f"- {t['keyword']}：{t.get('meaning', '')[:80]}" for t in candidates)
+    prompt = (
+        "你是角色语境的判断器。下面是一批角色黑话/专名词条，用户消息命中了它们的关键词。\n"
+        "判断：每个词条在**当前语境下**是否真的指它定义的含义。\n"
+        "注意：发消息的人通常是粉丝/熟人，命中大多是黑话本义；**只有当语境明显指向其他意思时才剔除**。\n"
+        "（例：'这个是好区'=好地段，不是'满区'粉丝黑话→剔除；'真的好区'=调侃'好菜/拉胯'，是黑话本义→不剔除。）\n\n"
+        f"用户消息：{msg}\n\n词条：\n{lines}\n\n"
+        '只输出 JSON：{"exclude": ["词条A"]}，exclude 只列**明显不是**该含义的词条；'
+        '都适用输出 {"exclude": []}'
+    )
+    try:
+        resp = await deepseek_client.chat.completions.create(
+            model=_get_model_name(),
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            max_tokens=200,
+            **THINKING_DISABLED,
+        )
+        content = (resp.choices[0].message.content or "").strip()
+        if "```" in content:
+            content = content.split("```")[1].split("```")[0].strip()
+        data = json.loads(content)
+        exclude = set(data.get("exclude", []))
+        return {t["keyword"] for t in candidates if t["keyword"] in exclude}
+    except Exception as e:
+        print(f"⚠️ 术语语境确认失败（放行）: {e}")
+        return set()
 
 
 def build_message_list(user_msg: str, global_persona: str, fused_items: list,
@@ -162,7 +237,7 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
                        vision_desc: str = "", weather_city: str = "",
                        batch_summary: str = "", preference_items: list = None,
                        core_stories: list = None, session_context: str = "",
-                       query_hint: str = "") -> list:
+                       query_hint: str = "", denied_terms: set | None = None) -> list:
     """按优先级组装发送给模型的消息列表。
 
     fused_items 为三路融合后的 RetrievalItem 列表，按源分组注入。
@@ -203,11 +278,11 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
             })
 
     # 名词库（terms/lorebook）：核心词 always 注入 + 命中用户消息的词注入——让模型懂"绿冻/枪神8/slg"这类词并带对的态度
-    terms_note = build_terms_note(user_msg)
+    terms_note = build_terms_note(user_msg, denied_terms=denied_terms)
     if terms_note:
         messages.append({
             "role": "system",
-            "content": f"【灰泽满的世界】{terms_note}（这些是她世界的词，遇到时按定义理解并带着对应的态度，别当成普通的词）",
+            "content": f"【灰泽满的世界】{terms_note}（这些是她世界的词，遇到时按定义理解并带着对应的态度，别当成普通的词；其中『用词规则』是说话习惯，回复里表达对应概念时主动用她的黑话称呼）",
         })
 
     # 会话级记忆（当前话题 + 本场事件）：让模型接得住会话调性
@@ -550,11 +625,14 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     # --- 🧩 构建消息列表 ---
     # query_hint：短消息（≤4字）的语境扩充，仅当扩充句与原文不同时传入，帮模型理解短句
     query_hint = retrieval_query if (retrieval_query and retrieval_query != query_text) else ""
+    # 术语语境确认：confirm:true 的命中做一次便宜 LLM 判断，剔除误触词条（词→意思守卫）
+    denied_terms = await confirm_ambiguous_terms(user_msg, deepseek_client)
     messages = build_message_list(
         user_msg, global_persona, fused_items, memory_context, user_history,
         vision_desc=vision_desc, weather_city=weather_city, batch_summary=batch_summary,
         preference_items=preference_items, core_stories=core_stories,
         session_context=session_context, query_hint=query_hint,
+        denied_terms=denied_terms,
     )
 
     # --- 🤖 调用大模型 ---
