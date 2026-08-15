@@ -62,8 +62,8 @@ async def _auto_accept_friend(bot: Bot, event: RequestEvent):
         print(f"[好友申请] ⚠️ 自动通过失败 user={event.user_id}: {e}")
 
 
-def _extract_image_source(msg) -> str:
-    """取消息第一张图的源：优先 url，否则 file（NapCat 缓存名），无图返回空串。
+def _extract_image_source(msg) -> tuple[str, str]:
+    """取消息第一张图的 (url, file)。两者都返回：url 优先下载，file 留作 CDN 失败时读本地缓存兜底。
 
     只取源不解析——真正的视觉解析推迟到回复前（chat_window._flush），
     这样"读图"是读整批的一部分，而不是消息一到就秒解析。
@@ -71,14 +71,9 @@ def _extract_image_source(msg) -> str:
     for seg in msg:
         if seg.type == "image":
             url = seg.data.get("url") or ""
-            if url:
-                return url
             file_ = seg.data.get("file") or ""
-            if file_:
-                return file_
-            print(f"⚠️ 图片段既无 url 也无 file: {seg.data}")
-            return ""
-    return ""
+            return url, file_
+    return "", ""
 
 
 def _extract_face_text(msg) -> str:
@@ -112,7 +107,7 @@ def _extract_face_text(msg) -> str:
 async def _handle_chat(bot: Bot, event: Event):
     msg = event.get_message()
     user_msg = msg.extract_plain_text().strip()
-    image_source = _extract_image_source(msg)
+    image_url, image_file = _extract_image_source(msg)
     face_text = _extract_face_text(msg)
 
     # QQ 内置表情（face）：把含义转成消息，纯表情也能回应
@@ -120,13 +115,13 @@ async def _handle_chat(bot: Bot, event: Event):
         face_msg = f"[表情：{face_text}]"
         user_msg = f"{user_msg} {face_msg}".strip() if user_msg else face_msg
 
-    if not user_msg and not image_source:
+    if not user_msg and not image_url and not image_file:
         return  # 真正空消息（无文字无图片无表情），不回复
 
     user_id = event.get_user_id()
     is_private = getattr(event, "message_type", "private") == "private"
     target_id = str(user_id if is_private else getattr(event, "group_id", ""))
-    print(f"[收到消息] user={user_id}, msg={user_msg[:40]!r}, img={'有' if image_source else '无'}")
+    print(f"[收到消息] user={user_id}, msg={user_msg[:40]!r}, img={'有' if (image_url or image_file) else '无'}")
 
     # 读秒窗口（方案B）：攒批 + 静默后统一回复（含读图/归纳/分批发送）
-    chat_window.enqueue(user_id, user_msg, image_source, bot, is_private, target_id)
+    chat_window.enqueue(user_id, user_msg, image_url, image_file, bot, is_private, target_id)

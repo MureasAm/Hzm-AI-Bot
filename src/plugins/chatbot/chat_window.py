@@ -11,6 +11,7 @@ generation 计数用于区分代际：插话取消旧任务后，旧任务不会
 """
 import asyncio
 import random
+from pathlib import Path
 
 from nonebot.adapters.onebot.v11 import Message
 
@@ -31,7 +32,7 @@ class _UserWindow:
 
     def __init__(self, user_id: str):
         self.user_id = user_id
-        self.pending: list[tuple[str, str]] = []   # (text, image_source)
+        self.pending: list[tuple[str, str, str]] = []   # (text, image_url, image_file)
         self.task: asyncio.Task | None = None      # 当前"窗口等待/发送"任务
         self.generation = 0                        # 每次 enqueue 自增
         self.bot = None
@@ -63,49 +64,61 @@ async def _eager_download(source: str) -> None:
         pass  # 下载失败不阻塞，flush 时再试
 
 
-def _combine_text(msgs: list[tuple[str, str]]) -> str:
-    """合并本批文本（图片源不参与文本合并）。"""
-    return "\n".join(t for t, _ in msgs if t.strip()).strip()
+def _combine_text(msgs) -> str:
+    """合并本批文本（图片源不参与文本合并）。首元素为文本，兼容 (text, url, file) 与 (text, desc)。"""
+    return "\n".join(t for t, *_ in msgs if t.strip()).strip()
 
 
-async def _describe_image_src(bot, src: str) -> str:
-    """把图片源（url 或 NapCat file）解析成视觉描述；失败返回空串。"""
-    if not src:
+async def _describe_image_src(bot, image_url: str, image_file: str) -> str:
+    """把图片源（url + NapCat file）解析成视觉描述。
+
+    URL 优先（带 eager 缓存）；URL 下载失败（gchat.qpic.cn rkey 过期等）时，
+    兜底读 NapCat 本地缓存文件——完全绕开 CDN 的 rkey 问题。
+    """
+    if not image_url and not image_file:
         return ""
-    url = src if src.startswith(("http://", "https://")) else ""
-    if not url:
+    _, zhipu_client = _get_clients()
+    # 1) URL 路径：优先 eager 缓存，否则现场下载
+    if image_url:
+        data = _image_bytes_cache.get(image_url)
+        if data is None:
+            try:
+                print(f"[视觉] 下载图片: {image_url[:100]}")
+                data = await _read_image_bytes(image_url)
+            except Exception as e:
+                print(f"⚠️ URL 下载失败（尝试本地缓存兜底）: {e}")
+                data = None
+        if data:
+            desc = await describe_image_bytes(zhipu_client, data)
+            if desc:
+                return desc
+    # 2) file 兜底：NapCat 本地缓存文件（绕开 CDN rkey）
+    if image_file:
         try:
-            info = await bot.get_image(file=src)
-            url = info.get("url", "") or ""
+            info = await bot.get_image(file=image_file)
+            local = (info or {}).get("file") or ""
+            if local and Path(local).exists():
+                print(f"[视觉] 读本地缓存: {local}")
+                data = Path(local).read_bytes()
+                return await describe_image_bytes(zhipu_client, data)
+            u2 = (info or {}).get("url") or ""
+            if u2 and u2 != image_url:
+                print(f"[视觉] file→url 兜底: {u2[:100]}")
+                data = await _read_image_bytes(u2)
+                return await describe_image_bytes(zhipu_client, data)
         except Exception as e:
-            print(f"⚠️ get_image 解析图片失败: {e}")
-            return ""
-    if not url:
-        return ""
-    try:
-        _, zhipu_client = _get_clients()
-        cached = _image_bytes_cache.get(url)
-        if cached:
-            print(f"[视觉] 命中图片缓存（enqueue 时已下载，rkey 新鲜）")
-            desc = await describe_image_bytes(zhipu_client, cached)
-        else:
-            print(f"[视觉] 图片url: {url[:100]}")
-            desc = await describe_image(zhipu_client, url)
-        print(f"[视觉] 图片描述: {desc[:80]}")
-        return desc
-    except Exception as e:
-        print(f"⚠️ 视觉接入失败（忽略）: {e}")
-        return ""
+            print(f"⚠️ 图片 file 兜底失败: {e}")
+    return ""
 
 
-def enqueue(user_id: str, text: str, image_source: str,
+def enqueue(user_id: str, text: str, image_url: str, image_file: str,
             bot, is_private: bool, target_id: str) -> None:
     """采集一条消息进缓冲，重置读秒窗口。
 
     若该用户正在等待回复/发送分段，先取消（插话优先：取消未发送的，先回新消息）。
-    image_source 只存图片源（url/file），真正解析推迟到回复前统一做。
+    同时存 url + file：url 优先（rkey 新鲜时急切缓存），file 留给 CDN 失败时读本地兜底。
     """
-    if not text.strip() and not image_source:
+    if not text.strip() and not image_url and not image_file:
         return
     win = _windows.setdefault(user_id, _UserWindow(user_id))
     win.generation += 1
@@ -115,10 +128,10 @@ def enqueue(user_id: str, text: str, image_source: str,
     win.bot = bot
     win.is_private = is_private
     win.target_id = target_id
-    win.pending.append((text, image_source))
+    win.pending.append((text, image_url, image_file))
     # 图片立刻缓存下载（rkey 新鲜），读秒窗口后不因过期 400
-    if image_source:
-        asyncio.create_task(_eager_download(image_source))
+    if image_url:
+        asyncio.create_task(_eager_download(image_url))
     win.task = asyncio.create_task(_process(win, gen))
 
 
@@ -144,14 +157,14 @@ async def _flush(win: _UserWindow) -> None:
     msgs, win.pending = win.pending, []
 
     # 读图：本批所有图片统一在回复前解析（不是收到就秒解析，避免节奏割裂）
-    async def _parse(src: str) -> str:
-        if not src:
+    async def _parse(u: str, f: str) -> str:
+        if not u and not f:
             return ""
-        desc = await _describe_image_src(win.bot, src)
+        desc = await _describe_image_src(win.bot, u, f)
         return desc or "灰泽满收到一张图片，但暂时没看清里面的内容"  # 兜底保证可回
 
-    descs = await asyncio.gather(*[_parse(src) for _, src in msgs])
-    parsed = [(t, d) for (t, _), d in zip(msgs, descs)]
+    descs = await asyncio.gather(*[_parse(u, f) for _, u, f in msgs])
+    parsed = [(t, d) for (t, _, _), d in zip(msgs, descs)]
 
     combined = _combine_text(parsed)
     vision_desc = "；".join(d for _, d in parsed if d)

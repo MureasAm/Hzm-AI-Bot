@@ -6,7 +6,7 @@ from src.plugins.chatbot import chat_window as cw
 
 class TestCombineText:
     def test_joins_texts_ignores_image_src(self):
-        assert cw._combine_text([("在吗", ""), ("天气咋样", ""), ("", "http://img")]) == "在吗\n天气咋样"
+        assert cw._combine_text([("在吗", "", ""), ("天气咋样", "", ""), ("", "http://img", "")]) == "在吗\n天气咋样"
 
     def test_empty(self):
         assert cw._combine_text([]) == ""
@@ -15,7 +15,7 @@ class TestCombineText:
 class TestFlush:
     async def test_flush_combines_and_splits(self, monkeypatch):
         win = cw._UserWindow("u1")
-        win.pending = [("在吗", ""), ("天气咋样", "")]
+        win.pending = [("在吗", "", ""), ("天气咋样", "", "")]
         captured = {}
 
         async def fake_handle(uid, text, vision_desc="", batch_summary=""):
@@ -27,7 +27,7 @@ class TestFlush:
         async def fake_summarize(msgs):
             return "用户在问候并问天气"
 
-        async def fake_describe(bot, src):
+        async def fake_describe(bot, url, file):
             raise AssertionError("无图消息不应调用视觉")
 
         monkeypatch.setattr(cw, "handle_chat", fake_handle)
@@ -48,7 +48,7 @@ class TestFlush:
 
     async def test_flush_reads_image_at_reply_time(self, monkeypatch):
         win = cw._UserWindow("u2")
-        win.pending = [("", "http://img1")]
+        win.pending = [("", "http://img1", "img1.image")]
         captured = {}
 
         async def fake_handle(uid, text, vision_desc="", batch_summary=""):
@@ -60,7 +60,7 @@ class TestFlush:
         async def fake_summarize(msgs):
             return ""
 
-        async def fake_describe(bot, src):
+        async def fake_describe(bot, url, file):
             return "一碗加煎蛋的面"  # 视觉在回复前才解析
 
         monkeypatch.setattr(cw, "handle_chat", fake_handle)
@@ -80,7 +80,7 @@ class TestFlush:
 
     async def test_flush_vision_fallback_keeps_reply(self, monkeypatch):
         win = cw._UserWindow("u3")
-        win.pending = [("", "http://img1")]
+        win.pending = [("", "http://img1", "")]
         captured = {}
 
         async def fake_handle(uid, text, vision_desc="", batch_summary=""):
@@ -90,7 +90,7 @@ class TestFlush:
         async def fake_summarize(msgs):
             return ""
 
-        async def fake_describe(bot, src):
+        async def fake_describe(bot, url, file):
             return ""  # 视觉失败
 
         monkeypatch.setattr(cw, "handle_chat", fake_handle)
@@ -112,12 +112,12 @@ class TestEnqueue:
     async def test_enqueue_accumulates_and_new_task(self):
         cw._windows.clear()
         bot = object()
-        cw.enqueue("u1", "a", "", bot, True, "1")
+        cw.enqueue("u1", "a", "", "", bot, True, "1")
         w = cw._windows["u1"]
         t1 = w.task
         gen1 = w.generation
-        cw.enqueue("u1", "b", "", bot, True, "1")
-        assert w.pending == [("a", ""), ("b", "")]   # 攒批
+        cw.enqueue("u1", "b", "", "", bot, True, "1")
+        assert w.pending == [("a", "", ""), ("b", "", "")]   # 攒批
         assert w.task is not t1                       # 插话 → 新任务
         assert w.generation == gen1 + 1               # 代际递增
         # 清理：取消并让循环处理；不 await，避免"未启动即取消"的任务抛 CancelledError
@@ -129,5 +129,5 @@ class TestEnqueue:
     def test_enqueue_ignores_empty(self):
         cw._windows.clear()
         bot = object()
-        cw.enqueue("u1", "", "", bot, True, "1")
+        cw.enqueue("u1", "", "", "", bot, True, "1")
         assert "u1" not in cw._windows  # 空消息不入缓冲
