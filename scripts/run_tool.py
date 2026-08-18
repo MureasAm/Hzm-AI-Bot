@@ -323,6 +323,19 @@ def _run_bili_check(args):
     return subprocess.call(cmd)
 
 
+# ==================== 子命令：bili-login ====================
+
+def _add_bili_login(sub):
+    p = sub.add_parser("bili-login", help="B站扫码登录：生成二维码 → 扫码 → 自动写新 SESSDATA 到 .env.prod")
+    p.set_defaults(func=_run_bili_login)
+
+
+def _run_bili_login(args):
+    import sys
+    import subprocess
+    return subprocess.call([sys.executable, str(SCRIPTS_DIR / "bili_login.py")])
+
+
 # ==================== 子命令：vision-test ====================
 
 def _add_vision_test(sub):
@@ -417,7 +430,7 @@ def build_parser() -> argparse.ArgumentParser:
                     "  【生成】generate-statements · generate-vectors · generate-persona · extract-persona\n"
                     "  【向量】precompute\n"
                     "  【评测】regression · persona-eval · retrieval-eval\n"
-                    "  【工具】bili-check · vision-test · mine-theme",
+                    "  【工具】bili-check · bili-login · vision-test · mine-theme",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sub = parser.add_subparsers(dest="command", required=True, title="可用工具")
@@ -432,6 +445,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_mine_phrases(sub)
     _add_generate_statements(sub)
     _add_bili_check(sub)
+    _add_bili_login(sub)
     _add_vision_test(sub)
     _add_mine_theme(sub)
     _add_extract_persona(sub)
