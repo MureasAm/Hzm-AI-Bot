@@ -222,7 +222,8 @@ class BiliMonitor:
         from bilibili_api import dynamic  # 懒加载，避免无关场景的额外依赖开销
         from bilibili_api.utils.network import Credential
 
-        cred = Credential(sessdata=self.sessdata)
+        # 每次轮询重新读 .env.prod，换 SESSDATA 不用重启（B站 SESSDATA 会过期，省去重启）
+        cred = Credential(sessdata=get_bili_sessdata())
         page = await dynamic.get_dynamic_page_info(cred, host_mid=int(self.uid), pn=1)
         items = (page or {}).get("items") or []
         if not items:
@@ -235,9 +236,9 @@ class BiliMonitor:
         }
 
     async def _check_dynamic(self, bot) -> None:
-        if not self.sessdata:
+        if not get_bili_sessdata():
             if not self._warned_no_sessdata:
-                print("⚠️ BILI_SESSDATA 未配置，动态监控关闭（开播监控正常）。配置后重启即生效。")
+                print("⚠️ BILI_SESSDATA 未配置，动态监控关闭（开播监控正常）。配置后下次轮询即生效。")
                 self._warned_no_sessdata = True
             return
         try:

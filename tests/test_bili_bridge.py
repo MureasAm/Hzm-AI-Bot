@@ -205,6 +205,7 @@ class TestDynamic:
 
     async def test_no_sessdata_skips(self, monkeypatch):
         m = _make_monitor(uid="1", sessdata="", state={})
+        monkeypatch.setattr(bb, "get_bili_sessdata", lambda: "")  # 未配置 → 跳过
         called = []
 
         async def fake_fetch():
