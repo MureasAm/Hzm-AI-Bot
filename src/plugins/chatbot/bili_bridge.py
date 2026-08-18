@@ -8,6 +8,7 @@
 重启不重复推送。所有外部调用失败都降级为日志，绝不让监听任务崩溃。
 """
 import asyncio
+import random
 import json
 import tempfile
 import time
@@ -325,14 +326,15 @@ class BiliMonitor:
 async def _monitor_loop() -> None:
     monitor = BiliMonitor()
     interval = get_push_interval()
-    print(f"[B站] 监听启动: uid={monitor.uid}, 轮询间隔={interval}s")
+    print(f"[B站] 监听启动: uid={monitor.uid}, 轮询间隔={interval}s（±随机抖动防风控）")
     while True:
         try:
             bot = get_bot()
             await monitor.poll_once(bot)
         except Exception as e:
             print(f"⚠️ B站监听轮询异常（继续）: {e}")
-        await asyncio.sleep(interval)
+        # 随机抖动：固定间隔是典型机器人特征，B站风控会据此识别并顶会话
+        await asyncio.sleep(max(interval + random.uniform(-20, 30), 30))
 
 
 # NoneBot 未初始化时（离线工具/单测直接 import 本模块）跳过启动注册，
