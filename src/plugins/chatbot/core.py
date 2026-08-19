@@ -174,6 +174,23 @@ def build_terms_note(user_msg: str, denied_terms: set | None = None) -> str:
     return "；".join(notes) if notes else ""
 
 
+def _hits_on_demand_term(msg: str) -> bool:
+    """消息是否命中某个 on-demand 术语（关键词/别名/正则）。
+
+    命中说明这是个已知黑话，短 query 扩充（probe）可能猜错含义
+    （如"富区"被猜成"富拉尔基区"），应跳过扩充、用术语自己的定义。
+    """
+    for t in load_terms():
+        kw = t.get("keyword", "")
+        if not kw or t.get("priority") == "always":
+            continue
+        keys = [kw] + [str(a) for a in t.get("aliases", []) if a]
+        pattern = t.get("pattern")
+        if any(k in msg for k in keys) or (pattern and re.search(pattern, msg)):
+            return True
+    return False
+
+
 async def confirm_ambiguous_terms(user_msg: str, deepseek_client=None) -> set:
     """LLM 语境确认（词→意思的准确性守卫）。
 
@@ -554,6 +571,10 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         retrieval_query = await probe_session(user_id, query_text, history_text, deepseek_client)
         if retrieval_query != query_text:
             print(f"[会话记忆] 短 query 扩充: 「{query_text}」→「{retrieval_query}」")
+    # 命中已知术语：probe 的短 query 扩充可能猜错含义（如"富区"→"富拉尔基区"），
+    # 术语自己已定义含义，回退用原文，避免错误扩充污染检索与语境提示
+    if query_text and _hits_on_demand_term(query_text):
+        retrieval_query = query_text
     # 话题/事件已在本轮探测中更新，取最新会话状态
     session_context = build_session_context(user_id)
 
