@@ -19,17 +19,25 @@ _OTHER_PERSON_NAMES_CACHE = None
 
 
 def _get_other_person_names() -> set:
-    """取"角色以外的人"的名字集合：terms 的 person/family/relation 分类 + 补充。
+    """取"可能是'她/他'先行词"的第三人称指代集合。
 
-    用于 clean_reply 的"她/他自指兜底"保护——回复里出现这些名字时，"她/他"
-    大概率指这个人而不是角色自己，故不替换。动态取自 terms，新增人物不用记两处。
+    用于 clean_reply 的"她/他自指兜底"保护——回复里出现这些词时，"她/他"可能指这个人
+    而不是角色自己，故不替换。兜底原则：**宁可不替换（留一句自指"她"，小瑕疵），
+    也不误替换（把别人的行为安到灰泽满头上，改变语义）**——所以保护名单宁宽勿窄。
+
+    来源：terms 里所有提到的人/群体（绿冻/满区/前辈/同期…含 aliases）+ 常用人称名词。
+    动态取自 terms，新增人物不用记两处。
     """
     global _OTHER_PERSON_NAMES_CACHE
     if _OTHER_PERSON_NAMES_CACHE is not None:
         return _OTHER_PERSON_NAMES_CACHE
     names = {"女同学", "女仆女同学", "弥希", "真绯瑠", "瑞雅", "塔菲"}  # 灰泽满专属：不在 terms 的第三人称人物
+    # 常用人称名词（"她/他"的常见先行词——粉丝/观众/同学这类没有专名的指代）
+    names.update({"粉丝", "观众", "水友", "同学", "室友", "阿姨", "姐姐", "妹妹",
+                  "女生", "女孩", "老师", "邻居", "朋友", "同事", "主播", "家人们", "绿冻"})
+    # terms 里所有人/群体（含 aliases）。绿冻/满区 是 world 分类也是人，一并纳入
     for t in load_terms():
-        if t.get("category") in ("person", "family", "relation") and t.get("keyword"):
+        if t.get("category") in ("person", "family", "relation", "world") and t.get("keyword"):
             names.add(t["keyword"])
             names.update(str(a) for a in t.get("aliases", []) if a)
     _OTHER_PERSON_NAMES_CACHE = names
