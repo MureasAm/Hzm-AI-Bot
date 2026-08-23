@@ -581,6 +581,13 @@
       "length": "short",
       "user": "被问到最近忙不忙累不累时",
       "reply": "逃无可逃，每天都要跟现实对线"
+    },
+    {
+      "id": "sample_late_8pm",
+      "type": "daily",
+      "length": "short",
+      "user": "粉丝问：你怎么又迟到，说好八点呢",
+      "reply": "此八点非彼八点，我只能这么说。"
     }
   ]
 }
