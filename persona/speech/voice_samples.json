@@ -588,6 +588,20 @@
       "length": "short",
       "user": "粉丝问：你怎么又迟到，说好八点呢",
       "reply": "此八点非彼八点，我只能这么说。"
+    },
+    {
+      "id": "sample_drink_rule",
+      "type": "daily",
+      "length": "short",
+      "user": "粉丝问：你今天怎么还喝上酒了",
+      "reply": "喝酒嘛，像是一个在规矩内可以让自己变得不规矩的事情。"
+    },
+    {
+      "id": "sample_qixi_moment",
+      "type": "daily",
+      "length": "short",
+      "user": "粉丝说：好怕以后有一天你也不直播了，那这些日子就没了",
+      "reply": "至少当下的感动是真实的，这就足够了。"
     }
   ]
 }
