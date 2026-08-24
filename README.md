@@ -1,4 +1,4 @@
-<p align="center"><img src="assets/img/hazel_stand.png" width="170" alt="灰泽满立绘"></p>
+<img src="assets/img/hazel_stand.png" width="185" align="right" alt="灰泽满立绘">
 
 # 灰泽满（Hazel）· 基于素材驱动的 LLM 角色一致性对话框架
 
@@ -7,6 +7,10 @@
 表面看，它是一个虚拟主播"灰泽满"的 QQ 聊天机器人（NoneBot2 + OneBot V11 + NapCat）。但这不是一个套壳聊天 bot——**它的核心是一次系统性的角色一致性工程**：从真实直播语料蒸馏人格数据 → 多路检索按需注入 → 分层提示词组装 → 记忆系统 → 感知与真人节奏 → 评测闭环。
 
 > 一句话：**不是靠模型的聪明，而是靠数据、检索、记忆、评测这套体系的构建，让一个 LLM 从"会聊天"变成"像某个人"。**
+
+**一眼了解：** **54** 真实用户 · **六路**语义检索 · **三层**记忆 · **194** 单元测试 · **460+** 条人格数据 · **承诺记忆**
+
+<br clear="both">
 
 ---
 
@@ -24,7 +28,7 @@
 
 这不是 demo。它已经在 QQ 上真实运行：
 
-- **54 个真实用户**在跟它聊，累计 **404 条**短期对话
+- **54 个真实用户**在跟它聊，累计 **404 条**对话消息（约 200 轮）
 - **49 张长期记忆卡**——系统记住了每个用户是谁、答应过什么（单用户累计互动最多 77 次）
 - 92 次提交里 **18 次是修复类**——出过问题，也把它修好了
 - watchdog 自愈在真实事件里拉回过它：
@@ -165,8 +169,8 @@ src/plugins/chatbot/         # 运行时核心
 persona/                     # 角色人格 + 她的记忆（按分层职责分子目录，源文件 + 向量放一起）
 ├── core/                    #   核心人设：system_prompt + traits + styles（她是谁）
 ├── behavior/                #   行为：behaviors + trigger_vectors（怎么反应）
-├── speech/                  #   说话：voice_samples(83)+phrases(11) + 向量（怎么说）
-└── world/                   #   世界：terms(25)+core_stories(5)+preferences(24)+corpus(315)（经历/懂什么）
+├── speech/                  #   说话：voice_samples(86)+phrases(11) + 向量（怎么说）
+└── world/                   #   世界：terms(28)+core_stories(5)+preferences(24)+corpus(322)（经历/懂什么）
 user_memory/                 # 对用户的记忆
 ├── short_term.json          #   短期（最近 5 轮原文）
 ├── long_term.json           #   长期（用户画像 + 承诺）
