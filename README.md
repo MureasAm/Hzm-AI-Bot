@@ -1,6 +1,6 @@
 <img src="assets/img/hazel_stand.png" width="185" align="right" alt="灰泽满立绘">
 
-# 灰泽满（Hazel）· 基于素材驱动的 LLM 角色一致性对话框架
+<h1 style="border-bottom: none;">灰泽满（Hazel）· 基于素材驱动的 LLM 角色一致性对话框架</h1>
 
 一个把「让 LLM 稳定还原一个真实人物的说话方式」这件事做到极致的工程实践。
 
@@ -10,7 +10,7 @@
 
 **一眼了解：** **54** 真实用户 · **六路**语义检索 · **三层**记忆 · **194** 单元测试 · **460+** 条人格数据 · **承诺记忆**
 
-<br clear="both">
+<div style="clear: both;"></div>
 
 ---
 
