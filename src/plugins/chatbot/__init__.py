@@ -15,22 +15,81 @@
 import asyncio
 import ast
 import re
+import time
 from pathlib import Path
 
-from nonebot import get_driver, on_message, on_request
-from nonebot.adapters.onebot.v11 import Bot, Event, FriendRequestEvent, RequestEvent
+from nonebot import get_driver, on_message, on_request, on_type
+from nonebot.adapters.onebot.v11 import (
+    Bot, Event, FriendRequestEvent, RequestEvent, NoticeEvent,
+)
 
 from .constants import AUTO_ACCEPT_FRIEND, PROJECT_ROOT
 from . import bili_bridge  # noqa: F401  导入即注册启动时的后台监听任务
+from . import weibo_bridge  # noqa: F401  导入即注册启动时的微博后台监听任务
 from . import chat_window
 
 chat = on_message(priority=10, block=True)
 
-# ==================== 💓 心跳（watchdog 自愈用） ====================
-# NapCat 可能"假死"（进程活着、QQ 显示在线，但收不到消息）。watchdog 脚本靠心跳
-# 判断 bot 是否还活着：bot 每 30s touch data/heartbeat，watchdog 检测心跳过期就
-# 重启 NapCat + bot。纯文件操作，无副作用，不依赖网络。
+# ==================== 💓 心跳 + 连接信号（watchdog 自愈用） ====================
+# 双信号，帮 watchdog 区分两种"死法"：
+# - data/heartbeat   bot 进程心跳：每 30s touch，进程活着就一直在 → bot 崩溃检测
+# - data/qq_alive    QQ 会话在线标记：只在 OneBot WebSocket 已连接时才 touch；
+#                    连接一断就停更 → 假死（显示在线但收不到消息）检测
+# - data/qq_offline  断连标记：on_bot_disconnect 时写时间戳，让 watchdog 快速感知
+# 全部纯文件操作，无副作用，不依赖网络。
 HEARTBEAT_FILE = PROJECT_ROOT / "data" / "heartbeat"
+QQ_ALIVE_FILE = PROJECT_ROOT / "data" / "qq_alive"
+QQ_OFFLINE_FILE = PROJECT_ROOT / "data" / "qq_offline"
+
+# OneBot WS 连接状态（SnowLuma 作为 WS 客户端连到本 bot 的反向 WS）
+_connected = {"state": False}
+# QQ 账号在线状态：bot_offline/bot_online 通知事件是权威信号（被踢时 WS 可能还连着，
+# 仅看 WS 状态会把"假死"误判为正常，所以必须双条件）
+_account_online = {"state": True}
+
+
+@get_driver().on_bot_connect
+async def _on_bot_connect(bot: Bot) -> None:
+    _connected["state"] = True
+    _account_online["state"] = True
+    try:
+        QQ_OFFLINE_FILE.unlink(missing_ok=True)  # 连上了就清掉断连标记
+    except OSError:
+        pass
+
+
+@get_driver().on_bot_disconnect
+async def _on_bot_disconnect(bot: Bot) -> None:
+    _connected["state"] = False
+    try:
+        QQ_OFFLINE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        # 已有被踢标记则保留（踢出优先于普通 WS 断开，别覆盖掉）
+        if not QQ_OFFLINE_FILE.exists():
+            QQ_OFFLINE_FILE.write_text("disconnect", "utf-8")
+    except OSError:
+        pass  # 写失败不影响 bot 运行
+
+
+# QQ 账号被踢下线 / 恢复上线的通知事件（比 WS 断开更准确、更早）。
+# 适配器没有专门的 bot_offline/bot_online 类，统一走 NoticeEvent 按 notice_type 分流。
+account_notice = on_type(NoticeEvent, priority=1, block=False)
+
+
+@account_notice.handle()
+async def _on_account_notice(bot: Bot, event: NoticeEvent) -> None:
+    if event.notice_type == "bot_offline":
+        _account_online["state"] = False
+        try:
+            QQ_OFFLINE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            QQ_OFFLINE_FILE.write_text("bot_offline", "utf-8")
+        except OSError:
+            pass
+    elif event.notice_type == "bot_online":
+        _account_online["state"] = True
+        try:
+            QQ_OFFLINE_FILE.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 async def _heartbeat_loop() -> None:
@@ -38,6 +97,8 @@ async def _heartbeat_loop() -> None:
         try:
             HEARTBEAT_FILE.parent.mkdir(parents=True, exist_ok=True)
             HEARTBEAT_FILE.touch()
+            if _connected["state"] and _account_online["state"]:
+                QQ_ALIVE_FILE.touch()  # 连接 + 账号在线双条件才更新在线标记
         except OSError:
             pass  # 心跳写失败不影响 bot 运行
         await asyncio.sleep(30)
@@ -45,6 +106,10 @@ async def _heartbeat_loop() -> None:
 
 @get_driver().on_startup
 async def _start_heartbeat() -> None:
+    # bot 重启时若残留 qq_offline（上次被踢还没恢复），先保持离线标记，
+    # 等真正的连接/bot_online 事件再翻转，避免重启窗口期误判在线
+    if QQ_OFFLINE_FILE.exists():
+        _account_online["state"] = False
     asyncio.create_task(_heartbeat_loop())
 
 # 自动通过好友申请：新加的绿冻立即变双向好友，B站推送才能到达（NapCat 无法给单向好友发消息）

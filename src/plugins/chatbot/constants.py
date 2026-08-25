@@ -108,6 +108,7 @@ VISION_THINKING_DISABLED = {"extra_body": {"thinking": {"type": "disabled"}}}
 # 方向3 B站联动
 PUSH_INTERVAL = 180               # B站轮询间隔（秒）。别低于 120：带 SESSDATA 的会话调太频繁会被 B站风控顶掉（曾 45s→2-3天失效）
 BILI_STATE_FILE = PROJECT_ROOT / "data" / "bili_state.json"   # 开播/动态去重状态持久化
+WEIBO_STATE_FILE = PROJECT_ROOT / "data" / "weibo_state.json" # 微博去重状态持久化
 
 # 好友申请自动通过（否则新加的绿冻是单向好友，推送发不到，见 NapCat issue #72）
 AUTO_ACCEPT_FRIEND = True

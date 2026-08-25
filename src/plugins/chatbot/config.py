@@ -86,6 +86,16 @@ def get_bili_sessdata() -> str:
     return str(get_config("bili_sessdata", "") or "").strip()
 
 
+def get_weibo_uid() -> str:
+    """微博 UID（监控该账号的新微博）。留空关闭微博监听。"""
+    return str(get_config("weibo_uid", "") or "").strip()
+
+
+def get_weibo_cookie() -> str:
+    """微博登录 Cookie（浏览器登录后复制的完整 Cookie，无登录会被风控挡 403/432）。"""
+    return str(get_config("weibo_cookie", "") or "").strip()
+
+
 def get_notify_whitelist() -> list:
     raw = get_config("notify_friends_whitelist", "")
     if not raw:
