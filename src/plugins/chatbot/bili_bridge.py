@@ -101,7 +101,9 @@ def _extract_dynamic_text(item: dict) -> str:
 
 # ==================== 表情解析 ====================
 # B站动态文本里 [xxx] 是表情占位符（含 [UPOWER_uid_名字] 这种主播定制贴纸）。
-# 通过 emote panel 接口解析成图片 URL；解析不到的占位符剥掉，避免推给 QQ 显示丑代码。
+# 解析优先级：本地表情库（付费/UPOWER 定制，手动放 assets/emotes/）> emote panel > 剥除。
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+EMOTE_DIR = PROJECT_ROOT / "assets" / "emotes"
 _emote_map = None
 
 
@@ -132,25 +134,34 @@ async def _get_emote_map() -> dict:
     return _emote_map
 
 
-def _parse_emotes(text: str, emote_map: dict) -> tuple[str, list]:
-    """把 [xxx] 表情解析成图片 URL；返回 (清洗后文本, 图片URL列表)。
+def _parse_emotes(text: str, emote_map: dict) -> tuple[str, list, list]:
+    """把 [xxx] 表情解析成图片；返回 (清洗后文本, 需下载的URL列表, 本地表情文件列表)。
 
-    解析到的表情从文本移除（图片单独附上）；解析不到的占位符也剥掉
-    （避免 [UPOWER_...] 这种丑代码显示给 QQ 好友）。
+    优先级：① 本地表情库（付费/UPOWER 定制贴纸，文件名=占位符名，放 assets/emotes/）
+           ② emote panel / 动态自带映射
+           ③ 剥除（避免 [UPOWER_...] 丑代码显示给 QQ 好友）
     """
     if not text:
-        return text, []
-    urls = []
+        return text, [], []
+    urls, locals_paths = [], []
 
     def repl(m):
         token = m.group(0)
+        name = token.strip("[]")
+        # ① 本地表情库
+        for ext in (".png", ".gif", ".jpg", ".jpeg", ".webp"):
+            p = EMOTE_DIR / f"{name}{ext}"
+            if p.exists():
+                locals_paths.append(p)
+                return ""
+        # ② emote panel / 动态自带
         u = emote_map.get(token) or ""
         if u:
             urls.append(u)
-        return ""  # 占位符一律移除（图单独发）
+        return ""  # ③ 占位符一律移除（图单独发）
 
     cleaned = re.sub(r"\[[^\]]{1,30}\]", repl, text)
-    return cleaned.strip(), urls
+    return cleaned.strip(), urls, locals_paths
 
 
 def _extract_dynamic_images(item: dict) -> list:
@@ -297,12 +308,13 @@ class BiliMonitor:
                 if u:
                     merged[k] = u
             emote_map = merged
-        clean_text, emote_urls = _parse_emotes(text, emote_map)
+        clean_text, emote_urls, local_emotes = _parse_emotes(text, emote_map)
         return {
             "id": str(item.get("id_str") or item.get("id") or ""),
             "text": clean_text,
             "image_urls": _extract_dynamic_images(item),
             "emote_urls": emote_urls,
+            "local_emotes": local_emotes,
         }
 
     async def _check_dynamic(self, bot) -> None:
@@ -321,8 +333,8 @@ class BiliMonitor:
         if dyn["id"] == str(self.state.get("last_dynamic_id", "") or ""):
             return  # 已推送过
 
-        # 动态配图 + 表情图一起下载附上（失败不阻塞，仍发文字）；限 4 张防刷屏
-        image_paths = []
+        # 配图 + 表情图：本地表情直接发文件，URL 表情下载；限 4 张防刷屏
+        image_paths = list(dyn.get("local_emotes") or [])
         for u in (dyn.get("image_urls") or [])[:1] + (dyn.get("emote_urls") or [])[:4]:
             try:
                 p = await _download_image(u)
@@ -330,7 +342,7 @@ class BiliMonitor:
             except Exception as e:
                 print(f"⚠️ 图片下载失败（忽略，仍发文字）: {e}")
         if image_paths:
-            print(f"[B站] 图片已下载 {len(image_paths)} 张")
+            print(f"[B站] 图片已附 {len(image_paths)} 张")
 
         content = self._format_dynamic_push(dyn["text"])
         print(f"[B站] 检测到新动态 -> {content}")
