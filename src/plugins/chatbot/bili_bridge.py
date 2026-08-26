@@ -9,6 +9,7 @@
 """
 import asyncio
 import random
+import re
 import json
 import tempfile
 import time
@@ -96,6 +97,60 @@ def _extract_dynamic_text(item: dict) -> str:
         elif isinstance(summary, str):
             text = summary
     return text.strip()
+
+
+# ==================== 表情解析 ====================
+# B站动态文本里 [xxx] 是表情占位符（含 [UPOWER_uid_名字] 这种主播定制贴纸）。
+# 通过 emote panel 接口解析成图片 URL；解析不到的占位符剥掉，避免推给 QQ 显示丑代码。
+_emote_map = None
+
+
+async def _get_emote_map() -> dict:
+    """拉取 B站 emote panel 并缓存 text→url 映射（带 SESSDATA 才看得到完整表情）。"""
+    global _emote_map
+    if _emote_map is not None:
+        return _emote_map
+    try:
+        url = "https://api.bilibili.com/x/emote/user/panel/web"
+        async with httpx.AsyncClient(timeout=10.0,
+                                     headers={"User-Agent": _BILI_UA,
+                                              "Cookie": f"SESSDATA={get_bili_sessdata()}",
+                                              "Referer": "https://t.bilibili.com/"}) as c:
+            resp = await c.get(url, params={"business": "dynamic", "build": "0",
+                                            "mobi_app": "web", "uid": get_bili_uid()})
+            data = resp.json()
+        m = {}
+        for p in (data.get("data") or {}).get("packages") or []:
+            for e in (p.get("emote") or []):
+                if e.get("text") and e.get("url"):
+                    m[e["text"]] = e["url"]
+        _emote_map = m
+        print(f"[B站] emote 表情表已加载: {len(m)} 个")
+    except Exception as e:
+        print(f"⚠️ emote panel 拉取失败（表情将剥除）: {e}")
+        _emote_map = {}
+    return _emote_map
+
+
+def _parse_emotes(text: str, emote_map: dict) -> tuple[str, list]:
+    """把 [xxx] 表情解析成图片 URL；返回 (清洗后文本, 图片URL列表)。
+
+    解析到的表情从文本移除（图片单独附上）；解析不到的占位符也剥掉
+    （避免 [UPOWER_...] 这种丑代码显示给 QQ 好友）。
+    """
+    if not text:
+        return text, []
+    urls = []
+
+    def repl(m):
+        token = m.group(0)
+        u = emote_map.get(token) or ""
+        if u:
+            urls.append(u)
+        return ""  # 占位符一律移除（图单独发）
+
+    cleaned = re.sub(r"\[[^\]]{1,30}\]", repl, text)
+    return cleaned.strip(), urls
 
 
 def _extract_dynamic_images(item: dict) -> list:
@@ -202,14 +257,15 @@ class BiliMonitor:
             content = _live_open_message(info["title"], info.get("room_id", 0))
             print(f"[B站] 检测到开播 -> {content}")
             # 开播带直播封面（下载失败不阻塞，仍发文字）
-            image_path = None
+            image_paths = []
             if info.get("cover"):
                 try:
-                    image_path = await _download_image(info["cover"])
-                    print(f"[B站] 直播封面已下载: {image_path.name}")
+                    p = await _download_image(info["cover"])
+                    image_paths.append(p)
+                    print(f"[B站] 直播封面已下载: {p.name}")
                 except Exception as e:
                     print(f"⚠️ 直播封面下载失败（忽略，仍发文字）: {e}")
-            await self._push(bot, content, image_path=image_path)
+            await self._push(bot, content, image_paths=image_paths)
         self.state["last_live_status"] = is_live
         _save_state(self.state)
 
@@ -230,10 +286,23 @@ class BiliMonitor:
         if not items:
             raise RuntimeError("该 UID 暂无动态")
         item = items[0]
+        text = _extract_dynamic_text(item)
+        emote_map = await _get_emote_map()
+        # 动态自带的 emote 映射（若有）优先——UPOWER 定制贴纸往往在这提供 URL
+        item_emotes = item.get("emote") or {}
+        if item_emotes:
+            merged = dict(emote_map)
+            for k, v in item_emotes.items():
+                u = (v or {}).get("url", "") or ""
+                if u:
+                    merged[k] = u
+            emote_map = merged
+        clean_text, emote_urls = _parse_emotes(text, emote_map)
         return {
             "id": str(item.get("id_str") or item.get("id") or ""),
-            "text": _extract_dynamic_text(item),
+            "text": clean_text,
             "image_urls": _extract_dynamic_images(item),
+            "emote_urls": emote_urls,
         }
 
     async def _check_dynamic(self, bot) -> None:
@@ -252,18 +321,20 @@ class BiliMonitor:
         if dyn["id"] == str(self.state.get("last_dynamic_id", "") or ""):
             return  # 已推送过
 
-        # 动态含图时下载配图一起发（失败不阻塞，仍发文字）
-        image_path = None
-        if dyn.get("image_urls"):
+        # 动态配图 + 表情图一起下载附上（失败不阻塞，仍发文字）；限 4 张防刷屏
+        image_paths = []
+        for u in (dyn.get("image_urls") or [])[:1] + (dyn.get("emote_urls") or [])[:4]:
             try:
-                image_path = await _download_image(dyn["image_urls"][0])
-                print(f"[B站] 动态配图已下载: {image_path.name}")
+                p = await _download_image(u)
+                image_paths.append(p)
             except Exception as e:
-                print(f"⚠️ 动态配图下载失败（忽略，仍发文字）: {e}")
+                print(f"⚠️ 图片下载失败（忽略，仍发文字）: {e}")
+        if image_paths:
+            print(f"[B站] 图片已下载 {len(image_paths)} 张")
 
         content = self._format_dynamic_push(dyn["text"])
         print(f"[B站] 检测到新动态 -> {content}")
-        await self._push(bot, content, image_path=image_path)
+        await self._push(bot, content, image_paths=image_paths)
         self.state["last_dynamic_id"] = dyn["id"]
         _save_state(self.state)
 
@@ -296,10 +367,10 @@ class BiliMonitor:
         _save_state(self.state)
         return friends
 
-    async def _push(self, bot, content: str, image_path: Path | None = None) -> None:
+    async def _push(self, bot, content: str, image_paths: list | None = None) -> None:
         """私聊广播给全部好友（白名单非空则只发白名单）。单好友失败不中断。
 
-        image_path 提供时，消息附带该图片（动态配图）。
+        image_paths 提供时，消息附带这些图片（动态配图 + 表情图）。
         """
         friends = await self._get_friends(bot)
         whitelist = get_notify_whitelist()
@@ -312,8 +383,8 @@ class BiliMonitor:
         for t in targets:
             try:
                 msg = Message(content)
-                if image_path:
-                    msg += MessageSegment.image(file=str(image_path))
+                for p in (image_paths or []):
+                    msg += MessageSegment.image(file=str(p))
                 await bot.send_private_msg(user_id=t["user_id"], message=msg)
                 ok += 1
             except Exception as e:

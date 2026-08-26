@@ -33,7 +33,7 @@ class TestLiveTransition:
         m = _make_monitor(uid="1298779265", state={"last_live_status": False})
         pushed = []
 
-        async def fake_push(bot, content, image_path=None):
+        async def fake_push(bot, content, image_paths=None):
             pushed.append(content)
 
         monkeypatch.setattr(m, "_push", fake_push)
@@ -59,8 +59,8 @@ class TestLiveTransition:
         pushed = []
         download_called = []
 
-        async def fake_push(bot, content, image_path=None):
-            pushed.append((content, image_path))
+        async def fake_push(bot, content, image_paths=None):
+            pushed.append((content, image_paths))
 
         async def fake_download(url):
             download_called.append(url)
@@ -85,8 +85,8 @@ class TestLiveTransition:
         m = _make_monitor(uid="1298779265", state={"last_live_status": False})
         pushed = []
 
-        async def fake_push(bot, content, image_path=None):
-            pushed.append((content, image_path))
+        async def fake_push(bot, content, image_paths=None):
+            pushed.append((content, image_paths))
 
         async def fake_download(url):
             raise RuntimeError("网络错误")
@@ -102,13 +102,13 @@ class TestLiveTransition:
 
         await m._check_live(FakeBot())
         assert len(pushed) == 1
-        assert pushed[0][1] is None  # 下载失败 → image_path=None，仍推文字
+        assert pushed[0][1] == []  # 下载失败 → 无图，仍推文字
 
     async def test_already_live_no_push(self, monkeypatch):
         m = _make_monitor(uid="1", state={"last_live_status": True})
         pushed = []
 
-        async def fake_push(bot, content, image_path=None):
+        async def fake_push(bot, content, image_paths=None):
             pushed.append(content)
 
         monkeypatch.setattr(m, "_push", fake_push)
@@ -125,7 +125,7 @@ class TestLiveTransition:
         m = _make_monitor(uid="1", state={"last_live_status": False})
         pushed = []
 
-        async def fake_push(bot, content, image_path=None):
+        async def fake_push(bot, content, image_paths=None):
             pushed.append(content)
 
         monkeypatch.setattr(m, "_push", fake_push)
@@ -182,7 +182,7 @@ class TestDynamic:
         m = _make_monitor(uid="1", sessdata="sess", state={"last_dynamic_id": "old"})
         pushed = []
 
-        async def fake_push(bot, content, image_path=None):
+        async def fake_push(bot, content, image_paths=None):
             pushed.append(content)
 
         monkeypatch.setattr(m, "_push", fake_push)
@@ -222,7 +222,7 @@ class TestPrime:
         m = _make_monitor(uid="1", sessdata="sess", state={})
         pushed = []
 
-        async def fake_push(bot, content, image_path=None):
+        async def fake_push(bot, content, image_paths=None):
             pushed.append(content)
 
         async def _live():
@@ -261,7 +261,7 @@ class TestPrime:
         assert m._primed is False
         pushed = []
 
-        async def fake_push(bot, content, image_path=None):
+        async def fake_push(bot, content, image_paths=None):
             pushed.append(content)
 
         # 停机期间灰泽满开播了 + 发了新动态（都比 state 里的旧记录新）
@@ -288,7 +288,7 @@ class TestPrime:
             "last_live_status": False, "last_dynamic_id": "old"})
         pushed = []
 
-        async def fake_push(bot, content, image_path=None):
+        async def fake_push(bot, content, image_paths=None):
             pushed.append(content)
 
         async def _live():
@@ -341,6 +341,6 @@ class TestPush:
         monkeypatch.setattr(bb, "get_notify_whitelist", lambda: ["111"])
         monkeypatch.setattr(bb, "_save_state", lambda s: None)
         bot = FakeBot()
-        await m._push(bot, "内容", image_path="C:/fake/dyn.jpg")
+        await m._push(bot, "内容", image_paths=["C:/fake/dyn.jpg"])
         assert len(bot.sent) == 1
         assert "CQ:image" in str(bot.sent[0][1])  # 消息含图片段
