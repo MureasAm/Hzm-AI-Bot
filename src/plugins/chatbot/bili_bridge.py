@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 
 import httpx
+from PIL import Image
 
 from nonebot import get_bot, get_driver
 from nonebot.adapters.onebot.v11 import Message, MessageSegment
@@ -37,6 +38,25 @@ async def _download_image(url: str) -> Path:
     tmp = Path(tempfile.gettempdir()) / f"hzm_dyn_{time.time_ns()}.jpg"
     tmp.write_bytes(data)
     return tmp
+
+
+def _resize_emote_if_large(path: Path, max_side: int = 200) -> Path:
+    """若表情图边长超过 max_side，缩小到 max_side（保持比例）写临时文件，返回新路径。
+
+    防止高清大图在 QQ 里显得过大；正常尺寸的表情原样返回（不折腾）。"""
+    try:
+        im = Image.open(path)
+        w, h = im.size
+        if max(w, h) <= max_side:
+            return path
+        ratio = max_side / max(w, h)
+        im = im.resize((max(1, int(w * ratio)), max(1, int(h * ratio))), Image.LANCZOS)
+        tmp = Path(tempfile.gettempdir()) / f"hzm_emote_{time.time_ns()}.png"
+        im.save(tmp)
+        print(f"[B站] 表情过大({w}x{h})已缩到 {im.size}")
+        return tmp
+    except Exception:
+        return path
 
 
 # ==================== 状态持久化 ====================
@@ -333,8 +353,8 @@ class BiliMonitor:
         if dyn["id"] == str(self.state.get("last_dynamic_id", "") or ""):
             return  # 已推送过
 
-        # 配图 + 表情图：本地表情直接发文件，URL 表情下载；限 4 张防刷屏
-        image_paths = list(dyn.get("local_emotes") or [])
+        # 配图 + 表情图：本地表情直接发文件（过大自动缩小），URL 表情下载；限 4 张防刷屏
+        image_paths = [_resize_emote_if_large(p) for p in (dyn.get("local_emotes") or [])]
         for u in (dyn.get("image_urls") or [])[:1] + (dyn.get("emote_urls") or [])[:4]:
             try:
                 p = await _download_image(u)
