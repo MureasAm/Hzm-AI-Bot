@@ -108,6 +108,57 @@ class TestFlush:
         assert sent == ["嗯？没看清"]  # 兜底保证有回复
 
 
+class TestVoiceFlush:
+    """_flush 语音分支：短回复(should_voice=True) 补语音；长/含内心戏括号只走文字。"""
+
+    async def _run_flush(self, monkeypatch, reply_text):
+        win = cw._UserWindow("u4")
+        win.pending = [("u4", "在吗", "", "")]
+        voice_calls = []
+
+        async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False):
+            return reply_text
+
+        async def fake_summarize(msgs):
+            return ""
+
+        async def fake_describe(bot, url, file):
+            raise AssertionError("无图消息不应调用视觉")
+
+        async def fake_send_voice(bot, target_id, is_private, reply_text_):
+            voice_calls.append((target_id, is_private, reply_text_))
+
+        monkeypatch.setattr(cw, "handle_chat", fake_handle)
+        monkeypatch.setattr(cw, "summarize_batch", fake_summarize)
+        monkeypatch.setattr(cw, "_describe_image_src", fake_describe)
+        monkeypatch.setattr(cw, "send_voice", fake_send_voice)
+        sent = []
+
+        async def fake_send(win, content):
+            sent.append(content)
+
+        monkeypatch.setattr(cw, "_send", fake_send)
+
+        await cw._flush(win)
+        await asyncio.sleep(0)  # 让后台语音任务跑起来
+        return sent, voice_calls
+
+    async def test_short_reply_spawns_voice(self, monkeypatch):
+        sent, voice_calls = await self._run_flush(monkeypatch, "在呢")
+        assert sent == ["在呢"]
+        assert voice_calls == [("u4", True, "在呢")]  # 短回复 → 补一条语音条
+
+    async def test_long_reply_no_voice(self, monkeypatch):
+        sent, voice_calls = await self._run_flush(monkeypatch, "今天的直播真的特别特别顺利，感觉大家也都玩得很开心呀")
+        assert sent  # 文字照发
+        assert voice_calls == []  # 长回复只走文字，不双发
+
+    async def test_inner_paren_reply_no_voice(self, monkeypatch):
+        sent, voice_calls = await self._run_flush(monkeypatch, "嗯（小声）")
+        assert sent == ["嗯（小声）"]
+        assert voice_calls == []  # 内心戏括号是文字专属表达，TTS 表达不了
+
+
 class TestEnqueue:
     async def test_enqueue_accumulates_and_new_task(self):
         cw._windows.clear()

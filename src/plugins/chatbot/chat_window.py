@@ -21,6 +21,7 @@ from .core import (
 from .reply_style import (
     split_reply, split_delay, clean_reply,
 )
+from .voice import should_voice, send_voice
 from .vision import describe_image, describe_image_bytes, _read_image_bytes
 from .constants import (
     READ_WINDOW_MIN_SECONDS, READ_WINDOW_MAX_SECONDS, SPLIT_REPLY_ENABLED,
@@ -217,6 +218,12 @@ async def _flush(win: _UserWindow) -> None:
         await _send(win, p)
         await asyncio.sleep(split_delay(p))
     await _send(win, parts[-1])
+
+    # 语音分支：判断用完整回复（短 + 无内心戏括号 → 语音条；长回复/含括号走文字，互斥不双发）。
+    # 合成/发送在后台任务里跑——文字已先发出，语音晚几秒到（像真人"打完字又补了条语音"），
+    # 失败只跳过，绝不影响文字。voice_enabled=0 时 _synthesize 直接返回 None，等于没接。
+    if should_voice(reply):
+        asyncio.create_task(send_voice(win.bot, win.target_id, win.is_private, reply))
 
 
 async def _send(win: _UserWindow, content: str) -> None:

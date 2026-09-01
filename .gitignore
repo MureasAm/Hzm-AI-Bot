@@ -162,12 +162,15 @@ assets/audio/
 # 分析产物（转写/清洗/转化/挖措辞/陈述等中间产物，不入库）
 outputs/
 
-# B站联动去重状态（运行时生成，不入库）
+# B站/微博联动去重状态（运行时生成，不入库）
 data/bili_state.json
+data/weibo_state.json
 data/heartbeat
 data/qq_alive
 data/qq_offline
 data/watchdog_state.json
 data/qr/
+# GPT-SoVITS 合成缓存（运行时生成，不入库）
+data/voice_cache/
 # 对用户的记忆（运行时生成，不入库）
 user_memory/*.json

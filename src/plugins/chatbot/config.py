@@ -108,3 +108,12 @@ def get_push_interval() -> int:
         return int(get_config("push_interval", PUSH_INTERVAL))
     except (TypeError, ValueError):
         return PUSH_INTERVAL
+
+
+def get_voice_enabled() -> bool:
+    """语音总开关：voice_enabled=1/true/yes/on 才开。
+
+    NoneBot 会把 .env 值当字符串读进来，"0" 会被 bool("0") 误判成 True，
+    所以这里显式按字符串解析。默认关（GPT-SoVITS 通了再把 .env 改 1）。
+    """
+    return str(get_config("voice_enabled", "") or "").strip().lower() in ("1", "true", "yes", "on")
