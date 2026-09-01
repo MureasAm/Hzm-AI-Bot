@@ -563,8 +563,12 @@ async def update_memory_task(user_id: str, user_msg: str, reply: str, user_memor
 
 
 async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
-                      batch_summary: str = "") -> str:
-    """处理一条用户消息，返回机器人回复。vision_desc 为图片描述；batch_summary 为批量归纳。"""
+                      batch_summary: str = "", is_group: bool = False) -> str:
+    """处理一条用户消息，返回机器人回复。vision_desc 为图片描述；batch_summary 为批量归纳。
+
+    is_group=True 时按群会话处理：user_id 传群号（会话历史按群记），
+    不建用户记忆卡（群不是单个用户），回复对象由调用方按群发送。
+    """
     deepseek_client, zhipu_client = _get_clients()
 
     # --- 会话级记忆：对话前同步探测（判断话题延续/转换 + 短 query 扩充） ---
@@ -598,8 +602,9 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
             reply = random.choice(replies)
             # 梗匹配也记入短期记忆 + 异步长期记忆，避免后续对话"失忆"
             append_user_history(user_id, user_msg, reply)
-            card = get_user_memory(user_id)
-            asyncio.create_task(update_memory_task(user_id, user_msg, reply, card))
+            if not is_group:  # 群会话不建用户记忆卡
+                card = get_user_memory(user_id)
+                asyncio.create_task(update_memory_task(user_id, user_msg, reply, card))
             return reply
 
     # --- 🎭 人格规则 ---
@@ -645,8 +650,8 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         core_stories = []
 
     # --- 🧠 确定性两路记忆 ---
-    user_memory_card = get_user_memory(user_id)
-    memory_context = build_memory_context(user_memory_card)
+    user_memory_card = {} if is_group else get_user_memory(user_id)
+    memory_context = "" if is_group else build_memory_context(user_memory_card)
     weather_city = (user_memory_card or {}).get("weather_city", "") or ""
 
     # --- 🧩 构建消息列表 ---
@@ -685,6 +690,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     append_user_history(user_id, record_msg, reply)
 
     # --- 📝 异步更新长期记忆（会话级记忆已在对话前 probe_session 同步更新） ---
-    asyncio.create_task(update_memory_task(user_id, record_msg, reply, user_memory_card))
+    if not is_group:  # 群会话不建用户记忆卡
+        asyncio.create_task(update_memory_task(user_id, record_msg, reply, user_memory_card))
 
     return reply

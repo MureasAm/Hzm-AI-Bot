@@ -28,16 +28,19 @@ from .constants import (
 
 
 class _UserWindow:
-    """单用户的会话窗口：缓冲 + 去抖/发送任务 + 代际计数。"""
+    """会话窗口（私聊=用户 / 群聊=整个群）：缓冲 + 去抖/发送任务 + 代际计数。
 
-    def __init__(self, user_id: str):
-        self.user_id = user_id
-        self.pending: list[tuple[str, str, str]] = []   # (text, image_url, image_file)
+    target_id = 会话标识（私聊=user_id，群聊=group_id）——群的多人发言攒同一个窗口，
+    这样 bot 参与整场群聊，而不是只跟单个人说话。
+    """
+
+    def __init__(self, target_id: str):
+        self.target_id = target_id
+        self.pending: list[tuple[str, str, str, str]] = []   # (sender_id, text, image_url, image_file)
         self.task: asyncio.Task | None = None      # 当前"窗口等待/发送"任务
         self.generation = 0                        # 每次 enqueue 自增
         self.bot = None
         self.is_private = True
-        self.target_id = ""
 
 
 _windows: dict[str, _UserWindow] = {}
@@ -67,6 +70,29 @@ async def _eager_download(source: str) -> None:
 def _combine_text(msgs) -> str:
     """合并本批文本（图片源不参与文本合并）。首元素为文本，兼容 (text, url, file) 与 (text, desc)。"""
     return "\n".join(t for t, *_ in msgs if t.strip()).strip()
+
+
+# 群聊发送者昵称缓存：(group:user) → 昵称
+_sender_name_cache: dict[str, str] = {}
+
+
+async def _get_sender_name(bot, group_id: str, user_id: str) -> str:
+    """取群成员昵称（缓存 + 失败用短 id 兜底），群聊组装时标注"谁在说话"。"""
+    key = f"{group_id}:{user_id}"
+    if key in _sender_name_cache:
+        return _sender_name_cache[key]
+    name = f"绿冻{str(user_id)[-4:]}"  # 兜底：短 id
+    try:
+        info = await bot.get_group_member_info(group_id=int(group_id), user_id=int(user_id))
+        n = (info or {}).get("card") or (info or {}).get("nickname") or ""
+        if n:
+            name = n
+    except Exception:
+        pass
+    _sender_name_cache[key] = name
+    if len(_sender_name_cache) > 300:
+        _sender_name_cache.clear()
+    return name
 
 
 async def _describe_image_src(bot, image_url: str, image_file: str) -> str:
@@ -111,24 +137,24 @@ async def _describe_image_src(bot, image_url: str, image_file: str) -> str:
     return ""
 
 
-def enqueue(user_id: str, text: str, image_url: str, image_file: str,
-            bot, is_private: bool, target_id: str) -> None:
+def enqueue(target_id: str, sender_id: str, text: str, image_url: str, image_file: str,
+            bot, is_private: bool) -> None:
     """采集一条消息进缓冲，重置读秒窗口。
 
-    若该用户正在等待回复/发送分段，先取消（插话优先：取消未发送的，先回新消息）。
-    同时存 url + file：url 优先（rkey 新鲜时急切缓存），file 留给 CDN 失败时读本地兜底。
+    窗口按 target_id（私聊=user_id，群聊=group_id）开——群的多人发言攒同一个窗口，
+    bot 就能参与整场群聊。sender_id 记录发言者，群聊组装时带发送者标签。
+    图片：url 优先（rkey 新鲜时急切缓存），file 留给 CDN 失败时读本地兜底。
     """
     if not text.strip() and not image_url and not image_file:
         return
-    win = _windows.setdefault(user_id, _UserWindow(user_id))
+    win = _windows.setdefault(target_id, _UserWindow(target_id))
     win.generation += 1
     gen = win.generation
     if win.task:
         win.task.cancel()
     win.bot = bot
     win.is_private = is_private
-    win.target_id = target_id
-    win.pending.append((text, image_url, image_file))
+    win.pending.append((sender_id, text, image_url, image_file))
     # 图片立刻缓存下载（rkey 新鲜），读秒窗口后不因过期 400
     if image_url:
         asyncio.create_task(_eager_download(image_url))
@@ -147,7 +173,7 @@ async def _process(win: _UserWindow, gen: int) -> None:
         if win.task is asyncio.current_task():
             win.task = None
         if gen == win.generation and not win.pending:
-            _windows.pop(win.user_id, None)  # 空闲清理
+            _windows.pop(win.target_id, None)  # 空闲清理
 
 
 async def _flush(win: _UserWindow) -> None:
@@ -163,17 +189,26 @@ async def _flush(win: _UserWindow) -> None:
         desc = await _describe_image_src(win.bot, u, f)
         return desc or "灰泽满收到一张图片，但暂时没看清里面的内容"  # 兜底保证可回
 
-    descs = await asyncio.gather(*[_parse(u, f) for _, u, f in msgs])
-    parsed = [(t, d) for (t, _, _), d in zip(msgs, descs)]
+    descs = await asyncio.gather(*[_parse(u, f) for _, _, u, f in msgs])
+    parsed = [(s, t, d) for (s, t, _, _), d in zip(msgs, descs)]  # (sender, text, desc)
 
-    combined = _combine_text(parsed)
-    vision_desc = "；".join(d for _, d in parsed if d)
-    print(f"[读秒] user={win.user_id} 攒批 {len(msgs)} 条 → 回复")
+    # 组装：私聊=纯文本；群聊=每条带发送者名字，bot 知道谁在说话
+    if win.is_private:
+        combined = _combine_text([(t, d) for _, t, d in parsed])
+    else:
+        lines = []
+        for s, t, _ in parsed:
+            if t.strip():
+                name = await _get_sender_name(win.bot, win.target_id, s)
+                lines.append(f"{name}：{t.strip()}")
+        combined = "\n".join(lines).strip()
+    vision_desc = "；".join(d for _, _, d in parsed if d)
+    print(f"[读秒] {'群' if not win.is_private else '私聊'}={win.target_id} 攒批 {len(msgs)} 条 → 回复")
 
     # 归纳：整批（含图片描述）一起给模型做理解提示
-    batch_summary = await summarize_batch(parsed)
-    reply = await handle_chat(win.user_id, combined, vision_desc=vision_desc,
-                              batch_summary=batch_summary)
+    batch_summary = await summarize_batch([(t, d) for _, t, d in parsed])
+    reply = await handle_chat(win.target_id, combined, vision_desc=vision_desc,
+                              batch_summary=batch_summary, is_group=not win.is_private)
     reply = clean_reply(reply)  # 去括号前缀 + 整条至多 1 个括号
     parts = split_reply(reply) if SPLIT_REPLY_ENABLED else [reply]
     # 拆分后每段再清一次：内联括号可能落在某段开头（如 （刚醒，声音哑哑的）...），剥掉

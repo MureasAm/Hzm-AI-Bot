@@ -189,4 +189,5 @@ async def _handle_chat(bot: Bot, event: Event):
     print(f"[收到消息] user={user_id}, msg={user_msg[:40]!r}, img={'有' if (image_url or image_file) else '无'}")
 
     # 读秒窗口（方案B）：攒批 + 静默后统一回复（含读图/归纳/分批发送）
-    chat_window.enqueue(user_id, user_msg, image_url, image_file, bot, is_private, target_id)
+    # target_id=会话标识（私聊=user_id，群聊=group_id），群聊按群攒批实现多人对话
+    chat_window.enqueue(target_id, user_id, user_msg, image_url, image_file, bot, is_private)
