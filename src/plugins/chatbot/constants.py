@@ -110,6 +110,11 @@ PUSH_INTERVAL = 180               # B站轮询间隔（秒）。别低于 120：
 BILI_STATE_FILE = PROJECT_ROOT / "data" / "bili_state.json"   # 开播/动态去重状态持久化
 WEIBO_STATE_FILE = PROJECT_ROOT / "data" / "weibo_state.json" # 微博去重状态持久化
 
+# ==================== 语音回复（GPT-SoVITS） ====================
+SOVITS_URL = "http://127.0.0.1:9880/tts"         # GPT-SoVITS api_v2.py 起的服务
+SOVITS_REF_DIR = PROJECT_ROOT / "assets" / "voice_refs"  # 参考音频（ref_happy/ref_lazy/ref_serious.wav）
+VOICE_CACHE_DIR = PROJECT_ROOT / "data" / "voice_cache"   # TTS 合成缓存（text_hash→wav）
+
 # 好友申请自动通过（否则新加的绿冻是单向好友，推送发不到，见 NapCat issue #72）
 AUTO_ACCEPT_FRIEND = True
 

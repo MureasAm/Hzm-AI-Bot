@@ -122,7 +122,23 @@ class WeiboMonitor:
         print("[微博] 已建立基线（对齐当前微博状态），之后检测到新微博才会推送")
 
     async def _fetch_latest_post(self) -> dict:
-        """取最新一条微博，返回 {id, mblogid, text, image_urls, url}。失败抛异常。"""
+        """取最新一条微博，返回 {id, mblogid, text, image_urls, url}。
+
+        瞬断（DNS/网络）自动等 5 秒重试一次；响应非 JSON 给明确提示（风控/cookie 失效）。
+        """
+        last = None
+        for attempt in range(2):
+            try:
+                return await self._fetch_post_once()
+            except Exception as e:
+                last = e
+                if attempt == 0:
+                    print(f"⚠️ 微博拉取失败，5秒后重试: {str(e)[:100]}")
+                    await asyncio.sleep(5)
+        raise last
+
+    async def _fetch_post_once(self) -> dict:
+        """单次拉取最新一条微博（无重试）。"""
         cookie = get_weibo_cookie()
         async with httpx.AsyncClient(timeout=10.0,
                                      headers={"User-Agent": _WEIBO_UA,
@@ -134,7 +150,16 @@ class WeiboMonitor:
             resp = await client.get(WEIBO_API,
                                     params={"uid": self.uid, "page": 1, "feature": 0},
                                     headers=headers)
+        # 非 200 / 非 JSON → 明确报错（大概率风控或 cookie 失效），而不是 json() 抛难懂的错误
+        if resp.status_code != 200:
+            raise RuntimeError(f"微博接口 HTTP {resp.status_code}")
+        ct = resp.headers.get("content-type", "")
+        if "json" not in ct:
+            raise RuntimeError(f"微博接口非JSON响应(content-type={ct})，多半是风控或 cookie 失效——重新复制 WEIBO_COOKIE")
+        try:
             data = resp.json()
+        except Exception as e:
+            raise RuntimeError(f"微博接口 JSON 解析失败: {e}")
         if not data.get("ok"):
             raise RuntimeError(f"微博接口返回 ok={data.get('ok')} msg={data.get('msg')}")
         lst = (data.get("data") or {}).get("list") or []
