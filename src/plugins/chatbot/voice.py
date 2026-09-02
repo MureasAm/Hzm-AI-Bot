@@ -78,20 +78,39 @@ def _tts_text(reply: str) -> str:
     return t.strip()
 
 
-# 参考音频情绪映射（粗粒度；细粒度如"小声/心虚"做不到，走文字）
-EMOTION_REFS = {
-    "开心": ("ref_happy.wav", "开心的参考文本"),
-    "慵懒": ("ref_lazy.wav", "慵懒的参考文本"),
-    "认真": ("ref_serious.wav", "认真的参考文本"),
-}
-
-
-def _pick_ref(reply: str):
+# 参考音频：情绪档（可选，粗粒度；细粒度如"小声/心虚"做不到走文字）。
+# 只放 ref_voice.wav（+同名 .txt 转写）就能跑——缺情绪档时自动回落默认/任一 .wav。
+def _pick_tier(reply: str) -> str:
     if any(p in reply for p in ("笑", "哈哈", "！", "～")):
-        return EMOTION_REFS["开心"]
+        return "ref_happy"
     if any(p in reply for p in ("困", "累", "唉", "……")):
-        return EMOTION_REFS["慵懒"]
-    return EMOTION_REFS["认真"]
+        return "ref_lazy"
+    return "ref_serious"
+
+
+def _resolve_ref(reply: str) -> Path | None:
+    """按情绪档选参考音频；档位文件缺失 → 回落 ref_voice.wav → 任一 .wav。一个参考也能跑。"""
+    d = Path(SOVITS_REF_DIR)
+    if not d.exists():
+        return None
+    tier = d / f"{_pick_tier(reply)}.wav"
+    if tier.exists():
+        return tier
+    default = d / "ref_voice.wav"
+    if default.exists():
+        return default
+    for wav in sorted(d.glob("*.wav")):
+        return wav
+    return None
+
+
+def _read_prompt_text(ref_path: Path) -> str:
+    """读参考音频同名 .txt 的转写（灰泽满在这段里说的话），GPT-SoVITS 靠它对齐。
+    缺失则空串（仍能合成但对齐/音质弱）——放音频时建议带一份同名 .txt。"""
+    txt = ref_path.with_suffix(".txt")
+    if txt.exists():
+        return txt.read_text(encoding="utf-8").strip()
+    return ""
 
 
 async def _synthesize(reply_text: str) -> str | None:
@@ -105,11 +124,11 @@ async def _synthesize(reply_text: str) -> str | None:
     cached = VOICE_CACHE_DIR / f"voice_{h}.wav"
     if cached.exists():
         return str(cached)
-    ref_audio, prompt_text = _pick_ref(reply_text)
-    ref_path = Path(SOVITS_REF_DIR) / ref_audio
-    if not ref_path.exists():
-        print(f"⚠️ 参考音频缺失: {ref_path}（放 ref_happy/ref_lazy/ref_serious.wav）")
+    ref_path = _resolve_ref(reply_text)
+    if ref_path is None:
+        print(f"⚠️ 参考音频缺失: {SOVITS_REF_DIR} 下没有 .wav（放 ref_voice.wav 即可起步）")
         return None
+    prompt_text = _read_prompt_text(ref_path)
     try:
         async with httpx.AsyncClient(timeout=120) as client:
             resp = await client.post(SOVITS_URL, json={

@@ -62,15 +62,40 @@ class TestTtsText:
         assert v._tts_text(" 好了  就这样 ") == "好了就这样"
 
 
-class TestPickRef:
-    def test_happy(self):
-        assert v._pick_ref("哈哈好好笑")[0] == "ref_happy.wav"
+class TestRefResolution:
+    """参考音频：情绪档选择 + 缺档回落默认/任一 .wav + 同名 .txt 转写读取。"""
 
-    def test_lazy(self):
-        assert v._pick_ref("好困啊……")[0] == "ref_lazy.wav"
+    def test_pick_tier(self):
+        assert v._pick_tier("哈哈好好笑") == "ref_happy"
+        assert v._pick_tier("好困啊……") == "ref_lazy"
+        assert v._pick_tier("我们聊聊这个") == "ref_serious"
 
-    def test_serious_default(self):
-        assert v._pick_ref("我们聊聊这个")[0] == "ref_serious.wav"
+    def test_prefers_tier_file(self, monkeypatch, tmp_path):
+        (tmp_path / "ref_happy.wav").write_bytes(b"x")
+        (tmp_path / "ref_voice.wav").write_bytes(b"x")
+        monkeypatch.setattr(v, "SOVITS_REF_DIR", tmp_path)
+        assert v._resolve_ref("哈哈好好笑").name == "ref_happy.wav"
+
+    def test_falls_back_to_default(self, monkeypatch, tmp_path):
+        # 只放一个 ref_voice.wav 就能跑：任何情绪都回落它
+        (tmp_path / "ref_voice.wav").write_bytes(b"x")
+        monkeypatch.setattr(v, "SOVITS_REF_DIR", tmp_path)
+        assert v._resolve_ref("哈哈好好笑").name == "ref_voice.wav"
+        assert v._resolve_ref("我们聊聊这个").name == "ref_voice.wav"
+
+    def test_falls_back_to_any_wav(self, monkeypatch, tmp_path):
+        (tmp_path / "mysample.wav").write_bytes(b"x")
+        monkeypatch.setattr(v, "SOVITS_REF_DIR", tmp_path)
+        assert v._resolve_ref("我们聊聊这个").name == "mysample.wav"
+
+    def test_no_ref_returns_none(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(v, "SOVITS_REF_DIR", tmp_path)
+        assert v._resolve_ref("我们聊聊这个") is None
+
+    def test_read_prompt_text_from_sibling_txt(self, tmp_path):
+        (tmp_path / "ref_voice.txt").write_text("晚安呀", encoding="utf-8")
+        assert v._read_prompt_text(tmp_path / "ref_voice.wav") == "晚安呀"
+        assert v._read_prompt_text(tmp_path / "nope.wav") == ""  # 无 .txt → 空转写
 
 
 class TestGetVoiceEnabled:
