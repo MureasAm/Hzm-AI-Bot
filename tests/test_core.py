@@ -161,34 +161,41 @@ class TestCleanReply:
 
 
 class TestSelfPronounCleanup:
-    """clean_reply 的"她/他自指兜底"：灰泽满用名字自称，不该出现"她"指自己。"""
+    """clean_reply 的自指"她/他"（折中版）：
+    只处理"回复里带自称名(灰泽满/hzm)、没别人名时，句读后复指自己的她/他"（去掉不堆名）；
+    不带自称名的她/他（多半指对话里的别人）一律保留，不再全换成灰泽满。"""
 
-    def test_self_she_replaced(self):
-        assert reply_style.clean_reply("她转开视线，声音闷闷的：行了") == \
-            "灰泽满转开视线，声音闷闷的：行了"
+    def test_without_self_name_third_party_preserved(self):
+        # 没出现自称名，她/他指别人 → 原样保留（旧版会错改成灰泽满，这是本次修复点）
+        assert reply_style.clean_reply("她昨天生日，我给她录了段祝福") == \
+            "她昨天生日，我给她录了段祝福"
 
-    def test_other_person_she_preserved(self):
-        # 出现其他第三人称名字（女同学/满妈），"她"指别人，不动
-        assert "她" in reply_style.clean_reply("女同学递了巧克力，她笑了")
-        assert "她" in reply_style.clean_reply("满妈说让她早点睡")
+    def test_resumptive_she_after_self_name_dropped(self):
+        # 带自称名且无别人名：句读后复指自己的"她"去掉，不重复堆名也不串成别人
+        assert reply_style.clean_reply("灰泽满到点下播了，她准备睡了") == \
+            "灰泽满到点下播了，准备睡了"
+
+    def test_other_person_name_present_untouched(self):
+        # 出现别的第三人称名（女同学/满妈），她/他指别人 → 整段不动
+        assert reply_style.clean_reply("女同学递了巧克力，她笑了") == \
+            "女同学递了巧克力，她笑了"
+        assert reply_style.clean_reply("满妈说让她早点睡") == "满妈说让她早点睡"
+
+    def test_plural_and_possessive_not_touched(self):
+        # 她们/她的=复数/所有格，指别人或所有，不碰
+        assert "她们" in reply_style.clean_reply("灰泽满放好耳机，她们接着复盘了")
+        assert "她的" in reply_style.clean_reply("灰泽满说到她的猫就笑")
 
     def test_qita_not_corrupted(self):
-        # "其他"里的"他"是词不是代词，不能替换成灰泽满
+        # "其他"里的"他"是词不是代词
         out = reply_style.clean_reply("其他的也别说了，就聊这个吧")
         assert "其他" in out
         assert "灰泽满" not in out
 
-    def test_full_example(self):
-        reply = ("灰泽满瞥了一眼屏幕，耳根有点热\n这人怎么还带图片攻击的……\n"
-                 "她转开视线，声音闷闷的：行了行了\n"
-                 "（小声）你这话倒是说得她心里挺暖的")
-        out = reply_style.clean_reply(reply)
-        assert "她" not in out
-        assert "灰泽满转开视线" in out
-        assert "说得灰泽满心里挺暖" in out
-
-    def test_male_self_reference_replaced(self):
-        assert "灰泽满" in reply_style.clean_reply("他心里其实挺高兴的")
+    def test_bare_self_she_no_longer_force_replaced(self):
+        # 折中代价：不带自称名的裸"她"自述不再被强制改名，靠提示词约束模型
+        out = reply_style.clean_reply("她转开视线，声音闷闷的：行了")
+        assert "她" in out
 
 
 class TestPreferences:

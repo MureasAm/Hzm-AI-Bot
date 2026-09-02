@@ -224,11 +224,15 @@ def clean_reply(reply: str) -> str:
         text = text[:cut] + text[cut:].replace('……', '')
     # 结巴消融："那、那"→"那那"
     text = re.sub(r'(.)、\1', r'\1\1', text)
-    # 自指"她/他"兜底：对话里角色用名字自称，不该出现"她"指自己。
-    # 仅当回复里没出现其他第三人称名字时才替换（这时的"她/他"几乎必指角色自己）。
-    if not any(n in text for n in _get_other_person_names()):
-        text = re.sub(r"她", "灰泽满", text)
-        text = re.sub(r"(?<!其|无)他(?!人|家|国|乡|方|日)", "灰泽满", text)
+    # 自指"她/他"——折中版（不再"无他名就全换成灰泽满"，那会把真指别人的她/他也改坏）：
+    # 仅当回复里出现自称名(灰泽满/hzm)且没出现别的第三人称名时，才去掉跟在句读标点后
+    # 复指自己的"她/他"（保留前文的灰泽满，不重复堆名也不串成别人）：
+    #   灰泽满到点下播了，她准备睡了 → 灰泽满到点下播了，准备睡了
+    # 没自称名的"她/他"多半指对话里的第三人 → 一律保留，别硬安到灰泽满头上。
+    # 她俩/她们/她的/她和=复数/所有格/并列，指别人，不碰。
+    if ("灰泽满" in text or "hzm" in text.lower()) and \
+            not any(n in text for n in _get_other_person_names()):
+        text = re.sub(r"(?<=[，,。；;！!？?、…\n])\s*[她他](?!们|俩|的|和|家)", "", text)
     return text
 
 
