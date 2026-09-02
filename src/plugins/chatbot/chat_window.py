@@ -211,6 +211,14 @@ async def _flush(win: _UserWindow) -> None:
     reply = await handle_chat(win.target_id, combined, vision_desc=vision_desc,
                               batch_summary=batch_summary, is_group=not win.is_private)
     reply = clean_reply(reply)  # 去括号前缀 + 整条至多 1 个括号
+
+    # 语音优先：成句回复(≥20字、无内心戏括号/链接)朗读成语音条——像真人"话多就录给你听"。
+    # 成功就不刷文字分段（互斥不双发）；未启用/合成失败时 send_voice 返回 False，
+    # 落回下方文字分段兜底，绝不影响收到回复。
+    if should_voice(reply):
+        if await send_voice(win.bot, win.target_id, win.is_private, reply):
+            return
+
     parts = split_reply(reply) if SPLIT_REPLY_ENABLED else [reply]
     # 拆分后每段再清一次：内联括号可能落在某段开头（如 （刚醒，声音哑哑的）...），剥掉
     parts = [clean_reply(p) for p in parts]
@@ -218,12 +226,6 @@ async def _flush(win: _UserWindow) -> None:
         await _send(win, p)
         await asyncio.sleep(split_delay(p))
     await _send(win, parts[-1])
-
-    # 语音分支：判断用完整回复（短 + 无内心戏括号 → 语音条；长回复/含括号走文字，互斥不双发）。
-    # 合成/发送在后台任务里跑——文字已先发出，语音晚几秒到（像真人"打完字又补了条语音"），
-    # 失败只跳过，绝不影响文字。voice_enabled=0 时 _synthesize 直接返回 None，等于没接。
-    if should_voice(reply):
-        asyncio.create_task(send_voice(win.bot, win.target_id, win.is_private, reply))
 
 
 async def _send(win: _UserWindow, content: str) -> None:

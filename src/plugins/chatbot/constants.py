@@ -114,6 +114,10 @@ WEIBO_STATE_FILE = PROJECT_ROOT / "data" / "weibo_state.json" # 微博去重状�
 SOVITS_URL = "http://127.0.0.1:9880/tts"         # GPT-SoVITS api_v2.py 起的服务
 SOVITS_REF_DIR = PROJECT_ROOT / "assets" / "voice_refs"  # 参考音频（ref_happy/ref_lazy/ref_serious.wav）
 VOICE_CACHE_DIR = PROJECT_ROOT / "data" / "voice_cache"   # TTS 合成缓存（text_hash→wav）
+# 语音触发下限：成句(≥20字)才朗读成语音条，短敷衍词(<20字)打字——朗读模型擅成句，
+# 一两字的"在呢/好呀"读出来很怪。样本库实测她回复中位 22 字、最长 60，故语音覆盖"完整句"。
+VOICE_MIN_LEN = 20
+VOICE_MAX_LEN = 120   # 纯保险上限（~30s 音频，仍在 QQ 语音 ~60s 内），几乎不会触发
 
 # 好友申请自动通过（否则新加的绿冻是单向好友，推送发不到，见 NapCat issue #72）
 AUTO_ACCEPT_FRIEND = True

@@ -4,26 +4,37 @@ from src.plugins.chatbot import voice as v
 
 
 class TestShouldVoice:
-    def test_short_no_inner_paren_yes(self):
-        assert v.should_voice("今天好开心呀！") is True
+    """成句(≥20字)才朗读语音；短敷衍词/含内心戏括号/链接/超长 → 打字。"""
 
     def test_empty_no(self):
         assert v.should_voice("") is False
 
-    def test_long_reply_no(self):
-        assert v.should_voice("今天的直播真的特别特别顺利，感觉大家也都玩得很开心呀") is False
+    def test_short_ack_below_min_no(self):
+        assert v.should_voice("在呢") is False            # 2 字敷衍词 → 打字
+        assert v.should_voice("今天好开心呀") is False     # 7 字短句 < 20 → 打字
+
+    def test_min_boundary(self):
+        assert v.should_voice("今" * 19) is False              # 19 字 < 20
+        assert v.should_voice("今" * 19, min_len=15) is True    # 若下调到 15 档则会语音
+        assert v.should_voice("今" * 20) is True               # 正好 20 字成句 → 语音
+
+    def test_in_range_sentence_yes(self):
+        assert v.should_voice("今天直播聊得特别开心，下次有空我们再一起好好玩呀") is True
 
     def test_inner_voice_paren_no(self):
-        assert v.should_voice("嗯（小声）") is False
-        assert v.should_voice("（捂脸）我不行了") is False
+        assert v.should_voice("今天直播聊得特别开心（小声）下次有空再一起玩") is False
+        assert v.should_voice("（捂脸）今天真的不知道说什么好了完全") is False
+
+    def test_super_long_no(self):
+        assert v.should_voice("今天直播聊得特别开心" * 13) is False  # 130 字 > 120 → 文字分段
+
+    def test_max_boundary(self):
+        assert v.should_voice("长" * 120) is True
+        assert v.should_voice("长" * 121) is False
 
     def test_digits_url_no(self):
-        assert v.should_voice("记得看时间，10点半") is False
-        assert v.should_voice("链接 http://x.com") is False
-
-    def test_max_len_threshold(self):
-        assert v.should_voice("今天好开心呀", max_len=20) is True
-        assert v.should_voice("今天好开心呀", max_len=5) is False  # 超过阈值不语音
+        assert v.should_voice("我们约在10点半的咖啡店见面聊那个新企划吧") is False
+        assert v.should_voice("链接 http://x.com 的这个企划你帮我看看行吗") is False
 
 
 class TestTtsText:

@@ -38,7 +38,11 @@ class TestFlush:
         async def fake_send(win, content):
             sent.append(content)
 
+        async def fake_send_voice(bot, target_id, is_private, reply_text):
+            return False  # 本测试只验文字拆分路径：语音一律失败回退文字
+
         monkeypatch.setattr(cw, "_send", fake_send)
+        monkeypatch.setattr(cw, "send_voice", fake_send_voice)
 
         await cw._flush(win)
         assert captured["text"] == "在吗\n天气咋样"
@@ -109,9 +113,11 @@ class TestFlush:
 
 
 class TestVoiceFlush:
-    """_flush 语音分支：短回复(should_voice=True) 补语音；长/含内心戏括号只走文字。"""
+    """_flush 语音优先：成句回复朗读语音、成功即不发文字；短敷衍/含内心戏括号只走文字。"""
 
-    async def _run_flush(self, monkeypatch, reply_text):
+    SENTENCE = "今天直播聊得特别开心，下次有空我们再一起好好玩呀"  # 24 字成句
+
+    async def _run_flush(self, monkeypatch, reply_text, voice_ok=True):
         win = cw._UserWindow("u4")
         win.pending = [("u4", "在吗", "", "")]
         voice_calls = []
@@ -127,6 +133,7 @@ class TestVoiceFlush:
 
         async def fake_send_voice(bot, target_id, is_private, reply_text_):
             voice_calls.append((target_id, is_private, reply_text_))
+            return voice_ok  # 模拟合成/发送成败
 
         monkeypatch.setattr(cw, "handle_chat", fake_handle)
         monkeypatch.setattr(cw, "summarize_batch", fake_summarize)
@@ -140,23 +147,27 @@ class TestVoiceFlush:
         monkeypatch.setattr(cw, "_send", fake_send)
 
         await cw._flush(win)
-        await asyncio.sleep(0)  # 让后台语音任务跑起来
         return sent, voice_calls
 
-    async def test_short_reply_spawns_voice(self, monkeypatch):
+    async def test_sentence_voice_replaces_text(self, monkeypatch):
+        sent, voice_calls = await self._run_flush(monkeypatch, self.SENTENCE, voice_ok=True)
+        assert voice_calls == [("u4", True, self.SENTENCE)]  # 成句 → 尝试语音
+        assert sent == []  # 语音成功，不再刷文字（互斥不双发）
+
+    async def test_voice_failure_falls_back_to_text(self, monkeypatch):
+        sent, voice_calls = await self._run_flush(monkeypatch, self.SENTENCE, voice_ok=False)
+        assert voice_calls == [("u4", True, self.SENTENCE)]  # 尝试过语音
+        assert sent  # 失败回退文字分段，绝不影响收到回复
+
+    async def test_short_ack_text_only(self, monkeypatch):
         sent, voice_calls = await self._run_flush(monkeypatch, "在呢")
         assert sent == ["在呢"]
-        assert voice_calls == [("u4", True, "在呢")]  # 短回复 → 补一条语音条
+        assert voice_calls == []  # 短敷衍词 <20 字 → 打字
 
-    async def test_long_reply_no_voice(self, monkeypatch):
-        sent, voice_calls = await self._run_flush(monkeypatch, "今天的直播真的特别特别顺利，感觉大家也都玩得很开心呀")
-        assert sent  # 文字照发
-        assert voice_calls == []  # 长回复只走文字，不双发
-
-    async def test_inner_paren_reply_no_voice(self, monkeypatch):
-        sent, voice_calls = await self._run_flush(monkeypatch, "嗯（小声）")
-        assert sent == ["嗯（小声）"]
+    async def test_inner_paren_sentence_no_voice(self, monkeypatch):
+        sent, voice_calls = await self._run_flush(monkeypatch, "今天直播聊得特别开心（小声）下次再一起")
         assert voice_calls == []  # 内心戏括号是文字专属表达，TTS 表达不了
+        assert sent
 
 
 class TestEnqueue:

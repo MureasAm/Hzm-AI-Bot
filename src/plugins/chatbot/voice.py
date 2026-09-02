@@ -1,7 +1,8 @@
 """语音回复：GPT-SoVITS 合成 → QQ 语音消息（接入方案见 D:\\my_qq_bot\\语音接入方案.md）。
 
-原则：短 + 语气型情绪回复 → 语音条；长回复/含内心戏括号 → 文字（互斥，不双发）。
-TTS 在文字发出后的后台任务里跑，失败只跳过，绝不影响文字回复。
+原则：成句(≥20字)回复朗读成语音条；短敷衍词/含内心戏括号 → 打字文字（互斥，不双发）。
+灰泽满实际回复多为 15~45 字一句（样本最长 60），语音覆盖"完整成句"档，朗读模型擅成句。
+语音在回复路径里优先尝试，失败自动回退文字分段——绝不影响收到回复。
 """
 import asyncio
 import hashlib
@@ -12,25 +13,27 @@ import httpx
 
 from nonebot.adapters.onebot.v11 import MessageSegment
 
-from .constants import SOVITS_URL, SOVITS_REF_DIR, VOICE_CACHE_DIR
+from .constants import (
+    SOVITS_URL, SOVITS_REF_DIR, VOICE_CACHE_DIR, VOICE_MIN_LEN, VOICE_MAX_LEN,
+)
 from .config import get_voice_enabled
 
 # 不可语音化的"内心戏/动作"括号（TTS 表达不了 → 这些回复走文字）
 _INNER_VOICE_PARENS = ("小声", "心虚", "捂脸", "揉眼睛", "叹气", "皱眉", "低头", "脸红")
 
 _tts_lock = asyncio.Lock()   # 同时只合成一条（TTS 占 GPU，并发互相拖慢）
-_voice_cache: dict[str, str] = {}
 
 
-def should_voice(reply: str, max_len: int = 20) -> bool:
-    """判断这条回复是否适合发语音。
+def should_voice(reply: str, min_len: int = VOICE_MIN_LEN,
+                 max_len: int = VOICE_MAX_LEN) -> bool:
+    """判断这条回复是否适合朗读成语音条。
 
-    语音 = 短 + 无"内心戏括号" + 非数字/链接/长解释内容。
-    长回复走文字分段，语音只发短句——天然互斥，不双发。
+    语音 = 成句(≥min_len 字) + 无"内心戏括号" + 非数字/链接。
+    短敷衍词(<min_len，如"在呢")读出来很怪 → 打字；超长(max_len 保险上限) → 文字分段。
     """
     if not reply:
         return False
-    if len(reply) > max_len:
+    if not (min_len <= len(reply) <= max_len):
         return False
     if any(p in reply for p in _INNER_VOICE_PARENS):
         return False
@@ -109,22 +112,28 @@ def _to_qq_voice(wav_path: str) -> str | None:
     return f"file:///{Path(wav_path).resolve()}"
 
 
-async def send_voice(bot, target_id: str, is_private: bool, reply_text: str) -> None:
-    """后台语音任务：合成 → 转 QQ 语音 → 发送。失败只跳过，不影响文字。"""
+async def send_voice(bot, target_id: str, is_private: bool, reply_text: str) -> bool:
+    """朗读语音：合成 → 转 QQ 语音 → 发送。
+
+    返回是否发送成功。成功 True（调用方不再发文字）；未启用/合成失败返回 False，
+    由调用方回退文字分段——语音是优先通道不是唯一通道，绝不影响收到回复。
+    """
     try:
         async with _tts_lock:
             wav_path = await _synthesize(reply_text)
             if not wav_path:
-                return
+                return False
         voice_file = _to_qq_voice(wav_path)
         if not voice_file:
-            return
+            return False
         if is_private:
             await bot.send_private_msg(user_id=target_id,
                                        message=MessageSegment.record(file=voice_file))
         else:
             await bot.send_group_msg(group_id=target_id,
                                      message=MessageSegment.record(file=voice_file))
-        print(f"[语音] 已发送语音: {reply_text[:20]}")
+        print(f"[语音] 已发送语音 {len(reply_text)}字: {reply_text[:20]}")
+        return True
     except Exception as e:
         print(f"⚠️ 语音发送失败（忽略，文字已回）: {e}")
+        return False
