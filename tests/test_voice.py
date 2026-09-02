@@ -36,6 +36,20 @@ class TestShouldVoice:
         assert v.should_voice("我们约在10点半的咖啡店见面聊那个新企划吧") is False
         assert v.should_voice("链接 http://x.com 的这个企划你帮我看看行吗") is False
 
+    def test_short_greeting_yes(self):
+        assert v.should_voice("晚安") is True            # 2 字但寒暄命中 → 语音
+        assert v.should_voice("晚安呀～") is True
+        assert v.should_voice("早上好呀！") is True
+        assert v.should_voice("太晚了先睡吧 晚安") is True   # 短句里带晚安也读
+
+    def test_plain_ack_still_text(self):
+        assert v.should_voice("在呢") is False          # 非寒暄的短敷衍词仍打字
+        assert v.should_voice("好哒") is False
+        assert v.should_voice("哈哈哈") is False
+
+    def test_greeting_inner_paren_still_text(self):
+        assert v.should_voice("晚安（心虚）") is False   # 寒暄也打不过内心戏括号铁则
+
 
 class TestTtsText:
     def test_laugh_paren_converted(self):

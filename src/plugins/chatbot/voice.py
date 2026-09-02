@@ -21,19 +21,44 @@ from .config import get_voice_enabled
 # 不可语音化的"内心戏/动作"括号（TTS 表达不了 → 这些回复走文字）
 _INNER_VOICE_PARENS = ("小声", "心虚", "捂脸", "揉眼睛", "叹气", "皱眉", "低头", "脸红")
 
+# 短寒暄/高情绪词（晚安/早安/辛苦啦…）：命中可突破 VOICE_MIN_LEN 下限也朗读语音。
+# 纯数据可随意增删——想让她"说出口"的短句就加这（如"晚安""好想你""记得想我"）。
+# 只放宽长度闸门，内心戏括号/数字/链接这些内容铁则仍然最高优先（如"晚安（心虚）"仍文字）。
+_GREETING_PHRASES = (
+    # 问候
+    "晚安", "早安", "早上好", "中午好", "下午好", "晚上好",
+    "你好", "你好呀", "你好啊", "嗨", "hi", "hello", "欢迎",
+    # 道别
+    "拜拜", "再见", "明天见", "下次见", "先睡啦", "先去忙啦",
+    # 高情绪应答/关切
+    "辛苦啦", "谢谢你", "谢谢呀", "抱歉", "对不起",
+    "在呀", "睡了吗", "还没睡", "到家了吗", "好久不见",
+    "好想你", "想你啦", "记得想我", "想我了吗", "我也想你",
+)
+
 _tts_lock = asyncio.Lock()   # 同时只合成一条（TTS 占 GPU，并发互相拖慢）
+
+
+def _is_greeting(reply: str) -> bool:
+    """是否命中短寒暄/高情绪词表（只判断词，长度由调用方管）。"""
+    r = reply.strip(" 　～~。！!？?,，").lower()
+    return any(g in r for g in _GREETING_PHRASES)
 
 
 def should_voice(reply: str, min_len: int = VOICE_MIN_LEN,
                  max_len: int = VOICE_MAX_LEN) -> bool:
     """判断这条回复是否适合朗读成语音条。
 
-    语音 = 成句(≥min_len 字) + 无"内心戏括号" + 非数字/链接。
-    短敷衍词(<min_len，如"在呢")读出来很怪 → 打字；超长(max_len 保险上限) → 文字分段。
+    语音 = 成句(≥min_len 字) 或 短寒暄命中(如"晚安") + 无"内心戏括号" + 非数字/链接。
+    寒暄只放宽长度下限，内容铁则仍最高优先——短敷衍词("在呢")/含内心戏括号/链接仍打字。
     """
     if not reply:
         return False
-    if not (min_len <= len(reply) <= max_len):
+    n = len(reply)
+    in_range = min_len <= n <= max_len
+    # 短寒暄命中 → 突破长度下限（≤min_len 的也语音）；超长仍走文字分段
+    greeting_ok = (not in_range) and n < min_len and _is_greeting(reply)
+    if not (in_range or greeting_ok):
         return False
     if any(p in reply for p in _INNER_VOICE_PARENS):
         return False
