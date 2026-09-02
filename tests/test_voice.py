@@ -50,6 +50,12 @@ class TestShouldVoice:
     def test_greeting_inner_paren_still_text(self):
         assert v.should_voice("晚安（心虚）") is False   # 寒暄也打不过内心戏括号铁则
 
+    def test_paren_tail_not_counted_toward_length(self):
+        # 原文带括号尾巴够 20 字、但剥括号后实际读出来不足 20 字 → 仍文字
+        reply = "要啊，灰泽满明天还得早起呢。（不然上学要迟到了）"
+        assert len(reply) >= 20               # 原文 ≥20 会误触发旧逻辑
+        assert v.should_voice(reply) is False  # 读出来只有 14 字 → 不该语音
+
 
 class TestTtsText:
     def test_laugh_paren_converted(self):

@@ -49,22 +49,26 @@ def should_voice(reply: str, min_len: int = VOICE_MIN_LEN,
                  max_len: int = VOICE_MAX_LEN) -> bool:
     """判断这条回复是否适合朗读成语音条。
 
-    语音 = 成句(≥min_len 字) 或 短寒暄命中(如"晚安") + 无"内心戏括号" + 非数字/链接。
-    寒暄只放宽长度下限，内容铁则仍最高优先——短敷衍词("在呢")/含内心戏括号/链接仍打字。
+    长度/寒暄判断用**实际会读出来的文本**（_tts_text 剥括号后）——避免"原文带括号尾巴够 20 字、
+    读出来只剩短句"的误触发。内心戏括号/数字/链接铁则仍针对原文（括号是文字专属表达）。
+    语音 = 剥括号后成句(≥min_len) 或 短寒暄命中；短敷衍词("在呢")/含内心戏括号/链接仍打字。
     """
     if not reply:
         return False
-    n = len(reply)
-    in_range = min_len <= n <= max_len
-    # 短寒暄命中 → 突破长度下限（≤min_len 的也语音）；超长仍走文字分段
-    greeting_ok = (not in_range) and n < min_len and _is_greeting(reply)
-    if not (in_range or greeting_ok):
-        return False
+    # 内容铁则（看原文）：内心戏括号 TTS 表达不了 → 文字；数字/链接语音没法回看 → 文字
     if any(p in reply for p in _INNER_VOICE_PARENS):
         return False
     if re.search(r"\d{2,}|http|https|网址|邮箱", reply):
         return False
-    return True
+    # 长度看实际朗读文本：剥掉（笑）转换、其余括号剥除、去空白
+    spoken = _tts_text(reply)
+    if not spoken:
+        return False
+    n = len(spoken)
+    in_range = min_len <= n <= max_len
+    # 短寒暄命中 → 突破长度下限（≤min_len 的也语音）；超长仍走文字分段
+    greeting_ok = (not in_range) and n < min_len and _is_greeting(spoken)
+    return in_range or greeting_ok
 
 
 def _tts_text(reply: str) -> str:
@@ -176,7 +180,7 @@ async def send_voice(bot, target_id: str, is_private: bool, reply_text: str) -> 
         else:
             await bot.send_group_msg(group_id=target_id,
                                      message=MessageSegment.record(file=voice_file))
-        print(f"[语音] 已发送语音 {len(reply_text)}字: {reply_text[:20]}")
+        print(f"[语音] 已发送语音 {len(_tts_text(reply_text))}字: {reply_text}")
         return True
     except Exception as e:
         print(f"⚠️ 语音发送失败（忽略，文字已回）: {e}")
