@@ -10,7 +10,7 @@ REM ① QQ 客户端（NapCat，机器人本体登录 QQ 的地方）。
 REM    NapCatQQ-Desktop 若没记住登录，会弹窗让你扫码/选号，手动登录一次即可。
 start "NapCatQQ" "D:\NapCatQQ\NapCatQQ-Desktop.exe"
 
-echo [2/3] 启动 GPT-SoVITS 语音服务（端口 9880，模型 Hzm e5+e15）...
+echo [2/3] 启动 GPT-SoVITS 语音服务（端口 9880，模型 HZM-SPEAK e5+e15）...
 REM ② GPT-SoVITS 合成服务。看到 "Uvicorn running on http://127.0.0.1:9880" 才算就绪。
 start "GPT-SoVITS api" cmd /k "cd /d D:\Huizeman-AI-Voice-Cloning\GPT-SoVITS_V4\GPT-SoVITS_V4_250424 && env\python.exe api_v2.py"
 
