@@ -174,6 +174,31 @@ def _trim_silence(wav_path: Path) -> None:
         pass  # 裁不掉就发原件，别把语音裁没了
 
 
+# 中文语速约 4~5 字/秒（估期望时长）；有效语音 ≥ 期望的 60% 才算"读完整"。
+_CHARS_PER_SEC = 4.2
+_MIN_SPEECH_RATIO = 0.6
+
+
+def _speech_seconds(wav_path: Path) -> float:
+    """统计 wav 里有效语音(能量超阈值)的秒数。坏合成常是"说了半句+大量空"，这里量的是真的说了多久。"""
+    try:
+        with wave.open(str(wav_path), "rb") as w:
+            if w.getsampwidth() != 2 or w.getnchannels() != 1:
+                return 0.0
+            rate = w.getframerate()
+            a = array.array("h")
+            a.frombytes(w.readframes(w.getnframes()))
+        hop = max(1, int(rate * _SILENCE_WIN_SEC))
+        loud = 0
+        for start in range(0, len(a), hop):
+            seg = a[start:start + hop]
+            if seg and math.sqrt(sum(x * x for x in seg) / len(seg)) > _SILENCE_RMS:
+                loud += 1
+        return loud * _SILENCE_WIN_SEC
+    except Exception:
+        return 0.0
+
+
 async def _synthesize(reply_text: str) -> str | None:
     """GPT-SoVITS 合成 → wav 路径（带缓存）。未启用/失败返回 None。"""
     if not get_voice_enabled():
@@ -190,26 +215,45 @@ async def _synthesize(reply_text: str) -> str | None:
         print(f"⚠️ 参考音频缺失: {SOVITS_REF_DIR} 下没有 .wav（放 ref_voice.wav 即可起步）")
         return None
     prompt_text = _read_prompt_text(ref_path)
-    try:
-        async with httpx.AsyncClient(timeout=120) as client:
-            resp = await client.post(SOVITS_URL, json={
-                "text": text, "text_lang": "zh",
-                "ref_audio_path": str(ref_path),
-                "prompt_text": prompt_text, "prompt_lang": "zh",
-                "top_k": 5, "top_p": 0.85, "temperature": 0.8,
-                "speed_factor": 1.0, "media_type": "wav",
-                # 整句合成不分段：api 默认 cut5 分段会吞句子（复现：28字句丢"就放纵了一下"）
-                "text_split_method": "cut0",
-            })
-        if resp.status_code == 200 and resp.content:
-            VOICE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-            cached.write_bytes(resp.content)
-            _trim_silence(cached)   # 裁掉首尾静音（防"几个字+长空尾"的坏合成）
-            return str(cached)
-        print(f"⚠️ TTS 合成非200: {resp.status_code}")
-    except Exception as e:
-        print(f"⚠️ TTS 合成失败: {e}")
-    return None
+    # 偶发截断兜底：GPT e5 有时在句读处提前收尾（"灰泽满懂的。"后面就不读了）。
+    # 按字数估期望时长，合成后量"有效语音"，明显不够就换温度重试，保留最长一次。
+    expect = len(text) / _CHARS_PER_SEC
+    need = expect * _MIN_SPEECH_RATIO if len(text) >= 8 else 0.0   # 短句(晚安)不校验
+    best_bytes, best_sec = None, -1.0
+    for attempt, temperature in enumerate((0.8, 0.95, 0.85)):
+        if attempt and best_sec >= need:
+            break
+        try:
+            async with httpx.AsyncClient(timeout=120) as client:
+                resp = await client.post(SOVITS_URL, json={
+                    "text": text, "text_lang": "zh",
+                    "ref_audio_path": str(ref_path),
+                    "prompt_text": prompt_text, "prompt_lang": "zh",
+                    "top_k": 5, "top_p": 0.85, "temperature": temperature,
+                    "speed_factor": 1.0, "media_type": "wav",
+                    # 整句合成不分段：api 默认 cut5 分段会吞句子（复现：28字句丢"就放纵了一下"）
+                    "text_split_method": "cut0",
+                })
+            if resp.status_code == 200 and resp.content:
+                VOICE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+                cached.write_bytes(resp.content)
+                _trim_silence(cached)   # 裁首尾静音
+                sec = _speech_seconds(cached)
+                if sec >= best_sec:
+                    best_sec, best_bytes = sec, cached.read_bytes()
+                if need and sec < need:
+                    print(f"[语音] 第{attempt+1}次有效{sec:.1f}s < 期望{expect:.1f}s，疑似截断，重试")
+                else:
+                    break
+            else:
+                print(f"⚠️ TTS 合成非200: {resp.status_code}")
+        except Exception as e:
+            print(f"⚠️ TTS 合成失败(第{attempt+1}次): {e}")
+    if best_bytes is None:
+        return None
+    cached.write_bytes(best_bytes)
+    _trim_silence(cached)
+    return str(cached)
 
 
 def _to_qq_voice(wav_path: str) -> str | None:

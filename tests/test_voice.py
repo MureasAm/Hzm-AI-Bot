@@ -182,3 +182,30 @@ class TestTrimSilence:
         v._trim_silence(p)  # 不应抛异常
         with wave.open(str(p)) as w:
             assert w.getnframes() > 0
+
+
+class TestSpeechSeconds:
+    """_speech_seconds：量有效语音时长（校验截断用）。"""
+
+    def _mk(self, path, rate=16000, tone_s=0.5):
+        n = int(rate * tone_s)
+        a = array.array("h", [0]) * n
+        for i in range(n):
+            a[i] = 8000 if (i // 20) % 2 else -8000
+        with wave.open(str(path), "wb") as w:
+            w.setnchannels(1); w.setsampwidth(2); w.setframerate(rate)
+            w.writeframes(a.tobytes())
+
+    def test_measures_tone_length(self, tmp_path):
+        p = tmp_path / "t.wav"
+        self._mk(p, tone_s=0.5)
+        sec = v._speech_seconds(p)
+        assert 0.4 <= sec <= 0.7   # ~0.5s 的纯音
+
+    def test_silence_counts_zero(self, tmp_path):
+        p = tmp_path / "s.wav"
+        a = array.array("h", [0]) * (16000)   # 1s 纯静音
+        with wave.open(str(p), "wb") as w:
+            w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
+            w.writeframes(a.tobytes())
+        assert v._speech_seconds(p) == 0.0
