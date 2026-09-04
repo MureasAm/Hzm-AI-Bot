@@ -672,19 +672,23 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     # --- 🤖 调用大模型 ---
     reply = await generate_reply(messages)
 
-    # --- 🔁 复读机防护（确定性，治本）---
-    # 模型会对情境相关句执着复读（自己说过的话进短期记忆后再被引用），提示词拦不住。
-    # 检测到与最近自己说过的话重复，就加"别复读"提示强制重新生成（最多 2 次）。
+    # --- 🔁 复读机防护 ---
+    # 模型会对情境相关句执着复读：自己上轮的话进短期记忆后，用户把同一抱怨又说一遍时，
+    # 它会整段照搬上上轮的解释（隔几句也一样，故窗口放宽到 8，不只最近 3）。
+    # 检测到就强制"换动作"重生成：光"换个说法"不够，得 pivot——
+    # 对方大概率在重复同一句/同一情绪，应认怂答应去做/自嘲/点破，而不是把解释再说一遍。
     recent_bot = [ln[4:] for ln in get_user_history(user_id) if ln.startswith("灰泽满：")]
-    if is_echo_reply(reply, recent_bot):
-        print(f"[防复读] 检测到复读『{reply[:20]}』，强制重新生成")
+    if is_echo_reply(reply, recent_bot, window=8):
+        print(f"[防复读] 与最近自己说过的话重复『{reply[:20]}』，强制换说法")
         nudge = {
             "role": "system",
-            "content": f"警告：你刚说过『{reply}』，几乎原样复读会让人反感。用完全不同的说法重新回复这条消息，别重复这句话。",
+            "content": f"警告：你刚说过『{reply}』，几乎原样复读会很生硬。"
+                       f"对方很可能在重复同一句/同一情绪。别再复读上轮的解释，换一个动作："
+                       f"认怂答应去做、自嘲一句、或直接点破'你是不是在闹我'。重新回复这条消息。",
         }
-        for _ in range(2):
+        for _ in range(3):
             reply = await generate_reply(list(messages) + [nudge])
-            if not is_echo_reply(reply, recent_bot):
+            if not is_echo_reply(reply, recent_bot, window=8):
                 break
 
     # --- 💾 更新短期记忆（带锁）：图片消息把视觉描述记进去，后续才记得聊过什么图 ---

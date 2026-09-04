@@ -81,6 +81,14 @@ class TestEchoReply:
     def test_empty_not_flagged(self):
         assert reply_style.is_echo_reply("", ["灰泽满刚醒"]) is False
 
+    def test_window_beyond_default_caught(self):
+        # 隔几句前说过的话被重复：默认只看最近 3 条会漏，放宽 window 才拦（回归：隔句复读）
+        old = "灰泽满刚醒，你倒是精神好"
+        reply = "你这话说的……灰泽满刚醒，你倒是精神好"
+        recent = [f"旧话{i}" for i in range(4)] + [old] + [f"后话{i}" for i in range(3)]
+        assert reply_style.is_echo_reply(reply, recent) is False            # 默认(3)漏网
+        assert reply_style.is_echo_reply(reply, recent, window=8) is True   # 放宽拦住
+
 
 class TestSummarizeBatch:
     async def test_single_message_skips(self, monkeypatch):

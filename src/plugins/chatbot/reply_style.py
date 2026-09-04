@@ -69,17 +69,20 @@ def _lcs_len(a: str, b: str) -> int:
     return best
 
 
-def is_echo_reply(reply: str, recent_bot_replies: list, min_ratio: float = 0.6) -> bool:
+def is_echo_reply(reply: str, recent_bot_replies: list, min_ratio: float = 0.6,
+                  window: int = 3) -> bool:
     """判断新回复是否复读了最近自己说过的话（复读机防护）。
 
     复读是模型对情境相关句的执着（会在短期记忆里看到自己的原话再引用），
     提示词的【防复读】拦不住，只能确定性检测：与最近回复完全一致，
-    或最长公共子串覆盖较短者的 60% 以上。太短的句子（<8字）不判，避免误伤"晚安"类。
+    或最长公共子串覆盖较短者的 min_ratio 以上。太短的句子（<8字）不判，避免误伤"晚安"类。
+    window：回看最近几条 bot 消息。隔几句后才重复（用户重复同一抱怨 → 上上轮的解释被翻出来）
+    是常见漏网，core 调用时把窗口放宽到 8。
     """
     reply = (reply or "").strip()
     if not reply:
         return False
-    for old in (recent_bot_replies or [])[-3:]:
+    for old in (recent_bot_replies or [])[-window:]:
         old = (old or "").strip()
         if not old:
             continue
