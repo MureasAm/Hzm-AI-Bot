@@ -39,6 +39,10 @@ _GREETING_PHRASES = (
     "好想你", "想你啦", "记得想我", "想我了吗", "我也想你",
 )
 
+# 寒暄放宽只救"真·短应酬句"（≤12字）。别让 13~29 字的普通长句因为顺带提到
+# "还没睡/你好/想你"这类词就突破下限被语音（那句就不是寒暄，是陈述）。
+_GREETING_MAX_LEN = 12
+
 _tts_lock = asyncio.Lock()   # 同时只合成一条（TTS 占 GPU，并发互相拖慢）
 
 
@@ -69,8 +73,9 @@ def should_voice(reply: str, min_len: int = VOICE_MIN_LEN,
         return False
     n = len(spoken)
     in_range = min_len <= n <= max_len
-    # 短寒暄命中 → 突破长度下限（≤min_len 的也语音）；超长仍走文字分段
-    greeting_ok = (not in_range) and n < min_len and _is_greeting(spoken)
+    # 短寒暄命中 → 突破长度下限。只救"真·短应酬句"(≤_GREETING_MAX_LEN)，
+    # 长句顺带提到词表词不算寒暄 → 按长度规则走文字。超长仍走文字分段
+    greeting_ok = (not in_range) and n <= _GREETING_MAX_LEN and _is_greeting(spoken)
     return in_range or greeting_ok
 
 
@@ -193,6 +198,8 @@ async def _synthesize(reply_text: str) -> str | None:
                 "prompt_text": prompt_text, "prompt_lang": "zh",
                 "top_k": 5, "top_p": 0.85, "temperature": 0.8,
                 "speed_factor": 1.0, "media_type": "wav",
+                # 整句合成不分段：api 默认 cut5 分段会吞句子（复现：28字句丢"就放纵了一下"）
+                "text_split_method": "cut0",
             })
         if resp.status_code == 200 and resp.content:
             VOICE_CACHE_DIR.mkdir(parents=True, exist_ok=True)

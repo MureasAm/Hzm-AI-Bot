@@ -51,6 +51,16 @@ class TestShouldVoice:
         assert v.should_voice("好哒") is False
         assert v.should_voice("哈哈哈") is False
 
+    def test_greeting_word_in_long_sentence_not_voice(self):
+        # 28 字陈述句顺带提到"还没睡"，不是寒暄 → 不突破下限(回归: 曾误语音)
+        s = "灰泽满确实还没睡……明天没课，就放纵了一下。你咋也没睡？"
+        assert v.should_voice(s) is False
+        assert v.should_voice("还没睡呀") is True    # 真·短应酬仍语音
+
+    def test_greeting_cap_keeps_short_greetings(self):
+        assert v.should_voice("晚安") is True
+        assert v.should_voice("太晚了先睡吧 晚安") is True   # 9字仍算寒暄
+
     def test_greeting_inner_paren_still_text(self):
         assert v.should_voice("晚安（心虚）") is False   # 寒暄也打不过内心戏括号铁则
 
