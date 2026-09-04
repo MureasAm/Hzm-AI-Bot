@@ -1,4 +1,8 @@
-"""语音模块单元测试：should_voice 触发规则 / 文本清洗 / 情绪选参考 / 开关解析。"""
+"""语音模块单元测试：should_voice 触发规则 / 文本清洗 / 情绪选参考 / 开关解析 / 静音裁剪。"""
+import array
+import math
+import wave
+
 from src.plugins.chatbot import config as cfg
 from src.plugins.chatbot import voice as v
 
@@ -121,3 +125,50 @@ class TestGetVoiceEnabled:
     def test_true_on(self, monkeypatch):
         monkeypatch.setattr(cfg, "get_config", lambda *a, **k: "true")
         assert cfg.get_voice_enabled() is True
+
+
+class TestTrimSilence:
+    """_trim_silence：裁掉 wav 首尾静音（防"几个字+长空尾"的坏合成）。"""
+
+    def _make_wav(self, path, rate=16000, lead_s=0.3, tone_s=0.5, tail_s=0.4):
+        """前 lead 静音 + 中 tone 方波(8000) + 后 tail 静音 的单声道 16bit wav。"""
+        n = int(rate * (lead_s + tone_s + tail_s))
+        a = array.array("h", [0]) * n
+        for i in range(int(rate * lead_s), int(rate * (lead_s + tone_s))):
+            a[i] = 8000 if (i // 20) % 2 else -8000
+        with wave.open(str(path), "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(rate)
+            w.writeframes(a.tobytes())
+        return n / rate
+
+    def test_trims_leading_and_trailing_silence(self, tmp_path):
+        p = tmp_path / "x.wav"
+        orig = self._make_wav(p)
+        v._trim_silence(p)
+        with wave.open(str(p)) as w:
+            dur = w.getnframes() / w.getframerate()
+        # 原 1.2s → 裁后只剩 音段(0.5s) + 两侧边距(~0.1s)，远小于原长、也大于纯音段
+        assert dur < orig - 0.5
+        assert dur >= 0.5
+
+    def test_all_silence_untouched(self, tmp_path):
+        p = tmp_path / "x.wav"
+        rate, dur = 16000, 1.0
+        a = array.array("h", [0]) * int(rate * dur)
+        with wave.open(str(p), "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(rate)
+            w.writeframes(a.tobytes())
+        v._trim_silence(p)  # 全静音：不裁，防裁空
+        with wave.open(str(p)) as w:
+            assert w.getnframes() / w.getframerate() == dur
+
+    def test_short_wav_ok(self, tmp_path):
+        p = tmp_path / "short.wav"
+        self._make_wav(p, tone_s=0.08, lead_s=0.0, tail_s=0.0)  # 全语音、几乎无空白
+        v._trim_silence(p)  # 不应抛异常
+        with wave.open(str(p)) as w:
+            assert w.getnframes() > 0

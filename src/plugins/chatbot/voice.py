@@ -4,9 +4,12 @@
 灰泽满实际回复多为 15~45 字一句（样本最长 60），语音覆盖"完整成句"档，朗读模型擅成句。
 语音在回复路径里优先尝试，失败自动回退文字分段——绝不影响收到回复。
 """
+import array
 import asyncio
 import hashlib
+import math
 import re
+import wave
 from pathlib import Path
 
 import httpx
@@ -117,6 +120,55 @@ def _read_prompt_text(ref_path: Path) -> str:
     return ""
 
 
+# 判定静音的能量下限：语音窗远高于此（实测语音≈数千，GPT-SoVITS 静音尾≈150）
+_SILENCE_RMS = 300
+_SILENCE_WIN_SEC = 0.05     # 能量统计窗秒数
+_SILENCE_MARGIN_SEC = 0.05  # 裁完留的边距，防咬掉字头字尾
+
+
+def _trim_silence(wav_path: Path) -> None:
+    """裁掉 wav 首尾的静音段。防御：个别坏合成（尤其参考音频带尾静音时）会输出
+    一段"就几个字 + 十几秒空尾"，发到 QQ 很难受。仅处理 16-bit PCM 单声道，
+    其他格式或解析失败就原样跳过，绝不影响发送。
+    """
+    try:
+        with wave.open(str(wav_path), "rb") as w:
+            if w.getsampwidth() != 2 or w.getnchannels() != 1:
+                return
+            rate = w.getframerate()
+            data = w.readframes(w.getnframes())
+        a = array.array("h")
+        a.frombytes(data)
+        if not len(a):
+            return
+        hop = max(1, int(rate * _SILENCE_WIN_SEC))
+
+        def _loud(lo: int, hi: int) -> bool:
+            seg = a[lo:hi]
+            if not seg:
+                return False
+            return math.sqrt(sum(x * x for x in seg) / len(seg)) > _SILENCE_RMS
+
+        first = last = None
+        for start in range(0, len(a), hop):
+            if _loud(start, min(start + hop, len(a))):
+                if first is None:
+                    first = start
+                last = start
+        if first is None or last is None:
+            return  # 整段无声，别乱裁
+        margin = int(rate * _SILENCE_MARGIN_SEC)
+        lo = max(0, first - margin)
+        hi = min(len(a), last + hop + margin)
+        with wave.open(str(wav_path), "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(rate)
+            w.writeframes(a[lo:hi].tobytes())
+    except Exception:
+        pass  # 裁不掉就发原件，别把语音裁没了
+
+
 async def _synthesize(reply_text: str) -> str | None:
     """GPT-SoVITS 合成 → wav 路径（带缓存）。未启用/失败返回 None。"""
     if not get_voice_enabled():
@@ -145,6 +197,7 @@ async def _synthesize(reply_text: str) -> str | None:
         if resp.status_code == 200 and resp.content:
             VOICE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
             cached.write_bytes(resp.content)
+            _trim_silence(cached)   # 裁掉首尾静音（防"几个字+长空尾"的坏合成）
             return str(cached)
         print(f"⚠️ TTS 合成非200: {resp.status_code}")
     except Exception as e:
