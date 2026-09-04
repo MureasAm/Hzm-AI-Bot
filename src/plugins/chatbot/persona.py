@@ -6,11 +6,12 @@ import json
 
 from .constants import (
     TRAITS_FILE, STYLES_FILE, BEHAVIORS_FILE,
-    TRIGGER_VECTOR_FILE, TERMS_FILE,
+    TRIGGER_VECTOR_FILE, TERMS_FILE, SCHEDULE_FILE,
 )
 
 
 _terms_cache = None
+_schedule_cache = None
 
 
 def load_terms() -> list:
@@ -27,6 +28,25 @@ def load_terms() -> list:
     except (json.JSONDecodeError, OSError):
         _terms_cache = []
     return _terms_cache
+
+
+def load_schedule():
+    """加载 persona/world/schedule.json（周表+近况，手动维护）。
+
+    周表是回答"明天/这周/几点播"类问题的**地面真值**——记忆里带"明天/下周"的话
+    是过去某场直播当时的说法，可能早已过期，不能当现在的安排答。
+    """
+    global _schedule_cache
+    if _schedule_cache is not None:
+        return _schedule_cache
+    _schedule_cache = {}
+    if SCHEDULE_FILE.exists():
+        try:
+            data = json.loads(SCHEDULE_FILE.read_text(encoding="utf-8"))
+            _schedule_cache = data if isinstance(data, dict) else {}
+        except (json.JSONDecodeError, OSError):
+            _schedule_cache = {}
+    return _schedule_cache
 
 
 def load_persona_rules():

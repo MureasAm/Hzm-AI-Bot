@@ -16,6 +16,7 @@ VOICE_SAMPLES_FILE = PROJECT_ROOT / "persona" / "speech" / "voice_samples.json" 
 TERMS_FILE = PROJECT_ROOT / "persona" / "world" / "terms.json"                 # 灰泽满名词库(lorebook)：核心词always注入+命中注入
 
 MEMORY_FILE = PROJECT_ROOT / "user_memory" / "short_term.json"                 # 用户短期记忆
+SCHEDULE_FILE = PROJECT_ROOT / "persona" / "world" / "schedule.json"          # 她的周表+近况(手动维护,注入地面真值)
 VECTOR_FILE = PROJECT_ROOT / "persona" / "world" / "corpus_vectors.json"         # 直播记忆向量库（灰泽满的人物记忆，归 world/）
 TRIGGER_VECTOR_FILE = PROJECT_ROOT / "persona" / "behavior" / "trigger_vectors.json"  # trigger 向量缓存（跟 behaviors.json）
 VOICE_SAMPLE_VECTOR_FILE = PROJECT_ROOT / "persona" / "speech" / "voice_sample_vectors.json"  # 声音样本向量缓存（跟 voice_samples.json）

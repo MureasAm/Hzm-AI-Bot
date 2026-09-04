@@ -18,7 +18,7 @@ from .constants import (
     MEMORY_EXTRACT_TEMPERATURE, MEMORY_EXTRACT_MAX_TOKENS,
     VOICE_SAMPLE_REPLY_TRIM_CHARS,
 )
-from .persona import load_persona_rules, build_global_persona_context
+from .persona import load_persona_rules, build_global_persona_context, load_schedule
 from .memory import (
     get_user_history, append_user_history,
     get_user_memory, update_user_memory, build_memory_context,
@@ -271,6 +271,23 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
     if global_persona:
         base_system += "\n\n" + global_persona
     messages.append({"role": "system", "content": base_system})
+
+    # 周表 + 近况（地面真值）：被问"明天来吗/这周/几点播"以它为准。
+    # 记忆里带"明天/下周"的话是过去某场直播当时的说法，可能早过期，不能当现在的安排。
+    sched = load_schedule()
+    weekly = sched.get("weekly") if sched else None
+    if weekly:
+        lines = "、".join(f"{x.get('day')} {x.get('time')}" for x in weekly if x.get('day'))
+        note = (sched.get("近况") or "").strip()
+        note_txt = ""
+        if note:
+            note_txt = f"。近况：{note}（近况更新于 {sched.get('近况_updated', '?')}，过期就忽略）"
+        messages.append({
+            "role": "system",
+            "content": f"【灰泽满的周表】她的固定直播安排：{lines}{note_txt}。"
+                       f"被问'明天/这周/几点播/来不来直播'时，以这个周表为准回答（带她的嘴硬风格），"
+                       f"不要拿直播记忆里过去某场的旧安排当现在的计划。",
+        })
 
     # 偏好档案（第 5 路语义检索）：聊到相关话题才注入；与语料/记忆冲突时以偏好为准
     if preference_items:
