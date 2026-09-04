@@ -188,7 +188,7 @@ outputs/                     # 分析产物（按阶段分文件夹，gitignore�
 assets/                      # 原始素材（音频）+ 展示图（img/）
 data/                        # 运行时状态：bili_state.json（B站联动）
 scripts/                     # 离线工具箱 + 评测（run_tool.py 统一入口）
-tests/                       # 194 个单元测试
+tests/                       # 229 个单元测试
 ```
 
 ## 结语
