@@ -115,7 +115,7 @@ class TestFlush:
 class TestVoiceFlush:
     """_flush 语音优先：成句回复朗读语音、成功即不发文字；短敷衍/含内心戏括号只走文字。"""
 
-    SENTENCE = "今天直播聊得特别开心，下次有空我们再一起好好玩呀"  # 24 字成句
+    SENTENCE = "灰泽满今天直播聊得特别开心，下次有空我们再一起好好玩呀，明天也要来哦"  # 34 字成句
 
     async def _run_flush(self, monkeypatch, reply_text, voice_ok=True):
         win = cw._UserWindow("u4")

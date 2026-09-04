@@ -14,12 +14,12 @@ class TestShouldVoice:
         assert v.should_voice("今天好开心呀") is False     # 7 字短句 < 20 → 打字
 
     def test_min_boundary(self):
-        assert v.should_voice("今" * 19) is False              # 19 字 < 20
-        assert v.should_voice("今" * 19, min_len=15) is True    # 若下调到 15 档则会语音
-        assert v.should_voice("今" * 20) is True               # 正好 20 字成句 → 语音
+        assert v.should_voice("今" * 29) is False              # 29 字 < 30
+        assert v.should_voice("今" * 29, min_len=15) is True    # 若下调到 15 档则会语音
+        assert v.should_voice("今" * 30) is True               # 正好 30 字成句 → 语音
 
     def test_in_range_sentence_yes(self):
-        assert v.should_voice("今天直播聊得特别开心，下次有空我们再一起好好玩呀") is True
+        assert v.should_voice("灰泽满今天直播聊得特别开心，下次有空我们再一起好好玩呀，明天也要来哦") is True
 
     def test_inner_voice_paren_no(self):
         assert v.should_voice("今天直播聊得特别开心（小声）下次有空再一起玩") is False

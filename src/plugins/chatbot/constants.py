@@ -114,9 +114,10 @@ WEIBO_STATE_FILE = PROJECT_ROOT / "data" / "weibo_state.json" # 微博去重状�
 SOVITS_URL = "http://127.0.0.1:9880/tts"         # GPT-SoVITS api_v2.py 起的服务
 SOVITS_REF_DIR = PROJECT_ROOT / "assets" / "voice_refs"  # 参考音频（ref_voice.wav+同名.txt 即可起步；ref_happy/lazy/serious 情绪档可选）
 VOICE_CACHE_DIR = PROJECT_ROOT / "data" / "voice_cache"   # TTS 合成缓存（text_hash→wav）
-# 语音触发下限：成句(≥20字)才朗读成语音条，短敷衍词(<20字)打字——朗读模型擅成句，
-# 一两字的"在呢/好呀"读出来很怪。样本库实测她回复中位 22 字、最长 60，故语音覆盖"完整句"。
-VOICE_MIN_LEN = 20
+# 语音触发下限：成句(≥30字)才朗读成语音条，更短的话打字——语音要像"话多一点才录给你听"，
+# 不是成句就出声。实测她回复常 20+ 字，下限 20 时语音过密，提到 30 更克制。
+# 寒暄词(晚安/辛苦啦…)可突破下限，见 voice.py _GREETING_PHRASES。
+VOICE_MIN_LEN = 30
 VOICE_MAX_LEN = 120   # 纯保险上限（~30s 音频，仍在 QQ 语音 ~60s 内），几乎不会触发
 
 # 好友申请自动通过（否则新加的绿冻是单向好友，推送发不到，见 NapCat issue #72）
