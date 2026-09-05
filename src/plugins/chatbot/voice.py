@@ -199,6 +199,15 @@ def _speech_seconds(wav_path: Path) -> float:
         return 0.0
 
 
+def _wav_duration(wav_path: Path) -> float:
+    """wav 总时长（秒）。"""
+    try:
+        with wave.open(str(wav_path), "rb") as w:
+            return w.getnframes() / w.getframerate()
+    except Exception:
+        return 0.0
+
+
 async def _synthesize(reply_text: str) -> str | None:
     """GPT-SoVITS 合成 → wav 路径（带缓存）。未启用/失败返回 None。"""
     if not get_voice_enabled():
@@ -239,10 +248,13 @@ async def _synthesize(reply_text: str) -> str | None:
                 cached.write_bytes(resp.content)
                 _trim_silence(cached)   # 裁首尾静音
                 sec = _speech_seconds(cached)
+                total = _wav_duration(cached)
+                # 达标 = 有效够长，且总长没有被空洞撑爆（"很长很长但只有几句"= 中段大空条）
+                good = (need == 0) or (sec >= need and total <= max(need * 4, 6.0))
                 if sec >= best_sec:
                     best_sec, best_bytes = sec, cached.read_bytes()
-                if need and sec < need:
-                    print(f"[语音] 第{attempt+1}次有效{sec:.1f}s < 期望{expect:.1f}s，疑似截断，重试")
+                if not good:
+                    print(f"[语音] 第{attempt+1}次 有效{sec:.1f}s/总{total:.1f}s vs 期望{expect:.1f}s，疑似截断或空洞，重试")
                 else:
                     break
             else:
@@ -251,6 +263,8 @@ async def _synthesize(reply_text: str) -> str | None:
             print(f"⚠️ TTS 合成失败(第{attempt+1}次): {e}")
     if best_bytes is None:
         return None
+    if need and best_sec < need:
+        print(f"⚠️ 多次合成仍不达标(有效{best_sec:.1f}s < 期望{expect:.1f}s)，发最长一次")
     cached.write_bytes(best_bytes)
     _trim_silence(cached)
     return str(cached)
