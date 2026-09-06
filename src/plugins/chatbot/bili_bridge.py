@@ -31,6 +31,10 @@ LIVE_STATUS_API = "https://api.live.bilibili.com/room/v1/Room/get_status_info_by
 _BILI_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
             "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
 
+# QQ 无法把自定义表情内联进文字，只能当独立图片发。表情图压到这么小再发，尽量接近"小表情"观感。
+_EMOJI_MAX_SIDE = 64
+
+
 async def _download_image(url: str) -> Path:
     """下载动态配图并统一转 JPEG 到临时文件，返回路径；失败抛异常由调用方兜底。"""
     data = await _read_image_bytes(url)
@@ -353,24 +357,31 @@ class BiliMonitor:
         if dyn["id"] == str(self.state.get("last_dynamic_id", "") or ""):
             return  # 已推送过
 
-        # 配图 + 表情：真配图(image_urls)优先全发，emoji(本地/远程)填空位，总量封顶防刷屏
+        # B站表情在 QQ 无法内联变小（发出去就是一张独立大图），所以取舍：
+        # 动态有真配图(照片) → 只发真配图(大)，跳过 emoji 装饰图，免得挤成一排大表情；
+        # 纯 emoji 动态(无真配图) → 表情图压小(≤_EMOJI_MAX_SIDE)一起发，接近小贴纸观感。
         MAX_IMG = 8
-        image_paths = [_resize_emote_if_large(p) for p in (dyn.get("local_emotes") or [])[:MAX_IMG]]
-        quota = MAX_IMG - len(image_paths)
-        pick = []
-        if quota > 0:
-            pick = (dyn.get("image_urls") or [])[:quota]
-            quota -= len(pick)
-            if quota > 0:
-                pick += (dyn.get("emote_urls") or [])[:quota]
-        for u in pick:
-            try:
-                p = await _download_image(u)
-                image_paths.append(p)
-            except Exception as e:
-                print(f"⚠️ 图片下载失败（忽略，仍发文字）: {e}")
-        if image_paths:
-            print(f"[B站] 图片已附 {len(image_paths)} 张")
+        photos = (dyn.get("image_urls") or [])[:MAX_IMG]
+        image_paths = []
+        if photos:
+            for u in photos:
+                try:
+                    image_paths.append(await _download_image(u))
+                except Exception as e:
+                    print(f"⚠️ 配图下载失败（忽略，仍发文字）: {e}")
+            if image_paths:
+                print(f"[B站] 图文动态：配图 {len(image_paths)} 张（emoji 表情跳过——QQ 无法内联小图）")
+        else:
+            for p in (dyn.get("local_emotes") or [])[:MAX_IMG]:
+                image_paths.append(_resize_emote_if_large(p, _EMOJI_MAX_SIDE))
+            for u in (dyn.get("emote_urls") or [])[:MAX_IMG - len(image_paths)]:
+                try:
+                    p = await _download_image(u)
+                    image_paths.append(_resize_emote_if_large(p, _EMOJI_MAX_SIDE))
+                except Exception as e:
+                    print(f"⚠️ 表情图下载失败（忽略，仍发文字）: {e}")
+            if image_paths:
+                print(f"[B站] 纯表情动态：表情 {len(image_paths)} 张（已压到 ≤{_EMOJI_MAX_SIDE}px）")
 
         content = self._format_dynamic_push(dyn["text"])
         print(f"[B站] 检测到新动态 -> {content}")
