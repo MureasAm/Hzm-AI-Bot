@@ -353,9 +353,17 @@ class BiliMonitor:
         if dyn["id"] == str(self.state.get("last_dynamic_id", "") or ""):
             return  # 已推送过
 
-        # 配图 + 表情图：本地表情直接发文件（过大自动缩小），URL 表情下载；限 4 张防刷屏
-        image_paths = [_resize_emote_if_large(p) for p in (dyn.get("local_emotes") or [])]
-        for u in (dyn.get("image_urls") or [])[:1] + (dyn.get("emote_urls") or [])[:4]:
+        # 配图 + 表情：真配图(image_urls)优先全发，emoji(本地/远程)填空位，总量封顶防刷屏
+        MAX_IMG = 8
+        image_paths = [_resize_emote_if_large(p) for p in (dyn.get("local_emotes") or [])[:MAX_IMG]]
+        quota = MAX_IMG - len(image_paths)
+        pick = []
+        if quota > 0:
+            pick = (dyn.get("image_urls") or [])[:quota]
+            quota -= len(pick)
+            if quota > 0:
+                pick += (dyn.get("emote_urls") or [])[:quota]
+        for u in pick:
             try:
                 p = await _download_image(u)
                 image_paths.append(p)

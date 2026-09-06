@@ -69,12 +69,23 @@ def _extract_post_text(item: dict) -> str:
 
 
 def _extract_post_images(item: dict) -> list:
-    """从微博 item 提取配图 URL（优先大图），无图返回空列表。"""
+    """从微博 item 提取配图 URL（优先高清大图），无图返回空列表。
+
+    新版接口给 pic_ids + pic_infos（旧版是 pics 数组）——之前读 pics 配图全空。
+    多图按序返回，调用方决定发几张。
+    """
     urls = []
-    for pic in (item.get("pics") or []):
-        u = (pic.get("large") or {}).get("url") or pic.get("url") or ""
+    infos = item.get("pic_infos") or {}
+    for pid in (item.get("pic_ids") or []):
+        info = infos.get(pid) or {}
+        u = (info.get("original") or {}).get("url") or (info.get("large") or {}).get("url") or ""
         if u:
             urls.append(u)
+    if not urls:  # 兼容旧版 pics 结构
+        for pic in (item.get("pics") or []):
+            u = (pic.get("large") or {}).get("url") or pic.get("url") or ""
+            if u:
+                urls.append(u)
     return urls
 
 
@@ -192,18 +203,19 @@ class WeiboMonitor:
         if post["id"] == str(self.state.get("last_post_id", "") or ""):
             return  # 已推送过
 
-        # 含图时下载配图一起发（失败不阻塞，仍发文字）
-        image_path = None
-        if post.get("image_urls"):
+        # 含图时下载配图一起发（多图全发、上限 6 张；失败不阻塞，仍发文字）
+        image_paths = []
+        for u in (post.get("image_urls") or [])[:6]:
             try:
-                image_path = await _download_image(post["image_urls"][0])
-                print(f"[微博] 配图已下载: {image_path.name}")
+                image_paths.append(await _download_image(u))
             except Exception as e:
                 print(f"⚠️ 微博配图下载失败（忽略，仍发文字）: {e}")
+        if image_paths:
+            print(f"[微博] 配图已下载 {len(image_paths)} 张")
 
         content = self._format_post_push(post["text"], post["url"])
         print(f"[微博] 检测到新微博 -> {content}")
-        await self._push(bot, content, image_path=image_path)
+        await self._push(bot, content, image_paths=image_paths)
         self.state["last_post_id"] = post["id"]
         _save_state(self.state)
 
@@ -225,7 +237,7 @@ class WeiboMonitor:
         _save_state(self.state)
         return friends
 
-    async def _push(self, bot, content: str, image_path: Path | None = None) -> None:
+    async def _push(self, bot, content: str, image_paths: list | None = None) -> None:
         """私聊广播给全部好友（白名单非空则只发白名单）。单好友失败不中断。"""
         friends = await self._get_friends(bot)
         whitelist = get_notify_whitelist()
@@ -238,8 +250,8 @@ class WeiboMonitor:
         for t in targets:
             try:
                 msg = Message(content)
-                if image_path:
-                    msg += MessageSegment.image(file=str(image_path))
+                for p in (image_paths or []):
+                    msg += MessageSegment.image(file=str(p))
                 await bot.send_private_msg(user_id=t["user_id"], message=msg)
                 ok += 1
             except Exception as e:
