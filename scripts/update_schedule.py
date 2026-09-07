@@ -65,25 +65,40 @@ def ocr(image: Path):
 
 
 def main():
-    if len(sys.argv) < 2:
-        raise SystemExit(__doc__)
-    img = Path(sys.argv[1])
     preview = "--preview" in sys.argv
-    if not img.exists():
-        raise SystemExit(f"❌ 图片不存在: {img}")
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    if args:
+        img = Path(args[0])
+        if not img.exists():
+            raise SystemExit(f"❌ 图片不存在: {img}")
+    else:
+        # 收图夹模式：把周表图丢进 data/schedule_inbox/，不带参数跑即处理最新一张
+        inbox = ROOT / "data" / "schedule_inbox"
+        inbox.mkdir(parents=True, exist_ok=True)
+        cands = [p for p in inbox.iterdir() if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp", ".bmp")]
+        if not cands:
+            raise SystemExit(f"收图夹里没有图片。请把周表图丢进: {inbox}\n然后运行:\n  python scripts/update_schedule.py")
+        img = max(cands, key=lambda p: p.stat().st_mtime)
     weekly = ocr(img)
     # 按周一~周日排好序
     weekly.sort(key=lambda x: _DAY_ORDER.index(x.get("day")) if x.get("day") in _DAY_ORDER else 99)
 
     cur = json.loads(SCHEDULE.read_text(encoding="utf-8"))
     cur["weekly"] = weekly
-    print("识图结果（weekly）:")
+    print(f"识图: {img.name}\nweekly:")
     for x in weekly:
         print(f"  {x['day']}  {x['time']}")
-    print(f"\n原近况仍保留: {cur.get('近况','')!r}（如需改临时安排/请假，直接编辑 {SCHEDULE} 那行）")
+    print(f"\n原近况仍保留: {cur.get('近况','')!r}（如需改临时安排/请假，编辑 {SCHEDULE} 那行）")
     if not preview:
         SCHEDULE.write_text(json.dumps(cur, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        print(f"\n✅ 已写入 {SCHEDULE} —— 记得【重启 bot】生效（周表有缓存）。")
+        print(f"✅ 已写入 {SCHEDULE} —— 记得【重启 bot】生效（周表有缓存）。")
+        if args:
+            print("（传入的是文件参数，未移动原图）")
+        else:
+            done = ROOT / "data" / "schedule_inbox" / "done"
+            done.mkdir(parents=True, exist_ok=True)
+            img.rename(done / img.name)
+            print(f"✅ 已把处理完的图移进: {done}")
 
 
 if __name__ == "__main__":
