@@ -11,6 +11,7 @@ generation 计数用于区分代际：插话取消旧任务后，旧任务不会
 """
 import asyncio
 import random
+import time
 from pathlib import Path
 
 from nonebot.adapters.onebot.v11 import Message
@@ -25,7 +26,9 @@ from .voice import should_voice, send_voice
 from .vision import describe_image, describe_image_bytes, _read_image_bytes
 from .constants import (
     READ_WINDOW_MIN_SECONDS, READ_WINDOW_MAX_SECONDS, SPLIT_REPLY_ENABLED,
+    GROUP_MENTION_WORDS, GROUP_EVENT_COOLDOWN,
 )
+from . import group_memory
 
 
 class _UserWindow:
@@ -138,12 +141,20 @@ async def _describe_image_src(bot, image_url: str, image_file: str) -> str:
     return ""
 
 
+def _is_addressed(text: str) -> bool:
+    """群里这条消息是否"点名"了她（提到她的名字/爱称）。"""
+    t = (text or "").strip()
+    return any(k in t for k in GROUP_MENTION_WORDS)
+
+
 def enqueue(target_id: str, sender_id: str, text: str, image_url: str, image_file: str,
-            bot, is_private: bool) -> None:
+            bot, is_private: bool, mentioned: bool = False) -> None:
     """采集一条消息进缓冲，重置读秒窗口。
 
-    窗口按 target_id（私聊=user_id，群聊=group_id）开——群的多人发言攒同一个窗口，
-    bot 就能参与整场群聊。sender_id 记录发言者，群聊组装时带发送者标签。
+    窗口按 target_id（私聊=user_id，群聊=group_id）开——群的多人发言攒同一个窗口。
+    群聊只有"点名她"（@ / 提到她名字爱称，mentioned=True 或文本含关键词）才触发回复；
+    其余群成员闲聊只攒进 pending 当背景，不打扰（等下次被点名时一起当上下文）。
+    sender_id 记录发言者，群聊组装时带发送者标签。
     图片：url 优先（rkey 新鲜时急切缓存），file 留给 CDN 失败时读本地兜底。
     """
     if not text.strip() and not image_url and not image_file:
@@ -151,14 +162,22 @@ def enqueue(target_id: str, sender_id: str, text: str, image_url: str, image_fil
     win = _windows.setdefault(target_id, _UserWindow(target_id))
     win.generation += 1
     gen = win.generation
-    if win.task:
-        win.task.cancel()
     win.bot = bot
     win.is_private = is_private
+    # pending 只留最近 ~30 条（群很吵又不点名时，别让旧闲聊无限堆积）
     win.pending.append((sender_id, text, image_url, image_file))
+    if len(win.pending) > 30:
+        del win.pending[:len(win.pending) - 30]
     # 图片立刻缓存下载（rkey 新鲜），读秒窗口后不因过期 400
     if image_url:
         asyncio.create_task(_eager_download(image_url))
+    # 私聊必回；群聊只在"点名她"（@ / 提到名字爱称）时才回复——
+    # 闲聊只攒 pending 当背景，且不打断已在等的回复计时
+    should_reply = is_private or mentioned or _is_addressed(text)
+    if not should_reply:
+        return
+    if win.task:
+        win.task.cancel()
     win.task = asyncio.create_task(_process(win, gen))
 
 
@@ -194,6 +213,7 @@ async def _flush(win: _UserWindow) -> None:
     parsed = [(s, t, d) for (s, t, _, _), d in zip(msgs, descs)]  # (sender, text, desc)
 
     # 组装：私聊=纯文本；群聊=每条带发送者名字，bot 知道谁在说话
+    id_to_name = {}
     if win.is_private:
         combined = _combine_text([(t, d) for _, t, d in parsed])
     else:
@@ -202,12 +222,21 @@ async def _flush(win: _UserWindow) -> None:
             if t.strip():
                 name = await _get_sender_name(win.bot, win.target_id, s)
                 lines.append(f"{name}：{t.strip()}")
+                id_to_name[s] = name
         combined = "\n".join(lines).strip()
+        if id_to_name:
+            group_memory.upsert_members(win.target_id, id_to_name)
     vision_desc = "；".join(d for _, _, d in parsed if d)
     print(f"[读秒] {'群' if not win.is_private else '私聊'}={win.target_id} 攒批 {len(msgs)} 条 → 回复")
 
     # 归纳：整批（含图片描述）一起给模型做理解提示
     batch_summary = await summarize_batch([(t, d) for _, t, d in parsed])
+    # 群近况写入群记忆（有冷却，防碎碎念刷爆；只记有信息量的归纳）
+    if not win.is_private and batch_summary:
+        g = group_memory.get_group(win.target_id)
+        last_t = (g.get("events") or [{}])[0].get("t", 0.0) if g.get("events") else 0.0
+        if time.time() - last_t >= GROUP_EVENT_COOLDOWN:
+            group_memory.add_event(win.target_id, batch_summary)
     reply = await handle_chat(win.target_id, combined, vision_desc=vision_desc,
                               batch_summary=batch_summary, is_group=not win.is_private)
     reply = clean_reply(reply)  # 去括号前缀 + 整条至多 1 个括号

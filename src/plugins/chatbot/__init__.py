@@ -188,6 +188,16 @@ async def _handle_chat(bot: Bot, event: Event):
     target_id = str(user_id if is_private else getattr(event, "group_id", ""))
     print(f"[收到消息] user={user_id}, msg={user_msg[:40]!r}, img={'有' if (image_url or image_file) else '无'}")
 
+    # 群聊：是否 @ 了灰泽满本人（@ 才算点名，配合文本里的名字爱称一起决定"要不要回"）
+    is_at_me = False
+    if not is_private:
+        self_id = str(getattr(event, "self_id", "") or "")
+        for seg in msg:
+            if seg.type == "at" and str(seg.data.get("qq", "") or "") == self_id:
+                is_at_me = True
+                break
+
     # 读秒窗口（方案B）：攒批 + 静默后统一回复（含读图/归纳/分批发送）
     # target_id=会话标识（私聊=user_id，群聊=group_id），群聊按群攒批实现多人对话
-    chat_window.enqueue(target_id, user_id, user_msg, image_url, image_file, bot, is_private)
+    chat_window.enqueue(target_id, user_id, user_msg, image_url, image_file, bot, is_private,
+                        mentioned=is_at_me)

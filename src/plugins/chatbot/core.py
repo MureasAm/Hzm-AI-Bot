@@ -35,6 +35,7 @@ from .constants import (
     SPLIT_DELAY_MIN_MS, SPLIT_DELAY_MAX_MS, SPLIT_DELAY_JITTER,
 )
 from . import context_probe
+from . import group_memory
 from .routing import (
     LEGENDARY_REPLIES, LEGENDARY_CONFIRMS, legendary_confirmed, classify_behavior,
 )
@@ -254,7 +255,8 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
                        vision_desc: str = "", weather_city: str = "",
                        batch_summary: str = "", preference_items: list = None,
                        core_stories: list = None, session_context: str = "",
-                       query_hint: str = "", denied_terms: set | None = None) -> list:
+                       query_hint: str = "", denied_terms: set | None = None,
+                       group_context: str = "") -> list:
     """按优先级组装发送给模型的消息列表。
 
     fused_items 为三路融合后的 RetrievalItem 列表，按源分组注入。
@@ -310,6 +312,14 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
                 "role": "system",
                 "content": f"【她的核心记忆】{story_text}（这是她过去最深刻的经历，粉丝常拿这些开玩笑。**回应时自然带出，别整段复述**：被问你的书/事迹时，大方承认、可提议念给TA听或说个片段概括，别一口气把原文/全文念出来——除非对方明确说'念一下'）",
             })
+
+    # 群聊现场（轻量群记忆注入）：在场成员 + 群内近况。群 = 好几个不同的绿冻在场，
+    # 回给刚才直接点名搭话的那位，别把不同的人当成同一个"你"。
+    if group_context:
+        messages.append({
+            "role": "system",
+            "content": f"【群聊现场】这是群聊。{group_context}",
+        })
 
     # 名词库（terms/lorebook）：核心词 always 注入 + 命中用户消息的词注入——让模型懂"绿冻/枪神8/slg"这类词并带对的态度
     terms_note = build_terms_note(user_msg, denied_terms=denied_terms)
@@ -671,6 +681,15 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     # --- 🧠 确定性两路记忆 ---
     user_memory_card = {} if is_group else get_user_memory(user_id)
     memory_context = "" if is_group else build_memory_context(user_memory_card)
+    # 群聊现场事实：在场成员 + 群内近况（轻量群记忆，只在本群注入）
+    group_context = ""
+    if is_group:
+        gm = group_memory.get_group(user_id)   # user_id 此时 = 群号
+        members = [n for n in (gm.get("members") or {}).values() if n]
+        names = "、".join(members[-12:]) or "（还没太熟的几个绿冻）"
+        events = [e.get("text", "") for e in (gm.get("events") or [])[:3] if e.get("text")]
+        evtxt = "；".join(events) or "（刚进群，还没太熟）"
+        group_context = f"在场成员：{names}。群内近况：{evtxt}"
     weather_city = (user_memory_card or {}).get("weather_city", "") or ""
 
     # --- 🧩 构建消息列表 ---
@@ -683,7 +702,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         vision_desc=vision_desc, weather_city=weather_city, batch_summary=batch_summary,
         preference_items=preference_items, core_stories=core_stories,
         session_context=session_context, query_hint=query_hint,
-        denied_terms=denied_terms,
+        denied_terms=denied_terms, group_context=group_context,
     )
 
     # --- 🤖 调用大模型 ---
