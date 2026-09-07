@@ -42,7 +42,7 @@ def ocr(image: Path):
     import base64
     key, model = _key()
     if not key:
-        raise SystemExit("❌ 没找到 DASHSCOPE_API_KEY（在 D:\\CLAUDE CODE\\.env）")
+        raise SystemExit("[ERR] 没找到 DASHSCOPE_API_KEY（在 D:\\CLAUDE CODE\\.env）")
     b64 = base64.b64encode(image.read_bytes()).decode()
     r = httpx.post(
         "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
@@ -60,7 +60,7 @@ def ocr(image: Path):
     txt = re.sub(r"```json|```", "", txt).strip()
     arr = json.loads(txt)
     if not isinstance(arr, list) or len(arr) != 7:
-        raise SystemExit(f"❌ OCR 结果不是 7 项：{txt[:200]}")
+        raise SystemExit(f"[ERR] OCR 结果不是 7 项：{txt[:200]}")
     return arr
 
 
@@ -70,7 +70,7 @@ def main():
     if args:
         img = Path(args[0])
         if not img.exists():
-            raise SystemExit(f"❌ 图片不存在: {img}")
+            raise SystemExit(f"[ERR] 图片不存在: {img}")
     else:
         # 收图夹模式：把周表图丢进 data/schedule_inbox/，不带参数跑即处理最新一张
         inbox = ROOT / "data" / "schedule_inbox"
@@ -91,14 +91,14 @@ def main():
     print(f"\n原近况仍保留: {cur.get('近况','')!r}（如需改临时安排/请假，编辑 {SCHEDULE} 那行）")
     if not preview:
         SCHEDULE.write_text(json.dumps(cur, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        print(f"✅ 已写入 {SCHEDULE} —— 记得【重启 bot】生效（周表有缓存）。")
+        print(f"[OK] 已写入 {SCHEDULE} —— 记得【重启 bot】生效（周表有缓存）。")
         if args:
             print("（传入的是文件参数，未移动原图）")
         else:
             done = ROOT / "data" / "schedule_inbox" / "done"
             done.mkdir(parents=True, exist_ok=True)
             img.rename(done / img.name)
-            print(f"✅ 已把处理完的图移进: {done}")
+            print(f"[OK] 已把处理完的图移进: {done}")
 
 
 if __name__ == "__main__":
