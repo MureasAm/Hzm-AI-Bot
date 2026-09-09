@@ -22,6 +22,7 @@ from nonebot import get_bot, get_driver
 from nonebot.adapters.onebot.v11 import Message, MessageSegment
 
 from .constants import BILI_STATE_FILE
+from . import _bridge_common
 from .config import get_bili_uid, get_bili_sessdata, get_notify_whitelist, get_push_interval
 from .vision import _read_image_bytes, _normalize_image
 
@@ -36,14 +37,7 @@ _EMOJI_MAX_SIDE = 64
 
 
 async def _download_image(url: str) -> Path:
-    """下载动态配图并统一转 JPEG 到临时文件，返回路径；失败抛异常由调用方兜底。"""
-    data = await _read_image_bytes(url)
-    data = _normalize_image(data)  # WEBP/PNG 统一转 JPEG，QQ 显示更稳
-    tmp = Path(tempfile.gettempdir()) / f"hzm_dyn_{time.time_ns()}.jpg"
-    tmp.write_bytes(data)
-    return tmp
-
-
+    return await _bridge_common.download_image_to_tmp(url, "hzm_dyn")
 def _resize_emote_if_large(path: Path, max_side: int = 200) -> Path:
     """若表情图边长超过 max_side，缩小到 max_side（保持比例）写临时文件，返回新路径。
 
@@ -66,24 +60,9 @@ def _resize_emote_if_large(path: Path, max_side: int = 200) -> Path:
 # ==================== 状态持久化 ====================
 
 def _load_state() -> dict:
-    if BILI_STATE_FILE.exists():
-        try:
-            return json.loads(BILI_STATE_FILE.read_text("utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return {}
-    return {}
-
-
+    return _bridge_common.load_state_file(BILI_STATE_FILE)
 def _save_state(state: dict) -> None:
-    try:
-        BILI_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        BILI_STATE_FILE.write_text(
-            json.dumps(state, ensure_ascii=False, indent=2), "utf-8"
-        )
-    except OSError as e:
-        print(f"⚠️ B站状态写入失败: {e}")
-
-
+    _bridge_common.save_state_file(BILI_STATE_FILE, state)
 # ==================== 文案生成 ====================
 
 def _live_open_message(room_title: str, room_id: int = 0) -> str:

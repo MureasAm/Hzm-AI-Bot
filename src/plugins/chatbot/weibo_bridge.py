@@ -20,6 +20,7 @@ from nonebot import get_bot, get_driver
 from nonebot.adapters.onebot.v11 import Message, MessageSegment
 
 from .constants import WEIBO_STATE_FILE
+from . import _bridge_common
 from .config import get_weibo_uid, get_weibo_cookie, get_notify_whitelist, get_push_interval
 from .vision import _read_image_bytes, _normalize_image
 
@@ -31,14 +32,7 @@ _WEIBO_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 
 
 async def _download_image(url: str) -> Path:
-    """下载微博配图并统一转 JPEG 到临时文件，返回路径；失败抛异常由调用方兜底。"""
-    data = await _read_image_bytes(url)
-    data = _normalize_image(data)  # WEBP/PNG 统一转 JPEG，QQ 显示更稳
-    tmp = Path(tempfile.gettempdir()) / f"wb_dyn_{time.time_ns()}.jpg"
-    tmp.write_bytes(data)
-    return tmp
-
-
+    return await _bridge_common.download_image_to_tmp(url, "wb_dyn")
 # ==================== cookie 会话维护 ====================
 # 微博每次响应都会 Set-Cookie 续期会话；若像以前那样把 Cookie 硬塞 Header 而不回传更新，
 # 微博会判定"不是那个浏览器"、很快逼你去登录页。这里用 httpx cookie jar 自动收发 + 落盘续用。
@@ -83,24 +77,9 @@ def _save_jar(resp_cookies) -> None:
 # ==================== 状态持久化 ====================
 
 def _load_state() -> dict:
-    if WEIBO_STATE_FILE.exists():
-        try:
-            return json.loads(WEIBO_STATE_FILE.read_text("utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return {}
-    return {}
-
-
+    return _bridge_common.load_state_file(WEIBO_STATE_FILE)
 def _save_state(state: dict) -> None:
-    try:
-        WEIBO_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        WEIBO_STATE_FILE.write_text(
-            json.dumps(state, ensure_ascii=False, indent=2), "utf-8"
-        )
-    except OSError as e:
-        print(f"⚠️ 微博状态写入失败: {e}")
-
-
+    _bridge_common.save_state_file(WEIBO_STATE_FILE, state)
 # ==================== 字段提取 ====================
 
 def _extract_post_text(item: dict) -> str:
