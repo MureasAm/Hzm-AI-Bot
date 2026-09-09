@@ -627,8 +627,8 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
                 if not _confirm_history:
                     _confirm_history = "\n".join(get_user_history(user_id)[-4:])
                 if not await legendary_confirmed(user_msg, confirm_tpl, history=_confirm_history):
-                    print(f"[梗] 关键词 {trigger!r} 命中但 LLM 未确认，落到正常管线")
-                    break  # 不是目标语境，放弃梗，走正常回复
+                    print(f"[梗] 关键词 {trigger!r} 命中但 LLM 未确认，继续查后续触发词")
+                    continue  # 只跳过这一条；同句还可能命中别的更明确梗，别一并放弃
             reply = random.choice(replies)
             # 梗匹配也记入短期记忆 + 异步长期记忆，避免后续对话"失忆"
             append_user_history(user_id, user_msg, reply)

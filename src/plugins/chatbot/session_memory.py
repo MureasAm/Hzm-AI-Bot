@@ -16,7 +16,8 @@ import threading
 from pathlib import Path
 from datetime import datetime
 
-from .constants import PROJECT_ROOT
+from .constants import PROJECT_ROOT, THINKING_DISABLED
+from .config import _get_model_name
 
 SESSION_MEMORY_FILE = PROJECT_ROOT / "user_memory" / "session.json"
 
@@ -109,11 +110,11 @@ async def _llm(client, prompt: str, max_tokens: int = 200, temperature: float = 
     """调 DeepSeek。失败返回空串（调用方降级）。"""
     try:
         resp = await client.chat.completions.create(
-            model="deepseek-v4-flash",
+            model=_get_model_name(),
             messages=[{"role": "user", "content": prompt}],
             temperature=temperature,
             max_tokens=max_tokens,
-            **{"extra_body": {"thinking": {"type": "disabled"}}},
+            **THINKING_DISABLED,
         )
         content = (resp.choices[0].message.content or "").strip()
         if "```json" in content:

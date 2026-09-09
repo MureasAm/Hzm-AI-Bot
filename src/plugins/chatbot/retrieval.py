@@ -3,7 +3,7 @@
 六路来源（全部同步 CPU，query 向量由调用方传入，全程只调 1 次 embedding）：
 - corpus        背景记忆（persona/world/corpus_vectors.json）        → 走 RRF
 - voice_sample  风格样本（persona/speech/voice_sample_vectors.json） → 走 RRF
-- behavior      行为触发（persona/behavior/trigger_vectors.json）    → 走 RRF
+- behavior      行为触发（L3 LLM 意图分类 + behavior_keywords 判别词兜底，不走 embedding）→ 走 RRF
 - phrase        措辞指纹（persona/speech/phrase_vectors.json）       → 走 RRF
 - preference    偏好事实（persona/world/preference_vectors.json）    → 命中才带，不走 RRF
 - core_story    核心记忆（persona/world/core_story_vectors.json）    → 命中才带，不走 RRF
@@ -165,7 +165,7 @@ def _ensure_min_samples(items: list, samples: list, query_vector) -> list:
     if items or not VOICE_SAMPLE_KEEPALIVE or not samples:
         return items
     entries = [{"vector": s["vector"], "id": s["id"],
-                "text": "", "extra": {"user": s["user"], "reply": s["reply"], "type": s.get("type", "")}}
+                "text": "", "extra": {"user": s["user"], "reply": s["reply"], "type": s.get("type", ""), "length": s.get("length", "short")}}
                for s in samples]
     # 找全体最高分，若低于保底门槛则不注入（宁缺毋滥）
     best = max((cosine_similarity(query_vector, s["vector"]) for s in entries), default=-1.0)
@@ -184,7 +184,7 @@ def retrieve_voice_samples(user_query: str, query_vector,
     if not samples:
         return []
     entries = [{"vector": s["vector"], "id": s["id"], "text": "",
-                "extra": {"user": s["user"], "reply": s["reply"], "type": s.get("type", "")}}
+                "extra": {"user": s["user"], "reply": s["reply"], "type": s.get("type", ""), "length": s.get("length", "short")}}
                for s in samples]
     items = _score_candidates(query_vector, entries, threshold, top_n,
                               "voice_sample", lambda e: e["id"], lambda e: e["text"],

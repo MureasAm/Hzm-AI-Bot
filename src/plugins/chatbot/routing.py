@@ -60,7 +60,9 @@ async def legendary_confirmed(user_msg: str, prompt_template: str, history: str 
             max_tokens=10,
             **THINKING_DISABLED,
         )
-        return "是" in (resp.choices[0].message.content or "")
+        c = (resp.choices[0].message.content or "").strip()
+        # 确认模板要求只答"是/否"：以"是"开头且不是"不是/是不是"这类否定/疑问才放行
+        return c.startswith("是") and not c.startswith("不是") and not c.startswith("是不是")
     except Exception as e:
         print(f"⚠️ 梗确认失败（默认放行）: {e}")
         return True
