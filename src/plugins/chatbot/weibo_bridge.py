@@ -39,6 +39,47 @@ async def _download_image(url: str) -> Path:
     return tmp
 
 
+# ==================== cookie 会话维护 ====================
+# 微博每次响应都会 Set-Cookie 续期会话；若像以前那样把 Cookie 硬塞 Header 而不回传更新，
+# 微博会判定"不是那个浏览器"、很快逼你去登录页。这里用 httpx cookie jar 自动收发 + 落盘续用。
+_COOKIE_JAR_FILE = WEIBO_STATE_FILE.with_name("weibo_cookies.json")
+
+
+def _parse_cookie_str(s: str) -> dict:
+    d = {}
+    for part in (s or "").split(";"):
+        if "=" in part:
+            k, v = part.strip().split("=", 1)
+            d[k.strip()] = v.strip()
+    return d
+
+
+def _load_jar() -> dict:
+    """初始 cookie = .env 的 WEIBO_COOKIE，再用运行时 jar（微博续期下发的）覆盖。"""
+    base = _parse_cookie_str(get_weibo_cookie())
+    try:
+        if _COOKIE_JAR_FILE.exists():
+            saved = json.loads(_COOKIE_JAR_FILE.read_text("utf-8"))
+            base.update({k: v for k, v in saved.items() if v})
+    except Exception:
+        pass
+    return base
+
+
+def _save_jar(resp_cookies) -> None:
+    """把响应里下发的 Set-Cookie 合并存盘，跨重启续用会话。"""
+    add = {k: v for k, v in (resp_cookies or {}).items() if v}
+    if not add:
+        return
+    try:
+        cur = _load_jar()
+        cur.update(add)
+        _COOKIE_JAR_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _COOKIE_JAR_FILE.write_text(json.dumps(cur, ensure_ascii=False), encoding="utf-8")
+    except OSError as e:
+        print(f"⚠️ 微博 cookie jar 写失败: {e}")
+
+
 # ==================== 状态持久化 ====================
 
 def _load_state() -> dict:
@@ -150,18 +191,24 @@ class WeiboMonitor:
         raise last
 
     async def _fetch_post_once(self) -> dict:
-        """单次拉取最新一条微博（无重试）。"""
-        cookie = get_weibo_cookie()
-        async with httpx.AsyncClient(timeout=10.0,
-                                     headers={"User-Agent": _WEIBO_UA,
-                                              "Referer": f"https://weibo.com/u/{self.uid}"},
-                                     follow_redirects=False) as client:
-            headers = {"User-Agent": _WEIBO_UA, "Referer": f"https://weibo.com/u/{self.uid}"}
-            if cookie:
-                headers["Cookie"] = cookie
+        """单次拉取最新一条微博（无重试）。
+
+        用 httpx cookie jar 收发会话（不再把 Cookie 硬塞 Header），自动带上续期 Cookie + XSRF 头，
+        响应回来后把 Set-Cookie 落盘——尽量让登录态活到真过期，而不是几天就被逼下线。
+        """
+        jar = _load_jar()
+        headers = {
+            "User-Agent": _WEIBO_UA,
+            "Referer": f"https://weibo.com/u/{self.uid}",
+            "Accept": "application/json, text/plain, */*",
+        }
+        if jar.get("XSRF-TOKEN"):
+            headers["x-xsrf-token"] = jar["XSRF-TOKEN"]
+        async with httpx.AsyncClient(timeout=10.0, cookies=jar,
+                                     headers=headers, follow_redirects=False) as client:
             resp = await client.get(WEIBO_API,
-                                    params={"uid": self.uid, "page": 1, "feature": 0},
-                                    headers=headers)
+                                    params={"uid": self.uid, "page": 1, "feature": 0})
+        _save_jar(resp.cookies)   # 续期会话落盘（若微博下发新 cookie）
         # 非 200 / 非 JSON → 明确报错（大概率风控或 cookie 失效），而不是 json() 抛难懂的错误
         if resp.status_code != 200:
             loc = resp.headers.get("location", "")
