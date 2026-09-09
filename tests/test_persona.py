@@ -4,7 +4,6 @@ import pytest
 from src.plugins.chatbot.persona import (
     load_persona_rules,
     build_global_persona_context,
-    load_trigger_vectors,
 )
 
 
@@ -32,13 +31,3 @@ class TestBuildGlobalPersonaContext:
         assert "语言风格" in ctx
         assert "嘴硬" in ctx
         assert "括号自嘲" in ctx
-
-
-class TestLoadTriggerVectors:
-    def test_cache_file_exists_and_populated(self):
-        vectors = load_trigger_vectors()
-        assert isinstance(vectors, dict) and len(vectors) >= 1
-        # 与 behaviors 的 trigger 一一对应
-        _, _, behaviors = load_persona_rules()
-        for b in behaviors:
-            assert b["trigger"] in vectors

@@ -30,7 +30,7 @@ from .constants import (
     RETRIEVAL_BUDGET_CHARS, MAX_RETRIEVAL_ITEM_CHARS,
 )
 from .rag import cosine_similarity, load_vector_db
-from .persona import load_trigger_vectors, _format_behavior_rule
+from .persona import _format_behavior_rule
 
 
 @dataclass

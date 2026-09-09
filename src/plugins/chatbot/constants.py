@@ -12,21 +12,17 @@ SYSTEM_PROMPT_FILE = PROJECT_ROOT / "persona" / "core" / "system_prompt.txt"
 TRAITS_FILE = PROJECT_ROOT / "persona" / "core" / "traits.json"
 STYLES_FILE = PROJECT_ROOT / "persona" / "core" / "styles.json"
 BEHAVIORS_FILE = PROJECT_ROOT / "persona" / "behavior" / "behaviors.json"
-VOICE_SAMPLES_FILE = PROJECT_ROOT / "persona" / "speech" / "voice_samples.json"  # 声音样本库(few-shot)
 TERMS_FILE = PROJECT_ROOT / "persona" / "world" / "terms.json"                 # 灰泽满名词库(lorebook)：核心词always注入+命中注入
 
 MEMORY_FILE = PROJECT_ROOT / "user_memory" / "short_term.json"                 # 用户短期记忆
 GROUP_MEMORY_FILE = PROJECT_ROOT / "user_memory" / "groups.json"              # 群级记忆（成员身份 + 群近况/梗，按群号）
 
-# ==================== 群聊：点名才回 ====================
-# 群里出现这些词（或 @她）才值得回；其余闲聊只作背景、不打扰
-GROUP_MENTION_WORDS = ("灰泽满", "小满", "hzm", "HZM", "满满", "满神", "满姐", "满区", "灰灰", "小灰")
+# ==================== 群聊：群近况记忆 ====================
 # 群近况事件写入冷却（秒）+ 上限条数（防碎碎念刷爆记忆）
 GROUP_EVENT_COOLDOWN = 300
 GROUP_EVENT_MAX = 20
 SCHEDULE_FILE = PROJECT_ROOT / "persona" / "world" / "schedule.json"          # 她的周表+近况(手动维护,注入地面真值)
 VECTOR_FILE = PROJECT_ROOT / "persona" / "world" / "corpus_vectors.json"         # 直播记忆向量库（灰泽满的人物记忆，归 world/）
-TRIGGER_VECTOR_FILE = PROJECT_ROOT / "persona" / "behavior" / "trigger_vectors.json"  # trigger 向量缓存（跟 behaviors.json）
 VOICE_SAMPLE_VECTOR_FILE = PROJECT_ROOT / "persona" / "speech" / "voice_sample_vectors.json"  # 声音样本向量缓存（跟 voice_samples.json）
 PHRASE_VECTOR_FILE = PROJECT_ROOT / "persona" / "speech" / "phrase_vectors.json"   # 措辞指纹向量缓存（跟 phrases.json）
 
@@ -81,7 +77,6 @@ RETRIEVAL_TOPK = 6            # 融合后条数硬上限
 RETRIEVAL_BUDGET_CHARS = 1200      # 融合检索注入字符预算（corpus+samples）
 MAX_RETRIEVAL_ITEM_CHARS = 300     # 单条检索结果字符上限
 VOICE_SAMPLE_REPLY_TRIM_CHARS = 60   # 长样本回复裁剪到该字数（引导短句）
-MAX_CONTEXT_CHARS = 8000           # 整体安全上限兜底
 
 # ==================== 短期记忆 ====================
 SHORT_MEMORY_LINES = 10  # 最近 5 轮，每轮 2 条（用户 + AI）；>3 轮可缓解承诺/借口遗忘

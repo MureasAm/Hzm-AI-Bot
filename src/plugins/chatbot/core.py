@@ -44,7 +44,7 @@ from .reply_style import (
     find_repeat_word, _trim_text,
 )
 from .session_memory import (
-    get_session, probe_session, build_session_context, is_emoji_msg,
+    probe_session, build_session_context, is_emoji_msg,
 )
 
 

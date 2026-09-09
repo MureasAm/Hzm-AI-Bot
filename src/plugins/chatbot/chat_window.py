@@ -23,10 +23,10 @@ from .reply_style import (
     split_reply, split_delay, clean_reply,
 )
 from .voice import should_voice, send_voice
-from .vision import describe_image, describe_image_bytes, _read_image_bytes
+from .vision import describe_image_bytes, _read_image_bytes
 from .constants import (
     READ_WINDOW_MIN_SECONDS, READ_WINDOW_MAX_SECONDS, SPLIT_REPLY_ENABLED,
-    GROUP_MENTION_WORDS, GROUP_EVENT_COOLDOWN,
+    GROUP_EVENT_COOLDOWN,
 )
 from . import group_memory
 
@@ -141,19 +141,12 @@ async def _describe_image_src(bot, image_url: str, image_file: str) -> str:
     return ""
 
 
-def _is_addressed(text: str) -> bool:
-    """群里这条消息是否"点名"了她（提到她的名字/爱称）。"""
-    t = (text or "").strip()
-    return any(k in t for k in GROUP_MENTION_WORDS)
-
-
 def enqueue(target_id: str, sender_id: str, text: str, image_url: str, image_file: str,
-            bot, is_private: bool, mentioned: bool = False) -> None:
+            bot, is_private: bool) -> None:
     """采集一条消息进缓冲，重置读秒窗口。
 
-    窗口按 target_id（私聊=user_id，群聊=group_id）开——群的多人发言攒同一个窗口。
-    群聊只有"点名她"（@ / 提到她名字爱称，mentioned=True 或文本含关键词）才触发回复；
-    其余群成员闲聊只攒进 pending 当背景，不打扰（等下次被点名时一起当上下文）。
+    窗口按 target_id（私聊=user_id，群聊=group_id）开——群成员发言攒同一个窗口。
+    群内闲聊也攒批：群现场注入 + 轻量群记忆帮她分辨在场和该接谁的话。
     sender_id 记录发言者，群聊组装时带发送者标签。
     图片：url 优先（rkey 新鲜时急切缓存），file 留给 CDN 失败时读本地兜底。
     """
@@ -164,9 +157,7 @@ def enqueue(target_id: str, sender_id: str, text: str, image_url: str, image_fil
     gen = win.generation
     win.bot = bot
     win.is_private = is_private
-    # 私聊/群聊统一：整窗口攒批、读秒后一起回（群=回整场群聊，含现场注入见 core）
-    # 说明：曾试过"点名才回"，真人感反而差——先回到"群里说什么都以群内容攒批回"，
-    # 之后要更聪明地决定"何时插话"再单独做，别用死关键词卡。
+    # 私聊/群聊统一：整窗口攒批、读秒后一起回（群=回整场群聊）
     win.pending.append((sender_id, text, image_url, image_file))
     if len(win.pending) > 30:
         del win.pending[:len(win.pending) - 30]

@@ -6,7 +6,7 @@ import json
 
 from .constants import (
     TRAITS_FILE, STYLES_FILE, BEHAVIORS_FILE,
-    TRIGGER_VECTOR_FILE, TERMS_FILE, SCHEDULE_FILE,
+    TERMS_FILE, SCHEDULE_FILE,
 )
 
 
@@ -103,24 +103,6 @@ def build_global_persona_context(traits, styles):
 
 
 # 缓存的 trigger → 向量 映射（模块级，只加载一次）
-_trigger_vectors = None
-
-
-def load_trigger_vectors() -> dict:
-    """加载预计算的 trigger 向量缓存。文件缺失时返回空字典。"""
-    global _trigger_vectors
-    if _trigger_vectors is not None:
-        return _trigger_vectors
-    if not TRIGGER_VECTOR_FILE.exists():
-        _trigger_vectors = {}
-        return _trigger_vectors
-    try:
-        with open(TRIGGER_VECTOR_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        _trigger_vectors = data if isinstance(data, dict) else {}
-    except (json.JSONDecodeError, OSError):
-        _trigger_vectors = {}
-    return _trigger_vectors
 
 
 def _format_behavior_rule(rule: dict) -> str:

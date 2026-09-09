@@ -200,7 +200,6 @@ def _run_generate_persona(args):
 
 # 类型 → (模块名, 默认输入, 默认输出)
 _PRECOMPUTE_TARGETS = {
-    "triggers":      ("precompute_trigger_vectors", _common.BEHAVIORS_FILE, _common.TRIGGER_VECTOR_FILE),
     "voice-samples": ("precompute_voice_sample_vectors", _common.VOICE_SAMPLES_FILE, _common.VOICE_SAMPLE_VECTOR_FILE),
     "phrases":       ("precompute_phrase_vectors", _common.PHRASES_FILE, _common.PHRASE_VECTOR_FILE),
     "preferences":   ("precompute_preference_vectors", _common.PREFERENCES_FILE, _common.PREFERENCE_VECTOR_FILE),
