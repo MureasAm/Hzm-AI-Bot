@@ -697,6 +697,8 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     weather_city = (user_memory_card or {}).get("weather_city", "") or ""
 
     # --- 🧩 构建消息列表 ---
+    # 天气预热：组消息前异步把城市 LocationID+天气取进缓存，build 时同步读缓存零阻塞
+    await context_probe.warm_weather(weather_city)
     # query_hint：短消息（≤4字）的语境扩充，仅当扩充句与原文不同时传入，帮模型理解短句
     query_hint = retrieval_query if (retrieval_query and retrieval_query != query_text) else ""
     # 术语语境确认：confirm:true 的命中做一次便宜 LLM 判断，剔除误触词条（词→意思守卫）

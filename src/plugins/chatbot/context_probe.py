@@ -5,6 +5,7 @@ get_now_context() 生成一行注入文本，让灰泽满知道"现在是几点�
 进程内缓存 1 小时（免费额度 1000 次/天）。天气 key/city 未配置或请求失败时静默
 跳过天气段，绝不阻塞聊天主流程。
 """
+import asyncio
 import json
 import time
 from datetime import datetime
@@ -121,24 +122,48 @@ def _fetch_weather(loc_id: str) -> str:
 
 
 def _weather_line(city: str) -> str:
-    """按城市（LocationID 或城市名）带 1h 缓存的天气行；city 空则用全局默认 WEATHER_CITY。"""
+    """天气行——**只读缓存**，不再同步发网络请求（防卡事件循环）。
+
+    缓存里没有 / 过期 → 这轮先不报天气（返回空，等 warm_weather 后台预热补上）。
+    """
     if not city:
         city = get_weather_city()
     if not city or not get_weather_key():
         return ""
 
-    loc_id = _resolve_location(city)
+    e = _location_cache.get(city)
+    loc_id = (e or {}).get("id", "") if e else ""
     if not loc_id:
-        return ""
+        return ""  # 还没预热出 LocationID → 不阻塞
 
-    now = time.time()
     entry = _weather_cache.get(loc_id)
-    if entry and now - entry["ts"] < WEATHER_CACHE_SECONDS:
+    if entry and time.time() - entry["ts"] < WEATHER_CACHE_SECONDS:
         return entry["text"]
+    return ""  # 缓存过期/缺失 → 等后台预热
 
-    text = _fetch_weather(loc_id)
-    _weather_cache[loc_id] = {"ts": now, "text": text}
-    return text
+
+async def warm_weather(city: str = "") -> None:
+    """异步预热：确保该城市的 LocationID + 天气已进缓存（网络走 asyncio.to_thread）。
+
+    组装消息前在异步上下文里调用它，等真正 build 时 _weather_line 命中缓存、零阻塞。
+    """
+    if not city:
+        city = get_weather_city()
+    if not city or not get_weather_key():
+        return
+    try:
+        loc_id = await asyncio.to_thread(_resolve_location, city)
+        if not loc_id:
+            return
+        now = time.time()
+        entry = _weather_cache.get(loc_id)
+        if entry and now - entry["ts"] < WEATHER_CACHE_SECONDS:
+            return  # 已新鲜，别每轮都打
+        text = await asyncio.to_thread(_fetch_weather, loc_id)
+        if text:
+            _weather_cache[loc_id] = {"ts": time.time(), "text": text}
+    except Exception:
+        pass  # 预热失败下轮再试，不影响回复
 
 
 def _live_status_text() -> str:
