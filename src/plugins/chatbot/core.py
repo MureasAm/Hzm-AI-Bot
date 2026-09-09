@@ -421,10 +421,13 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
             "role": "system",
             "content": "【灰泽满的说话方式参考】以下是她真实的对话片段。只学其中的语气、断句、省略号、自称（灰泽满/hzm）和措辞。括号是她的'心里话标注'，只在情绪顶点才用一个（如（小声）），日常回复默认一个都不用。内容要针对当前话题，不要复述、也不要套用示例里的具体内容（人物/礼物/衣服/事件等）。日常回复保持短句（30字内），简短干脆。"
         })
+        # 同一句真人原话可能既作为"行为示范"被注入、又被 RRF 命中当风格样本——
+        # 已作为行为示范出现过的就不重复塞，避免同轮同句出现两遍。
+        already_shown = "\n".join(m.get("content", "") for m in messages)
         for it in samples:
             user_part = it.extra.get("user", "")
             reply_part = it.extra.get("reply", "")
-            if user_part and reply_part:
+            if user_part and reply_part and reply_part not in already_shown:
                 messages.append({"role": "user", "content": user_part})
                 messages.append({"role": "assistant", "content": _trim_text(reply_part, VOICE_SAMPLE_REPLY_TRIM_CHARS)})
 
