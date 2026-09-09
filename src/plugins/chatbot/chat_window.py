@@ -45,7 +45,6 @@ class _UserWindow:
         self.generation = 0                        # 每次 enqueue 自增
         self.bot = None
         self.is_private = True
-        self.addressed = False                     # 群里本轮是否已被点名（点名后才开始攒批）
 
 
 _windows: dict[str, _UserWindow] = {}
@@ -165,41 +164,17 @@ def enqueue(target_id: str, sender_id: str, text: str, image_url: str, image_fil
     gen = win.generation
     win.bot = bot
     win.is_private = is_private
-    addressed = is_private or mentioned or _is_addressed(text)
-
-    # 私聊：任何消息都必回
-    if is_private:
-        win.pending.append((sender_id, text, image_url, image_file))
-        if len(win.pending) > 30:
-            del win.pending[:len(win.pending) - 30]
-        if image_url:
-            asyncio.create_task(_eager_download(image_url))
-        if win.task:
-            win.task.cancel()
-        win.task = asyncio.create_task(_process(win, gen))
-        return
-
-    # 群聊：点名 = 从这次开始攒批（之前的无关闲聊丢弃，不回那些老话）
-    if addressed:
-        if not win.addressed:
-            win.pending.clear()
-            win.addressed = True
-        win.pending.append((sender_id, text, image_url, image_file))
-        if len(win.pending) > 30:
-            del win.pending[:len(win.pending) - 30]
-        if image_url:
-            asyncio.create_task(_eager_download(image_url))
-        if win.task:
-            win.task.cancel()          # 点名重置读秒
-        win.task = asyncio.create_task(_process(win, gen))
-    elif win.addressed:
-        # 点名之后的延续消息（没再点她名）：当上下文攒着，但不重置读秒、不另起回复
-        win.pending.append((sender_id, text, image_url, image_file))
-        if len(win.pending) > 30:
-            del win.pending[:len(win.pending) - 30]
-        if image_url:
-            asyncio.create_task(_eager_download(image_url))
-    # else: 点名前的无关闲聊 → 忽略，不存不打扰
+    # 私聊/群聊统一：整窗口攒批、读秒后一起回（群=回整场群聊，含现场注入见 core）
+    # 说明：曾试过"点名才回"，真人感反而差——先回到"群里说什么都以群内容攒批回"，
+    # 之后要更聪明地决定"何时插话"再单独做，别用死关键词卡。
+    win.pending.append((sender_id, text, image_url, image_file))
+    if len(win.pending) > 30:
+        del win.pending[:len(win.pending) - 30]
+    if image_url:
+        asyncio.create_task(_eager_download(image_url))
+    if win.task:
+        win.task.cancel()
+    win.task = asyncio.create_task(_process(win, gen))
 
 
 async def _process(win: _UserWindow, gen: int) -> None:
@@ -222,7 +197,6 @@ async def _flush(win: _UserWindow) -> None:
     if not win.pending:
         return
     msgs, win.pending = win.pending, []
-    win.addressed = False   # 这轮回复完，下一轮要重新被点名才开始攒
 
     # 读图：本批所有图片统一在回复前解析（不是收到就秒解析，避免节奏割裂）
     async def _parse(u: str, f: str) -> str:

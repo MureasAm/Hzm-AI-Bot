@@ -110,6 +110,7 @@ class WeiboMonitor:
         self.uid = get_weibo_uid()
         self.state = _load_state()
         self._warned_no_cookie = False
+        self._last_err_warn = 0.0   # 错误/失效提示节流用（时间戳）
         # 基线是否已建（进程内标志，不持久化——每次启动重新对齐，
         # 避免停机期间的新微博在重启后被当新事件推送）
         self._primed = False
@@ -163,7 +164,9 @@ class WeiboMonitor:
                                     headers=headers)
         # 非 200 / 非 JSON → 明确报错（大概率风控或 cookie 失效），而不是 json() 抛难懂的错误
         if resp.status_code != 200:
-            raise RuntimeError(f"微博接口 HTTP {resp.status_code}")
+            loc = resp.headers.get("location", "")
+            tail = f" -> 跳转到 {loc[:80]}" if (loc and "login" in loc) else ""
+            raise RuntimeError(f"微博接口 HTTP {resp.status_code}{tail}")
         ct = resp.headers.get("content-type", "")
         if "json" not in ct:
             raise RuntimeError(f"微博接口非JSON响应(content-type={ct})，多半是风控或 cookie 失效——重新复制 WEIBO_COOKIE")
@@ -196,7 +199,16 @@ class WeiboMonitor:
         try:
             post = await self._fetch_latest_post()
         except Exception as e:
-            print(f"⚠️ 微博查询失败（忽略）: {e}")
+            msg = str(e)
+            now = time.time()
+            is_cookie = ("login" in msg) or ("登录" in msg)
+            if is_cookie:
+                if now - self._last_err_warn >= 1800:   # cookie失效每半小时只喊一次
+                    print("⚠️ 微博 Cookie 已失效（接口跳到登录页）。需重新登录微博并复制完整 Cookie 填进 .env.prod 的 WEIBO_COOKIE（持续 302 就是它，不是偶发）。")
+                    self._last_err_warn = now
+            elif now - self._last_err_warn >= 300:      # 其他错误 5 分钟才喊一次
+                print(f"⚠️ 微博查询失败（忽略）: {msg[:150]}")
+                self._last_err_warn = now
             return
         if not post["id"]:
             return
