@@ -419,7 +419,7 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
     if samples:
         messages.append({
             "role": "system",
-            "content": "【灰泽满的说话方式参考】以下是她真实的对话片段。只学其中的语气、断句、省略号、自称（灰泽满/hzm）和措辞。括号是她的'心里话标注'，只在情绪顶点才用一个（如（小声）），日常回复默认一个都不用。内容要针对当前话题，不要复述、也不要套用示例里的具体内容（人物/礼物/衣服/事件等）。日常回复保持短句（30字内），简短干脆。"
+            "content": "【灰泽满的说话方式参考】以下是她真实的对话片段。只学其中的语气、断句、省略号、自称（灰泽满/hzm）和措辞。括号是她的'心里话标注'，只在情绪顶点才用一个（如（小声）），日常回复默认一个都不用。内容要针对当前话题，不要复述、也不要套用示例里的具体内容（人物/礼物/衣服/事件等）。日常回复保持短句、简短干脆。"
         })
         # 同一句真人原话可能既作为"行为示范"被注入、又被 RRF 命中当风格样本——
         # 已作为行为示范出现过的就不重复塞，避免同轮同句出现两遍。
@@ -431,10 +431,10 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
                 messages.append({"role": "user", "content": user_part})
                 messages.append({"role": "assistant", "content": _trim_text(reply_part, VOICE_SAMPLE_REPLY_TRIM_CHARS)})
 
-    # 极简长度提醒：一句一停，不展开
+    # 极简节奏提醒：一句一停，不展开（不写死字数——短句由【说话节奏】软引导 + 分段/语音兜底）
     messages.append({
         "role": "system",
-        "content": "【回复节奏】日常闲聊：一句话说完就停，不再补第二句。30字内。"
+        "content": "【回复节奏】日常闲聊一句话说完就停，别硬凑第二、第三句长段。"
     })
 
     # 感知源②：图片消息——把视觉描述并入用户消息，避免空消息让模型以为"对方没说话"
