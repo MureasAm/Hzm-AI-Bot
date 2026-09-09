@@ -1,5 +1,6 @@
 import json
 import asyncio
+import sys
 from pathlib import Path
 from openai import AsyncOpenAI
 
@@ -277,6 +278,12 @@ async def run(input_path: str | None = None, out_dir: str | None = None):
 
 
 async def main():
+    # 直跑安全门：本脚本会覆盖 persona/core/* 与 behavior/behaviors.json（含人工审批的 samples），
+    # 必须显式 --danger（run_tool 层已要求，这里防直跑绕过）。
+    if "--danger" not in sys.argv:
+        print("🚫 已拒绝：generate_persona 会覆盖人格三件套（含 samples）。确认重建请加 --danger；"
+              "平时用 extract-persona + 人工审批维护 behaviors。")
+        return
     await run()
 
 
