@@ -44,6 +44,57 @@ def _get_other_person_names() -> set:
     return names
 
 
+# 高频词里的聊天功能词（出现多少次都不算"她爱用的词"，别当锚点禁）
+_REPEAT_STOP = set("""
+今天 明天 我们 你们 他们 这个 那个 真的 就是 然后 什么 知道 现在 没有 不是 可以 怎么
+所以 觉得 有点 一起 咱们 时候 一个 已经 还是 但是 如果 因为 这样 那样 还有 而且 只是
+不太 大概 应该 好像 反正 确实 其实 主要 感觉 晚上 直播 大家 东西 事情 算了 好吧 不行
+""".split())
+
+
+def find_repeat_word(reply: str, recent_replies: list, min_distinct: int = 3) -> str:
+    """检测新回复是否在复用她"最近几条反复说"的词（如威严连用；跨话题也会犯）。
+
+    统计每条历史回复的 2 字内容字 gram，滤掉停用词，要求该词出现在 ≥min_distinct 条
+    不同回复里；若新回复也含它，返回一个可读的待禁用片段，否则空串。"""
+    from collections import Counter
+
+    def grams(t: str):
+        s = re.sub(r"[^一-鿿]", "", t or "")
+        return {s[i:i + 2] for i in range(len(s) - 1)}
+
+    cnt = Counter()
+    for r in (recent_replies or []):
+        if not r:
+            continue
+        for g in grams(r):
+            if g not in _REPEAT_STOP:
+                cnt[g] += 1
+    cand = {g for g, n in cnt.items() if n >= min_distinct}
+    if not cand:
+        return ""
+    hit = set(grams(reply)) & cand
+    if not hit:
+        return ""
+    # 在回复里取一个最长的"连续命中 2-gram"片段，读起来像个词（威严 / 风纪委员…）
+    s = re.sub(r"[^一-鿿]", "", reply)
+    L = len(s)
+    best, i = "", 0
+    while i < L - 1:
+        if s[i:i + 2] in hit:
+            last = k = i
+            while k + 2 <= L and s[k:k + 2] in hit:
+                last = k
+                k += 1
+            frag = s[i:last + 2]      # 覆盖从 i 到最后一个命中 bigram 结尾
+            if len(frag) > len(best):
+                best = frag
+            i = k
+        else:
+            i += 1
+    return best or next(iter(hit))
+
+
 def _trim_text(text: str, max_chars: int) -> str:
     """裁剪长文本，超长加省略号。"""
     if len(text) <= max_chars:

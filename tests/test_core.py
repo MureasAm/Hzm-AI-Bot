@@ -81,6 +81,21 @@ class TestEchoReply:
     def test_empty_not_flagged(self):
         assert reply_style.is_echo_reply("", ["灰泽满刚醒"]) is False
 
+    def test_find_repeat_word(self):
+        # 威严在她最近多条回复里反复出现，新回复又用它 → 命中
+        recent = ["灰泽满威严着呢", "不行，威严重要", "你说是吧，威严"]
+        assert reply_style.find_repeat_word("那灰泽满试试呗，威严", recent) == "威严"
+
+    def test_find_repeat_word_no_false_positive(self):
+        # 最近没有固定反复词 → 不误伤
+        recent = ["今天天气不错", "我们去吃火锅吧", "这个好吃"]
+        assert reply_style.find_repeat_word("那试试呗", recent) == ""
+
+    def test_find_repeat_word_stopword_ignored(self):
+        recent = ["我们今天去吗", "我们去看电影", "我们走吧"]
+        assert reply_style.find_repeat_word("那我们去吃", recent) == ""  # "我们"是停用词
+
+
     def test_window_beyond_default_caught(self):
         # 隔几句前说过的话被重复：默认只看最近 3 条会漏，放宽 window 才拦（回归：隔句复读）
         old = "灰泽满刚醒，你倒是精神好"

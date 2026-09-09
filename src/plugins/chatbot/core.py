@@ -40,7 +40,8 @@ from .routing import (
     LEGENDARY_REPLIES, LEGENDARY_CONFIRMS, legendary_confirmed, classify_behavior,
 )
 from .reply_style import (
-    split_reply, split_delay, clean_reply, is_echo_reply, is_emotion_only_query, _trim_text,
+    split_reply, split_delay, clean_reply, is_echo_reply, is_emotion_only_query,
+    find_repeat_word, _trim_text,
 )
 from .session_memory import (
     get_session, probe_session, build_session_context, is_emoji_msg,
@@ -726,6 +727,19 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
             reply = await generate_reply(list(messages) + [nudge])
             if not is_echo_reply(reply, recent_bot, window=8):
                 break
+
+    # --- 🔁 措辞固化防护：同一场里反复用同一个词（威严/老公/…）也拦一下 ---
+    # 复读闸管"整句重复"，这里管"关键词重复"——她最近几条都在用某个词，新回复又用它，
+    # 就强制换措辞重生成一次。确定性兜底，不靠提示词。
+    w = find_repeat_word(reply, recent_bot[-6:])
+    if w:
+        print(f"[防措辞固化] 最近反复用『{w}』，强制换措辞")
+        nudge = {
+            "role": "system",
+            "content": f"警告：你最近几条老在用『{w}』这个词，反复用同一个词很腻、很机械。"
+                       f"别再用『{w}』，换一个全新的说法表达同一个意思。",
+        }
+        reply = await generate_reply(list(messages) + [nudge])
 
     # --- 💾 更新短期记忆（带锁）：图片消息把视觉描述记进去，后续才记得聊过什么图 ---
     record_msg = _compose_record_msg(user_msg, vision_desc)
