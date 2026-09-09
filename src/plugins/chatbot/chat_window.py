@@ -228,7 +228,7 @@ async def _flush(win: _UserWindow) -> None:
                               batch_summary=batch_summary, is_group=not win.is_private)
     reply = clean_reply(reply)  # 去括号前缀 + 整条至多 1 个括号
 
-    # 语音优先：成句回复(≥20字、无内心戏括号/链接)朗读成语音条——像真人"话多就录给你听"。
+    # 语音优先：成句回复(≥30字、无内心戏括号/链接)朗读成语音条——像真人"话多就录给你听"。
     # 成功就不刷文字分段（互斥不双发）；未启用/合成失败时 send_voice 返回 False，
     # 落回下方文字分段兜底，绝不影响收到回复。
     if should_voice(reply):

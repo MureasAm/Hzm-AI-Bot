@@ -157,8 +157,8 @@ def _run_analyze_pace(args):
 
 def _add_generate_vectors(sub):
     p = sub.add_parser("generate-vectors", help="场景化陈述 → 语料向量库")
-    p.add_argument("-i", "--input", default=None,
-                   help="场景化陈述 JSON（缺省用内置 RAW_CORPUS）")
+    p.add_argument("-i", "--input", default="persona/world/statement_final.json",
+                   help="场景化陈述 JSON（缺省 persona/world/statement_final.json；不要依赖内置 RAW_CORPUS，那是过期副本）")
     p.add_argument("-o", "--output", default=None,
                    help="输出路径（默认 persona/world/corpus_vectors.json，机器人读取）")
     p.set_defaults(func=_run_generate_vectors)
@@ -177,17 +177,23 @@ def _run_generate_vectors(args):
 # ==================== 子命令：generate-persona ====================
 
 def _add_generate_persona(sub):
-    p = sub.add_parser("generate-persona", help="场景化陈述 → 人格三件套")
-    p.add_argument("-i", "--input", default=None,
-                   help="场景化陈述 JSON（缺省用内置 RAW_CORPUS）")
+    p = sub.add_parser("generate-persona",
+                       help="⚠️危险：场景化陈述 → 覆盖人格三件套（traits/styles/behaviors）。会覆盖人工审批产物，需 --danger")
+    p.add_argument("-i", "--input", default="persona/world/statement_final.json",
+                   help="场景化陈述 JSON（缺省 statement_final.json）")
     p.add_argument("-o", "--out-dir", default=None,
                    help="输出目录（默认 persona/，机器人读取）")
+    p.add_argument("--danger", action="store_true", help="确认：覆盖人格三件套（默认拒绝，防误跑毁掉人工库）")
     p.set_defaults(func=_run_generate_persona)
 
 
 def _run_generate_persona(args):
     import asyncio
     import generate_persona
+    if not args.danger:
+        print("🚫 已拒绝：generate-persona 会覆盖 persona/core/* 与 behavior/behaviors.json（含 samples）。")
+        print("   确认要重建人格请加 --danger。平时请用 extract-persona + 人工审批维护 behaviors。")
+        return
     out_dir = Path(args.out_dir) if args.out_dir else _common.PERSONA_DIR
     asyncio.run(generate_persona.run(input_path=args.input, out_dir=str(out_dir)))
     _common.report_saved(out_dir / "core/traits.json", out_dir / "core/styles.json",

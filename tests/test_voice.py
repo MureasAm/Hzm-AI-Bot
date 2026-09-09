@@ -8,7 +8,7 @@ from src.plugins.chatbot import voice as v
 
 
 class TestShouldVoice:
-    """成句(≥20字)才朗读语音；短敷衍词/含内心戏括号/链接/超长 → 打字。"""
+    """成句(≥30字)才朗读语音；短敷衍词/含内心戏括号/链接/超长 → 打字。"""
 
     def test_empty_no(self):
         assert v.should_voice("") is False

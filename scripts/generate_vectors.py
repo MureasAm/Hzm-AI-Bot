@@ -264,9 +264,14 @@ def get_zhipu_key():
     return None
 
 def _load_corpus(input_path) -> list:
-    """加载场景化陈述列表。input_path 为空用内置 RAW_CORPUS。"""
+    """加载场景化陈述列表。
+
+    必须显式传 -i（默认 statement_final.json 由 run_tool 提供）。拒绝回落到内置
+    RAW_CORPUS——那是 2026-08 的过期副本，不带 -i 会用它覆盖线上 322 条 corpus。
+    """
     if not input_path:
-        return RAW_CORPUS
+        raise SystemExit("❌ 必须指定 -i（如 -i persona/world/statement_final.json），"
+                          "不要依赖内置 RAW_CORPUS（过期副本，会覆盖线上 corpus）")
     with open(input_path, "r", encoding="utf-8") as f:
         data = json.load(f)
     if isinstance(data, list):
