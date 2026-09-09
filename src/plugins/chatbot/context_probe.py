@@ -131,8 +131,11 @@ def _weather_line(city: str) -> str:
     if not city or not get_weather_key():
         return ""
 
-    e = _location_cache.get(city)
-    loc_id = (e or {}).get("id", "") if e else ""
+    if str(city).isdigit():
+        loc_id = city            # 本身就是 LocationID
+    else:
+        e = _location_cache.get(city)
+        loc_id = (e or {}).get("id", "") if e else ""
     if not loc_id:
         return ""  # 还没预热出 LocationID → 不阻塞
 
