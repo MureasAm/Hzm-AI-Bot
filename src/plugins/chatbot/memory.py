@@ -2,25 +2,25 @@
 
 NoneBot 单进程运行，同一时刻可能有多条消息触发写入，
 用 threading.Lock 保证「读-改-写」原子化，防止并发互相覆盖。
+
+长期记忆实现放在项目根 memory_manager.py（被 watchdog/评测脚本独立使用，
+不适合塞进插件包触发 NoneBot 初始化），这里按文件路径直接加载它——不再改 sys.path。
 """
+import importlib.util
 import json
 import threading
-import sys
-from pathlib import Path
 
 from .constants import PROJECT_ROOT, MEMORY_FILE, SHORT_MEMORY_LINES
 
-# 确保能导入项目根目录下的 memory_manager 模块
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
-from memory_manager import (  # noqa: E402  # 长期记忆：记忆卡/关系等级/LLM提取
-    get_user_memory,
-    update_user_memory,
-    build_memory_context,
-    _format_profile_summary,
-    MEMORY_EXTRACT_PROMPT,
-)
+_mm_spec = importlib.util.spec_from_file_location("memory_manager", PROJECT_ROOT / "memory_manager.py")
+_mm = importlib.util.module_from_spec(_mm_spec)
+_mm_spec.loader.exec_module(_mm)
+# 长期记忆：记忆卡/关系等级/LLM提取（从根模块 re-export，语义与原一致）
+get_user_memory = _mm.get_user_memory
+update_user_memory = _mm.update_user_memory
+build_memory_context = _mm.build_memory_context
+_format_profile_summary = _mm._format_profile_summary
+MEMORY_EXTRACT_PROMPT = _mm.MEMORY_EXTRACT_PROMPT
 
 # 短期记忆文件锁（进程内）
 _memory_lock = threading.Lock()
