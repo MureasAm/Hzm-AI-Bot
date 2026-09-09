@@ -6,7 +6,7 @@
 
 > 一句话：**不是靠模型的聪明，而是靠数据、检索、记忆、评测这套体系的构建，让一个 LLM 从"会聊天"变成"像某个人"。**
 
-**一眼了解：** **54** 真实用户 · **六路**语义检索 · **三层**记忆 · **229** 单元测试 · **460+** 条人格数据 · **承诺记忆** · **会开口说话（GPT-SoVITS 语音）**
+**一眼了解：** **54** 真实用户 · **六路**语义检索 · **三层**记忆 · **243** 单元测试 · **460+** 条人格数据 · **承诺记忆** · **会开口说话（GPT-SoVITS 语音）**
 
 ---
 
@@ -92,7 +92,7 @@ corpus（直播记忆）/声音样本/行为触发/措辞指纹四路向量检�
 - **语音回复（GPT-SoVITS）真正落地**：bot 会"开口说话"了——触发规则＝成句(≥30字)朗读成语音条，成功即不再刷文字（失败自动回退文字）；短寒暄（晚安/辛苦啦）可突破下限；**含内心戏括号（小声/心虚/捂脸）一律纯文字**（TTS 表达不了）。NapCat `file://` 直发 wav 实测可用。**踩坑沉淀**：参考音频必须"无尾静音"（带尾静音的 ref 会让合成退化出"几个字 + 十几秒空尾"）；api 默认 `cut5` 分段会吞句，改整句（`cut0`）合成；合成后自动裁首尾静音。
 - **对话记忆的诚实**：背景记忆 guard 细化——被问"怎么又迟到/又鸽"时大方认领老毛病（"灰泽满迟到还要理由？"），**不拿某次具体旧记忆（"那次和谁连麦"）编当下的因果**。
 - **人格一致性收尾**：提示词开头定调"**你就是灰泽满本人**"（别滑进写她旁白的口气）；"她/他"自指替换折中化——只处理带自称名的复指，不再误伤真指别人的第三人称；注入记忆里的"灰泽满……她说……"当转述材料，别原样搬。
-- 工程：`启动.bat` 一键起 bot + GPT-SoVITS；记忆可一键清空换新开聊。单元测试 194→229。
+- 工程：`启动.bat` 一键起 bot + GPT-SoVITS；记忆可一键清空换新开聊。单元测试 194→243。
 
 ## 技术亮点
 
@@ -102,7 +102,7 @@ corpus（直播记忆）/声音样本/行为触发/措辞指纹四路向量检�
 - **人格一致性评测**：InCharacter 式大五人格开放题 + 匿名化防名字作弊，实测实名/匿名都不掉分。
 - **图片与视觉工程**：QQ/B站 CDN 的 Referer 分流、rkey 时效急切缓存、格式归一化、NapCat 本地缓存兜底绕开 CDN。
 - **真人节奏交互**：读秒窗口攒批 + 插话优先（发送中用户插话，取消未发送分段先回新消息）。
-- **工程纪律**：229 个单元测试；方法论 + 踩坑记录持续沉淀进 ROADMAP。
+- **工程纪律**：243 个单元测试；方法论 + 踩坑记录持续沉淀进 ROADMAP。
 
 ## 下一步想做什么
 
@@ -146,49 +146,58 @@ pip install -r requirements.txt
 从直播素材到人格数据的全链路：`python scripts/run_tool.py <工具>` 统一入口（17 子命令按阶段分组）。
 
 ```
-【蒸馏】transcribe → clean-transcript → analyze-pace → convert-to-chat → mine-phrases
-【生成】generate-statements → generate-vectors → generate-persona → extract-persona
-【向量】precompute
+【蒸馏】transcribe → clean-transcript → analyze-pace → convert-to-chat
+【生成】extract-persona(→behaviors 人工审批) / mine-phrases / mine-theme
+         ⚠️ generate-statements 已冷落：语料现直接对 statement_final.json 向量化，不先跑它
+【向量】generate-vectors -i persona/world/statement_final.json → corpus_vectors.json
+         precompute voice-samples|phrases|preferences|core-stories
 【评测】regression / persona-eval / retrieval-eval
-【工具】bili-check / vision-test / mine-theme
+【工具】bili-check / bili-login / vision-test
+不在 run_tool（独立运行）：watchdog.py（假死自愈进程）/ notifier.py（SMTP，被 watchdog 用）
+                     / update_schedule.py（把周表图丢 data/schedule_inbox/ 后无参跑即 OCR 更新周表）
 ```
 
-产物按阶段落盘到 `outputs/` 对应文件夹（transcribe/clean/pace/convert/mine/statements/eval），最终源数据 `persona/world/statement_final.json` → `persona/world/corpus_vectors.json`。
+产物按阶段落盘到 `outputs/` 对应文件夹（transcribe/clean/pace/convert/mine/statements/eval），最终源数据 `persona/world/statement_final.json` → `persona/world/corpus_vectors.json`（机器人只读后者）。
 
-> 改过 `persona/behavior/behaviors.json` / `persona/speech/voice_samples.json` / `persona/speech/phrases.json` 等后需重跑对应 `precompute`。
+> 改过 `persona/behavior/behaviors.json` / `persona/speech/voice_samples.json` / `persona/speech/phrases.json` / `persona/world/preferences.json` 后需重跑对应向量；source 与 *_vectors 缓存不同步时会用旧文本检索。
 
 ## 项目结构
 
 ```
 bot.py                       # 启动入口
+memory_manager.py            # 长期记忆（long_term.json）实现（被 src/.../memory.py re-export）
 src/plugins/chatbot/         # 运行时核心
-├── core.py                  # 主循环（组装 + 生成 + 记忆更新）
-├── reply_style.py           # 回复风格后处理（clean_reply / split_reply / 复读检测）
-├── routing.py               # 硬匹配路由（梗库双路由 + 行为意图分类 L3）
-├── retrieval.py             # 六路检索 + RRF 融合 + 预算截断 + 关键词门
-├── config.py                # 配置读取 + API 客户端工厂
-├── persona.py               # 人格数据加载 + trigger 向量缓存 + terms
-├── memory.py                # 短期记忆 + 长期封装
-├── session_memory.py        # 会话级记忆（话题追踪 + 指代性消息补全）
-├── context_probe.py         # 时间/农历/天气感知
+├── core.py                  # 主循环（组装 + 生成 + 记忆更新 + 复读/措辞固化防护）
+├── reply_style.py           # 纯函数后处理（clean_reply / split_reply / 复读/措辞检测）
+├── routing.py               # 硬路由（legendary 梗库双路由 + 行为意图 L3）
+├── retrieval.py             # 六路检索 + RRF + 预算/关键词门（行为走 L3，不走向量）
+├── config.py / constants.py # 配置读取+客户端工厂 / 可调参数集中 ★
+├── persona.py               # 人格/traits/styles/terms/schedule 加载
+├── memory.py                # 短期记忆（带锁）
+├── session_memory.py        # 会话级记忆（话题追踪 + 指代补全）
+├── group_memory.py          # 群级记忆（成员 id→昵称 + 群近况 events）
+├── context_probe.py         # 时间/农历/天气/直播状态感知
 ├── vision.py                # glm-4.6v 看图
-├── chat_window.py           # 读秒窗口 + 分批发送
-├── bili_bridge.py           # B站开播/动态联动推送
-└── constants.py             # 所有可调参数 ★
-persona/                     # 角色人格 + 她的记忆（按分层职责分子目录，源文件 + 向量放一起）
-├── core/                    #   核心人设：system_prompt + traits + styles（她是谁）
-├── behavior/                #   行为：behaviors + trigger_vectors（怎么反应）
-├── speech/                  #   说话：voice_samples(86)+phrases(11) + 向量（怎么说）
-└── world/                   #   世界：terms(28)+core_stories(5)+preferences(24)+corpus(322)（经历/懂什么）
-user_memory/                 # 对用户的记忆
-├── short_term.json          #   短期（最近 5 轮原文）
+├── chat_window.py           # 读秒攒批窗口 + 分批发送（含群现场/群记忆写入）
+├── bili_bridge.py           # B站开播/动态 → 私聊广播
+├── weibo_bridge.py          # 微博新博 → 私聊广播（cookie jar 会话）
+├── voice.py                 # GPT-SoVITS 语音（合成/静音裁剪/达标重试）
+└── __init__.py              # 事件入口 + 心跳/在线信号 + 自动通过好友
+persona/                     # 角色人格 + 她的记忆（源文件 + 向量）
+├── core/                    #   人设：system_prompt + traits + styles
+├── behavior/                #   行为：behaviors(+samples) + behavior_keywords(判别词)
+├── speech/                  #   说话：voice_samples + phrases（源 + 向量）
+└── world/                   #   世界：terms/lorebook、preferences、core_stories、legendary、schedule(周表)、statement_final→corpus_vectors
+user_memory/                 # 对用户/群的记忆
+├── short_term.json          #   短期（最近几轮原文）
 ├── long_term.json           #   长期（用户画像 + 承诺）
-└── session.json             #   会话级（当前话题 + 本场事件）
+├── session.json             #   会话级（当前话题 + 本场事件）
+└── groups.json              #   群级（成员身份 + 群近况）
 outputs/                     # 分析产物（按阶段分文件夹，gitignore）
-assets/                      # 原始素材（音频）+ 展示图（img/）
-data/                        # 运行时状态：bili_state.json（B站联动）
-scripts/                     # 离线工具箱 + 评测（run_tool.py 统一入口）
-tests/                       # 229 个单元测试
+assets/                      # 原始素材（音频、参考音频 voice_refs、表情 emotes）+ 展示图
+data/                        # 运行时状态：bili_state / weibo_state / weibo_cookies(会话jar) / heartbeat / voice_cache / schedule_inbox
+scripts/                     # 离线工具箱 + 自愈：run_tool.py 统一入口；watchdog.py / notifier.py / update_schedule.py 独立运行
+tests/                       # 230+ 个单元测试（约 243）
 ```
 
 ## 结语

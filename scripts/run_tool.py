@@ -7,9 +7,12 @@
     python scripts/run_tool.py --help
     python scripts/run_tool.py <工具> --help
 
-7 个子命令：transcribe / analyze-pace / generate-vectors / generate-persona
-           / precompute / pipeline / regression
-
+实际 17 个子命令，分五组：蒸馏(transcribe/clean-transcript/convert-to-chat/analyze-pace)
+/ 生成(generate-statements/generate-vectors/generate-persona)
+/ 向量(precompute voice-samples|phrases|preferences|core-stories)
+/ 评测(regression/persona-eval/retrieval-eval)
+/ 工具(bili-check/bili-login/vision-test/mine-phrases/mine-theme/extract-persona)。
+generate-statements 已冷落（现直接对 statement_final.json 向量化）；generate-persona 会覆盖人格需 --danger。
 旧脚本仍可直接运行（向后兼容），本入口为推荐用法。
 """
 import argparse
