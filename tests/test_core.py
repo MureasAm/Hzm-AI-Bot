@@ -50,6 +50,29 @@ class TestSplitReply:
             "灰泽满今天嗓子特别不舒服……明天就想早点下播休息一下", min_len=0
         ) == ["灰泽满今天嗓子特别不舒服……", "明天就想早点下播休息一下"]
 
+    def test_no_newline_leaks_into_parts(self):
+        # 报告的案例，走真实链路（chat_window: clean_reply → split_reply）：
+        # 短首句被并回后 split_reply 走 `return [text]` 原样返回，换行曾就此漏进消息
+        reply = reply_style.clean_reply("没有。\n\n（小声）mua又不是糖，说给就给的")
+        parts = reply_style.split_reply(reply)
+        assert parts == ["没有。（小声）mua又不是糖，说给就给的"]
+        assert not any("\n" in p for p in parts)
+
+    def test_merged_fragments_get_comma_not_runon(self):
+        # 短碎片并回时补逗号：三句碎句不该被焊成"真的是这样明天还要早起呢"
+        parts = reply_style.split_reply(
+            "真的是这样。明天还要早起呢。我先去睡了啊。你也早点休息。晚安。", min_len=0)
+        assert not any("\n" in p for p in parts)
+        assert parts[0] == "真的是这样，明天还要早起呢"
+
+    def test_overflow_parts_joined_without_newline(self):
+        # 超限分段（>max_parts）接成一条，用逗号不用换行
+        long_reply = "灰泽满今天特别想出去玩，但是作业还没写完。" * 6
+        parts = reply_style.split_reply(long_reply, min_len=0, max_parts=2)
+        assert len(parts) == 2
+        assert not any("\n" in p for p in parts)
+        assert "，" in parts[1]
+
 
 class TestEchoReply:
     """复读机防护：检测新回复是否复读最近自己说过的话。"""
@@ -183,6 +206,35 @@ class TestCleanReply:
         assert reply_style.clean_reply("冷死了...........") == "冷死了……"
 
 
+class TestNewlineCleanup:
+    """换行归一：模型偶尔写 RP 式分段，一条消息里带多行（QQ 显示成剧本感，语音读断）。"""
+
+    def test_newline_after_punctuation_joined(self):
+        # 断行跟在句末标点后 → 直接接上（报告的原始案例）
+        assert reply_style.clean_reply("没有。\n\n（小声）mua又不是糖，说给就给的") == \
+            "没有。（小声）mua又不是糖，说给就给的"
+
+    def test_single_newline_after_punctuation(self):
+        assert reply_style.clean_reply("嗯。\n（心虚）") == "嗯。（心虚）"
+
+    def test_newline_without_punctuation_becomes_comma(self):
+        # 前面是实词 → 补逗号，别把两句焊成 run-on
+        assert reply_style.clean_reply("今天真冷\n明天还得早起") == "今天真冷，明天还得早起"
+
+    def test_leading_paren_after_newline_stripped(self):
+        # 换行归一在"剥开头括号前缀"之前生效：原本因换行挡着没剥掉的前缀要剥掉
+        assert reply_style.clean_reply("\n\n（小声）mua又不是糖，说给就给的") == \
+            "mua又不是糖，说给就给的"
+
+    def test_no_newline_leaks_when_all_stripped(self):
+        # 剥光括号的兜底路径也不能把换行带出去
+        assert "\n" not in reply_style.clean_reply("（心虚）\n（小声）")
+
+    def test_no_newline_in_clean_output(self):
+        assert "\n" not in reply_style.clean_reply(
+            "灰泽满今天有点累。\n\n明天还得早起去上第一节课。\n不过还行。")
+
+
 class TestSelfPronounCleanup:
     """clean_reply 的自指"她/他"（折中版）：
     只处理"回复里带自称名(灰泽满/hzm)、没别人名时，句读后复指自己的她/他"（去掉不堆名）；
@@ -219,6 +271,24 @@ class TestSelfPronounCleanup:
         # 折中代价：不带自称名的裸"她"自述不再被强制改名，靠提示词约束模型
         out = reply_style.clean_reply("她转开视线，声音闷闷的：行了")
         assert "她" in out
+
+
+class TestHistoryGapNote:
+    """"距上一轮对话 X"注入【最近对话记录】顶部（一行汇总，不给每行打时间戳）。"""
+
+    def test_note_prepended_to_history(self, monkeypatch):
+        monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
+        msgs = core.build_message_list(
+            "在吗", "p", [], "", ["用户：在吗", "灰泽满：在呢"], history_gap_note="3天")
+        block = [m["content"] for m in msgs if m["content"].startswith("【最近对话记录】")]
+        assert block and block[0].startswith("【最近对话记录】\n（距离上一轮对话已经过去3天了）\n")
+
+    def test_no_note_when_empty(self, monkeypatch):
+        monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
+        msgs = core.build_message_list(
+            "在吗", "p", [], "", ["用户：在吗"], history_gap_note="")
+        block = [m["content"] for m in msgs if m["content"].startswith("【最近对话记录】")]
+        assert block and "距离上一轮对话" not in block[0]
 
 
 class TestPreferences:
@@ -267,6 +337,42 @@ class TestLegendaryMemory:
         await core.handle_chat("u", trigger)
         assert captured, "梗匹配回复也应记入短期记忆"
         assert captured[0][0] == trigger
+
+
+class TestMemoryStoresCleanedReply:
+    """记忆里存的是**清洗后**的她。
+
+    否则她带换行/多括号的原始输出会进记忆，再作为"她自己怎么说话"的 few-shot 喂回去，
+    形成自我强化回路——显示端每次洗掉了，源头却一直被喂养。
+    """
+
+    async def test_memory_gets_cleaned_reply(self, monkeypatch):
+        async def fake_probe(uid, msg, hist, client):
+            return "用户发了个偷笑的表情"   # 纯情绪 → 跳过检索，最小 harness
+
+        captured = {}
+
+        def fake_append(uid, user, reply):
+            captured["reply"] = reply
+
+        async def fake_reply(messages):
+            return "没有。\n\n（小声）mua又不是糖，说给就给的（心虚）"
+
+        async def _noop(*a, **k):
+            pass
+
+        monkeypatch.setattr(core, "probe_session", fake_probe)
+        monkeypatch.setattr(core, "generate_reply", fake_reply)
+        monkeypatch.setattr(core, "get_user_history", lambda uid: [])
+        monkeypatch.setattr(core, "get_last_turn_gap_seconds", lambda uid: None)
+        monkeypatch.setattr(core, "append_user_history", fake_append)
+        monkeypatch.setattr(core, "update_memory_task", _noop)
+        monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
+
+        await core.handle_chat("u", "可惜🤭")
+
+        assert "\n" not in captured["reply"], "记忆里不该再有换行"
+        assert captured["reply"].count("（") <= 1, "记忆里不该再有多个括号"
 
 
 class TestClassifyBehavior:

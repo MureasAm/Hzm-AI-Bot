@@ -53,6 +53,45 @@ def _not_null_str(value) -> bool:
     return True
 
 
+def humanize_gap(seconds: float) -> str:
+    """把"过了多少秒"说成人话（"3天"/"2小时"）。<90 秒返回空串——同一场对话里不必提。
+
+    只做粗粒度近似：她要的是"知道过了多久"这个概念，不是精确时长。
+    """
+    try:
+        seconds = float(seconds)
+    except (TypeError, ValueError):
+        return ""
+    if seconds < 90:
+        return ""
+    if seconds < 3600:
+        return f"{int(seconds // 60)}分钟"
+    if seconds < 86400:
+        return f"{int(seconds // 3600)}小时"
+    days = int(seconds // 86400)
+    if days < 30:
+        return f"{days}天"
+    months = days // 30
+    return f"{months}个月"
+
+
+def format_last_seen_gap(last_seen) -> str:
+    """记忆卡里的 last_seen（ISO 字符串）→ "3天"这类间隔描述。
+
+    解析不了（旧卡无此字段/格式异常）返回空串——注入是增益不是必需，失败就当没有。
+    """
+    if not _not_null_str(last_seen):
+        return ""
+    try:
+        dt = datetime.fromisoformat(str(last_seen))
+    except (TypeError, ValueError):
+        return ""
+    delta = (datetime.now() - dt).total_seconds()
+    if delta < 0:
+        return ""  # 时钟回拨/未来时间戳，不注入"负几天"
+    return humanize_gap(delta)
+
+
 def merge_memory_card(card: dict, updates: dict) -> dict:
     """纯函数：将 updates 增量合并到记忆卡，返回新的卡片。不做任何 IO。"""
     card = dict(card)  # 浅拷贝，避免污染外部引用
@@ -195,6 +234,12 @@ def build_memory_context(card: dict) -> str:
         return ""
 
     parts = []
+
+    # 距上次聊天：last_seen 一直在存（merge_memory_card 里写），但以前从不注入——
+    # 模型因此分不清"刚刚说的"和"半个月前说的"，会把旧事当刚发生。
+    gap = format_last_seen_gap(card.get("last_seen"))
+    if gap:
+        parts.append(f"距上次跟TA说话已经过去{gap}了。")
 
     # 用户名字/昵称
     name = card.get("user_name")

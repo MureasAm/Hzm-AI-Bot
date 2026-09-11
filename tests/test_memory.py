@@ -1,4 +1,6 @@
 """memory_manager 记忆卡合并逻辑的单元测试（纯函数，不触 IO）。"""
+from datetime import datetime, timedelta
+
 import pytest
 
 from memory_manager import merge_memory_card, update_user_memory, build_memory_context
@@ -98,3 +100,28 @@ class TestMergeMemoryCard:
         ctx = build_memory_context(card)
         assert ctx == ""
         assert "null" not in ctx
+
+
+class TestLastSeenInjection:
+    """last_seen 一直在存，以前从不注入——模型因此分不清"刚才"和"半个月前"。"""
+
+    def test_recent_gap_injected(self):
+        card = merge_memory_card({}, {})
+        card["last_seen"] = (datetime.now() - timedelta(days=3)).isoformat()
+        assert "3天" in build_memory_context(card)
+
+    def test_fresh_card_says_nothing(self):
+        # 刚聊完（last_seen≈现在）不该冒出"距上次 0 分钟"，同一场对话里这话很怪
+        card = merge_memory_card({}, {})
+        assert "距上次" not in build_memory_context(card)
+
+    def test_missing_last_seen_says_nothing(self):
+        assert "距上次" not in build_memory_context({"user_name": "小明"})
+
+    def test_malformed_last_seen_ignored(self):
+        assert "距上次" not in build_memory_context({"last_seen": "不是时间"})
+
+    def test_future_timestamp_ignored(self):
+        # 时钟回拨/脏数据不该注入"负几天"
+        card = {"last_seen": (datetime.now() + timedelta(days=5)).isoformat()}
+        assert "距上次" not in build_memory_context(card)

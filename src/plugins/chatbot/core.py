@@ -23,6 +23,7 @@ from .memory import (
     get_user_history, append_user_history,
     get_user_memory, update_user_memory, build_memory_context,
     _format_profile_summary, MEMORY_EXTRACT_PROMPT,
+    get_last_turn_gap_seconds, humanize_gap,
 )
 from .rag import embed_query
 from .retrieval import (
@@ -257,7 +258,7 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
                        batch_summary: str = "", preference_items: list = None,
                        core_stories: list = None, session_context: str = "",
                        query_hint: str = "", denied_terms: set | None = None,
-                       group_context: str = "") -> list:
+                       group_context: str = "", history_gap_note: str = "") -> list:
     """按优先级组装发送给模型的消息列表。
 
     fused_items 为三路融合后的 RetrievalItem 列表，按源分组注入。
@@ -363,7 +364,7 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
                            f"只当'她记得的经历'自然带出（聊到相关话题时'之前那次…'），不整段复述、不模仿里面的叙述口吻。"
                            f"**别拿背景记忆编当下的因果**——"
                            f"① 她一贯的毛病（迟到/睡过头/拖延/临时鸽/熬夜）是她的常态：被问'怎么又迟到/又鸽/为什么迟到'这类时，"
-                           f"直接认领常态就好，嘴硬自洽地接（'灰泽满迟到还要理由？''老套理由：睡过头/网络''老毛病了别问'），"
+                           f"直接认领常态就好，嘴硬自洽地接，"
                            f"不需要也编不出'这一次'的具体原因，别硬解释；"
                            f"② 某次具体的旧记忆（那次和谁连麦、那次赶作业到半夜）只当讲古素材，**绝不能拿来当这次迟到/鸽的理由去编因果**；"
                            f"若确实在说当下且感知没给原因，就大方说不知道/打哈哈，别从旧事现编一个。"
@@ -381,6 +382,10 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
     if user_history:
         if isinstance(user_history, list):
             context = "\n".join(user_history)
+            if history_gap_note:
+                # 只加一行汇总，不给每行打时间戳——要的是"知道隔了多久"这个概念，
+                # 不是让她复述"3天前"。同一场对话内 humanize_gap 返回空串，不注入。
+                context = f"（距离上一轮对话已经过去{history_gap_note}了）\n" + context
             # 一致性规则 + 防复读：灰泽满自己的话是历史背景，用户没主动追问就不重复
             context += (
                 "\n\n【一致性规则】解释同一件事（如'今天为什么没播'）时，借口要与之前保持一致，"
@@ -419,7 +424,7 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
     if samples:
         messages.append({
             "role": "system",
-            "content": "【灰泽满的说话方式参考】以下是她真实的对话片段。只学其中的语气、断句、省略号、自称（灰泽满/hzm）和措辞。括号是她的'心里话标注'，只在情绪顶点才用一个（如（小声）），日常回复默认一个都不用。内容要针对当前话题，不要复述、也不要套用示例里的具体内容（人物/礼物/衣服/事件等）。日常回复保持短句、简短干脆。"
+            "content": "【灰泽满的说话方式参考】以下是她真实的对话片段。只学其中的语气、断句、自称（灰泽满/hzm）和措辞。内容要针对当前话题，不要复述、也不要套用示例里的具体内容（人物/礼物/衣服/事件等）。日常回复保持短句、简短干脆。"
         })
         # 同一句真人原话可能既作为"行为示范"被注入、又被 RRF 命中当风格样本——
         # 已作为行为示范出现过的就不重复塞，避免同轮同句出现两遍。
@@ -457,8 +462,8 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
             emoji_hint = (
                 f"【用户发了表情】{query_hint}\n"
                 "用户只发了一个表情，没有任何文字。请按这个表情的真实情绪回应，并体现这种情绪该有的态度：\n"
-                "- 无语/无奈（😅）→ 略带攻击性地反击，类似'感觉你不是很服气？'\n"
-                "- 委屈/哭（😭）→ 心软安慰，但不要套用当前话题的模板（如别硬扯'夸你可爱'）\n"
+                "- 无语/无奈（😅）→ 先认出这是无语/无奈就好，怎么接按她的性子自然来，不规定动作\n"
+                "- 委屈/哭（😭）→ 心软安慰，但不要套用当前话题的模板\n"
                 "- 其他情绪 → 按情绪的自然反应回应\n"
                 "不要复述表情，不要顺着当前话题硬接，只回应这个情绪。"
             )
@@ -609,6 +614,9 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     query_text = user_msg.strip()
     user_history = get_user_history(user_id)
     history_text = "\n".join(user_history[-6:]) if user_history else ""
+    # 距上一轮多久（此刻还没 append 本轮，最后一条就是上一轮）。同一场对话内为空串
+    _gap_sec = get_last_turn_gap_seconds(user_id)
+    history_gap_note = humanize_gap(_gap_sec) if _gap_sec is not None else ""
     retrieval_query = query_text
     if query_text:
         retrieval_query = await probe_session(user_id, query_text, history_text, deepseek_client)
@@ -709,6 +717,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         preference_items=preference_items, core_stories=core_stories,
         session_context=session_context, query_hint=query_hint,
         denied_terms=denied_terms, group_context=group_context,
+        history_gap_note=history_gap_note,
     )
 
     # --- 🤖 调用大模型 ---
@@ -747,8 +756,11 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         reply = await generate_reply(list(messages) + [nudge])
 
     # --- 💾 更新短期记忆（带锁）：图片消息把视觉描述记进去，后续才记得聊过什么图 ---
+    # 存**清洗后**的版本（clean_reply 平时在 chat_window 里、本函数返回之后才跑）：
+    # 否则她带换行/多括号的原始输出会存进记忆，再作为"她自己怎么说话"的 few-shot 喂回去，
+    # 变成自我强化回路——后处理每次都得再洗一遍，坏习惯却一直被喂养。
     record_msg = _compose_record_msg(user_msg, vision_desc)
-    append_user_history(user_id, record_msg, reply)
+    append_user_history(user_id, record_msg, clean_reply(reply))
 
     # --- 📝 异步更新长期记忆（会话级记忆已在对话前 probe_session 同步更新） ---
     if not is_group:  # 群会话不建用户记忆卡

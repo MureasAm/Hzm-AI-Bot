@@ -1,4 +1,4 @@
-> 2026-09 对齐说明：本文件的踩坑与版本史主要停在 2026-08 中旬。之后新增 weibo_bridge、voice(GPT-SoVITS 语音)、group_memory(群记忆)、schedule(周表+update_schedule 识图)、watchdog+notifier、越界行为细化等，均未在本文件展开。全项目最新结构清单与一次「方法论不符点」整理见 docs/项目整理_2026-09.md；运行时概览见 README。语料维护现状：generate-statements 已冷落，直接对 persona/world/statement_final.json 向量化（generate-vectors）。
+> 2026-09 对齐说明：本文件的踩坑与版本史主要停在 2026-08 中旬。之后新增 weibo_bridge、voice(GPT-SoVITS 语音)、group_memory(群记忆)、schedule(周表+update_schedule 识图)、watchdog+notifier、越界行为细化等，均未在本文件展开。全项目最新结构清单见 `FILE_MAP.md`，还没做的问题见 `待办清单.md`；运行时概览见 README。语料维护现状：generate-statements 已冷落，直接对 persona/world/statement_final.json 向量化（generate-vectors）。
 
 # 灰泽满 AI 机器人 · 开发路线图 & 会话交接
 

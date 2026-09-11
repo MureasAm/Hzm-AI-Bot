@@ -1,4 +1,5 @@
-"""语音回复：GPT-SoVITS 合成 → QQ 语音消息（接入方案见 D:\\my_qq_bot\\语音接入方案.md）。
+"""语音回复：GPT-SoVITS 合成 → QQ 语音消息（服务地址/参考音频/阈值见 constants.py 的
+SOVITS_URL / SOVITS_REF_DIR / VOICE_MIN_LEN；总开关是 .env 的 VOICE_ENABLED）。
 
 原则：成句(≥30字)回复朗读成语音条；短敷衍词/含内心戏括号 → 打字文字（互斥，不双发）。
 灰泽满实际回复多为 15~45 字一句（样本最长 60），语音覆盖"完整成句"档，朗读模型擅成句。

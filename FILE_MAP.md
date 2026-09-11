@@ -1,7 +1,7 @@
 # 文件地图（谁是什么 · 一看就懂）
 
 > 给使用者/接手的开发者看。按"入口 → 运行时 → 人格数据 → 工具 → 测试 → 产物"组织。
-> 版本史与一次"方法论不符点"整理见 `docs/项目整理_2026-09.md`。
+> 版本史见 `ROADMAP.md`；**还没做的问题**见 `待办清单.md`（从 2026-09 全项目通读蒸馏）。
 
 ## 一、入口（怎么跑起来）
 
@@ -22,6 +22,7 @@
 | `retrieval.py` | 检索融合 | corpus/voice/phrase 向量 + behavior(L3) 走 RRF；preference/core_story 命中才带；关键词门/预算 |
 | `routing.py` | 硬路由 | legendary 梗库（含 LLM 语境确认）+ 行为意图分类 L3 |
 | `persona.py` | 人格加载 | traits/styles/behaviors、terms、schedule 的读取与拼装 |
+| `rag.py` | 向量工具 | embedding 客户端封装（`embed_query` 等），检索层的底座 |
 | `memory.py` | 短期记忆 | short_term.json 带锁读写；并加载根 memory_manager 供长期 |
 | `session_memory.py` | 会话记忆 | session.json（话题/事件/指代补全） |
 | `group_memory.py` | 群记忆 | groups.json：成员 id→昵称 + 群近况 events |
@@ -66,8 +67,8 @@
 
 > ⚠️ `generate-persona` 会覆盖人格三件套，需 `--danger`；`generate-vectors` 缺省指向 statement_final，别靠内置 RAW_CORPUS。
 
-## 五、测试（`tests/`，约 243 个）
-`conftest.py` 初始化 NoneBot 并加载插件。核心逻辑（reply_style/retrieval/session/voice/chat_window/bili/group_memory/weibo 纯函数）覆盖较全；config/__init__ 心跳覆盖少。
+## 五、测试（`tests/`，280 个）
+`conftest.py` 初始化 NoneBot 并加载插件。核心逻辑（reply_style/retrieval/session/voice/chat_window/bili/group_memory/weibo/short_memory 纯函数）覆盖较全；weibo 推送、config、`__init__` 心跳、watchdog/notifier 覆盖少。
 
 ## 六、运行产物/状态（不入库）
 - `data/`：bili_state / weibo_state / weibo_cookies(会话jar) / heartbeat / qq_alive|offline / voice_cache / schedule_inbox

@@ -184,6 +184,20 @@ def _limit_commas(parts: list) -> list:
     return [x for x in result if x]
 
 
+def _join_fragments(frags: list) -> str:
+    """把小段接回一条消息：左段没有收尾标点时补逗号，防"两句焊成 run-on"。
+
+    切分时句尾"。"已被去掉（聊天习惯不打句号），直接相连会读成一句话：
+    "真的是这样"+"明天还要早起呢" → "真的是这样明天还要早起呢"。
+    """
+    out = ""
+    for f in frags:
+        if out and not re.search(r"[，,。；;：:！!？?、…～~）)】\]]$", out):
+            out += "，"
+        out += f
+    return out
+
+
 def split_reply(reply: str, min_len: int = SPLIT_MIN_LEN,
                 max_parts: int = SPLIT_MAX_PARTS) -> list:
     """把长回复按句子断开发送（打字感）。短回复/单句不拆，返回单元素列表。
@@ -216,21 +230,22 @@ def split_reply(reply: str, min_len: int = SPLIT_MIN_LEN,
     i = 0
     while i < len(parts):
         if i + 1 < len(parts) and len(parts[i]) < SPLIT_MERGE_MIN_CHARS:
-            parts[i + 1] = parts[i] + parts[i + 1]
+            parts[i + 1] = _join_fragments([parts[i], parts[i + 1]])
         else:
             merged_short.append(parts[i])
         i += 1
     parts = merged_short
     if len(parts) > 1 and len(parts[-1]) < SPLIT_MERGE_MIN_CHARS:
-        parts[-2] += parts[-1]
+        parts[-2] = _join_fragments([parts[-2], parts[-1]])
         parts.pop()
 
     if len(parts) <= 1:
         return [text]
 
     if len(parts) > max_parts:
-        # 超限分段用换行连接（防 run-on）
-        merged = "\n".join(p for p in parts[max_parts - 1:] if p).strip()
+        # 超限分段接成一条（补逗号防 run-on）。原用换行连接：换行在 QQ 里显示成
+        # "一条消息里的多行"（剧本感），语音也会被读成上气不接下气，改用逗号接。
+        merged = _join_fragments([p for p in parts[max_parts - 1:] if p])
         parts = parts[:max_parts - 1] + [merged]
     return parts
 
@@ -244,20 +259,29 @@ def split_delay(part_text: str) -> float:
 
 
 def clean_reply(reply: str) -> str:
-    """输出清洗：去括号前缀、整条至多 1 个括号、省略号归一并限频、第三人称自指兜底。
+    """输出清洗：换行归一、去括号前缀、整条至多 1 个括号、省略号归一并限频、第三人称自指兜底。
 
     人设规则是"每轮回复至多一个括号、省略号是例外"，但声音样本里带（小声）（心虚），
     模型 few-shot 会学着用。这里做确定性过滤。
     """
     text = reply.strip()
+    # 换行归一：她的输出永远是"一条消息、一口气"，不分段。
+    # 模型偶尔写成 RP 式分段（"没有。\n\n（小声）mua又不是糖，说给就给的"），
+    # 在 QQ 里就是"一条消息里的多行"（剧本感），语音也会被读成上气不接下气。
+    # 规则：断行跟在标点后 → 直接接上；跟在实词后 → 补逗号（两行焊死会读成 run-on）。
+    text = re.sub(r"[ \t]*(?:\r?\n[ \t]*)+", "\n", text)
+    text = re.sub(r"(?<=[，,。；;：:！!？?、…～~）)】\]])\n+", "", text)
+    text = re.sub(r"\n+", "，", text)
     # 去掉开头的连续括号前缀，如 （咽口水）你看...
-    while text.startswith("（"):
-        idx = text.find("）")
+    stripped = text
+    while stripped.startswith("（"):
+        idx = stripped.find("）")
         if idx == -1:
             break
-        text = text[idx + 1:].lstrip()
-    if not text:
-        return reply  # 剥光了就回原样，避免空回复
+        stripped = stripped[idx + 1:].lstrip()
+    if not stripped:
+        return text or reply  # 剥光了就回原样（用归一后的，别把换行又带出去）
+    text = stripped
     # 若仍有 ≥2 个括号，只保留第一个，其余删除
     matches = list(re.finditer(r'（[^）]*）', text))
     if len(matches) >= 2:

@@ -65,10 +65,12 @@ class TestShouldVoice:
         assert v.should_voice("晚安（心虚）") is False   # 寒暄也打不过内心戏括号铁则
 
     def test_paren_tail_not_counted_toward_length(self):
-        # 原文带括号尾巴够 20 字、但剥括号后实际读出来不足 20 字 → 仍文字
-        reply = "要啊，灰泽满明天还得早起呢。（不然上学要迟到了）"
-        assert len(reply) >= 20               # 原文 ≥20 会误触发旧逻辑
-        assert v.should_voice(reply) is False  # 读出来只有 14 字 → 不该语音
+        # 长度看的是"实际会读出来的文本"，不是原文——否则带长括号尾巴的短句会被误判成语音。
+        # 括号内容要够长，才能让"按原文判长度"真的会误判（否则原文本身就 <30，测不出东西）
+        reply = "要啊，灰泽满明天还得早起呢。（不然上学要迟到了，昨天就已经迟到十分钟了）"
+        assert len(reply) >= 30                 # 原文 ≥30：按原文判长度就会误触发
+        assert len(v._tts_text(reply)) < 30     # 剥掉括号后其实只有 14 字
+        assert v.should_voice(reply) is False   # 所以仍该走文字
 
 
 class TestTtsText:

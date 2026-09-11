@@ -177,7 +177,6 @@ def _live_status_text() -> str:
     if not BILI_STATE_FILE.exists():
         return ""
     try:
-        import json
         state = json.loads(BILI_STATE_FILE.read_text("utf-8"))
         is_live = bool(state.get("last_live_status", False))
     except (json.JSONDecodeError, OSError):
