@@ -7,6 +7,7 @@ import json
 import random
 import asyncio
 import re
+import time
 
 from nonebot import get_driver
 from openai import AsyncOpenAI
@@ -18,7 +19,10 @@ from .constants import (
     MEMORY_EXTRACT_TEMPERATURE, MEMORY_EXTRACT_MAX_TOKENS,
     VOICE_SAMPLE_REPLY_TRIM_CHARS,
 )
-from .persona import load_persona_rules, build_global_persona_context, load_schedule
+from .persona import (
+    load_persona_rules, build_global_persona_context, load_schedule,
+    schedule_note_is_fresh, schedule_note_age_days,
+)
 from .memory import (
     get_user_history, append_user_history,
     get_user_memory, update_user_memory, build_memory_context,
@@ -282,10 +286,16 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
     weekly = sched.get("weekly") if sched else None
     if weekly:
         lines = "、".join(f"{x.get('day')} {x.get('time')}" for x in weekly if x.get('day'))
+        # 近况是"临时事实"，超期就不注入——**她在忙什么**会被当"现在为什么迟到/没播"的理由，
+        # 而旧近况 + 【一致性规则】会把那个借口锁死（实测"搬家"被用了一周）。
+        # weekly 是 weekday 制的固定表，到周自动对，不受此影响。
         note = (sched.get("近况") or "").strip()
         note_txt = ""
-        if note:
-            note_txt = f"。近况：{note}（近况更新于 {sched.get('近况_updated', '?')}，过期就忽略）"
+        if note and schedule_note_is_fresh(sched):
+            note_txt = f"。近况：{note}"
+        elif note:
+            age = schedule_note_age_days(sched)
+            print(f"[周表] 近况已过期（{age:.0f} 天前更新），本轮不注入：{note[:30]}")
         messages.append({
             "role": "system",
             "content": f"【灰泽满的周表】她的固定直播安排：{lines}{note_txt}。"
@@ -699,7 +709,15 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         gm = group_memory.get_group(user_id)   # user_id 此时 = 群号
         members = [n for n in (gm.get("members") or {}).values() if n]
         names = "、".join(members[-12:]) or "（还没太熟的几个绿冻）"
-        events = [e.get("text", "") for e in (gm.get("events") or [])[:3] if e.get("text")]
+        # 带相对时间注入：群近况事件存了 t，以前注入时丢掉 → 上周的事被当"现在"。
+        # 和 schedule 近况是同一个坑（存了时间戳、注入时丢），见 constants.SCHEDULE_NOTE_TTL_DAYS 的注释。
+        events = []
+        for e in (gm.get("events") or [])[:3]:
+            txt = (e.get("text") or "").strip()
+            if not txt:
+                continue
+            gap = humanize_gap(time.time() - float(e.get("t") or 0)) if e.get("t") else ""
+            events.append(f"{txt}（{gap}前）" if gap else txt)
         evtxt = "；".join(events) or "（刚进群，还没太熟）"
         group_context = f"在场成员：{names}。群内近况：{evtxt}"
     weather_city = (user_memory_card or {}).get("weather_city", "") or ""

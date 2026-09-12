@@ -1,7 +1,7 @@
 import json
 import threading
 from pathlib import Path
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional, Dict, Any
 
 MEMORY_FILE = Path(__file__).resolve().parent / "user_memory" / "long_term.json"
@@ -73,6 +73,32 @@ def humanize_gap(seconds: float) -> str:
         return f"{days}天"
     months = days // 30
     return f"{months}个月"
+
+
+def format_day_gap(value) -> str:
+    """**只有日期**的时间戳（'YYYY-MM-DD'）距今多久 → "昨天"/"3天前"/"2个月前"。
+
+    为什么不复用 format_last_seen_gap：那条把纯日期解析成当天 00:00，于是
+    "今天的记忆"会被算成"18小时前"——**小时数对日期型数据是假精度**。
+    返回空串表示"就是今天/更近或不可解析"，调用方不要加前缀。
+    """
+    if value is None:
+        return ""
+    raw = str(value).strip()
+    if not raw:
+        return ""
+    try:
+        d = date.fromisoformat(raw[:10])
+    except (TypeError, ValueError):
+        return ""
+    days = (date.today() - d).days
+    if days <= 0:
+        return ""
+    if days == 1:
+        return "昨天"
+    if days < 30:
+        return f"{days}天前"
+    return f"{days // 30}个月前"
 
 
 def format_last_seen_gap(last_seen) -> str:
@@ -294,9 +320,15 @@ def build_memory_context(card: dict) -> str:
     # 最近的亮点时刻
     moments = card.get("significant_moments", [])
     if moments:
-        recent = moments[-1]["summary"] if isinstance(moments[-1], dict) else str(moments[-1])
+        last = moments[-1]
+        recent = last["summary"] if isinstance(last, dict) else str(last)
         if _not_null_str(recent):
-            parts.append(f"你们之间最近的记忆：{recent}。聊到相关话题时可自然提起。")
+            # 带相对时间：这条一直存着 date 却从不注入，于是几个月前的时刻也被说成"最近的记忆"。
+            # 和 schedule 近况/群近况是同一个坑——见 constants.SCHEDULE_NOTE_TTL_DAYS 的注释。
+            # 用 format_day_gap（按天）而不是 format_last_seen_gap（按秒）：纯日期没有小时精度。
+            gap = format_day_gap(last.get("date") if isinstance(last, dict) else None)
+            parts.append(f"你们之间最近的记忆{'（' + gap + '）' if gap else ''}：{recent}。"
+                         f"聊到相关话题时可自然提起。")
 
     # 承诺/约定（跨会话记住）
     promises = card.get("promises", [])

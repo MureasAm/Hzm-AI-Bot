@@ -3,10 +3,11 @@
 trigger 向量已离线预计算到 trigger_vectors.json，运行时读缓存。
 """
 import json
+from datetime import date, datetime
 
 from .constants import (
     TRAITS_FILE, STYLES_FILE, BEHAVIORS_FILE,
-    TERMS_FILE, SCHEDULE_FILE,
+    TERMS_FILE, SCHEDULE_FILE, SCHEDULE_NOTE_TTL_DAYS,
 )
 
 
@@ -47,6 +48,37 @@ def load_schedule():
         except (json.JSONDecodeError, OSError):
             _schedule_cache = {}
     return _schedule_cache
+
+
+def schedule_note_age_days(sched: dict) -> float | None:
+    """近况（"这周在收拾搬家"这类临时事实）距今多少天。
+
+    返回 None = 没有近况或日期缺失/解析不了（调用方当作"不可信"，别当当前事实用）。
+    """
+    if not isinstance(sched, dict):
+        return None
+    raw = str(sched.get("近况_updated") or "").strip()
+    if not raw:
+        return None
+    try:
+        d = date.fromisoformat(raw) if len(raw) == 10 else datetime.fromisoformat(raw).date()
+    except (TypeError, ValueError):
+        return None
+    delta = (date.today() - d).days
+    return float(delta) if delta >= 0 else None   # 未来日期 = 脏数据，不可信
+
+
+def schedule_note_is_fresh(sched: dict, ttl_days: int = SCHEDULE_NOTE_TTL_DAYS) -> bool:
+    """近况是否还在有效期内。**超期就该整条不注入**——过期的事实等于不存在。
+
+    为什么在代码里判、不交给模型：模型不知道阈值、也不会拿"更新于 X"去和当前时间
+    做减法；更要命的是【一致性规则】会把第一次用错的借口锁死，错误只固化不自我纠正。
+    实测踩坑：近况"这周在收拾搬家"（更新于 09-05）被当当前理由用了一周。
+    """
+    age = schedule_note_age_days(sched)
+    if age is None:
+        return False
+    return age < ttl_days
 
 
 def load_persona_rules():

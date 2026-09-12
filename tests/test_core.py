@@ -283,6 +283,88 @@ class TestHistoryGapNote:
         assert block and "距离上一轮对话" not in block[0]
 
 
+class TestScheduleNoteInjection:
+    """近况是"临时事实"，超期就不该注入——否则会被当"现在为什么迟到/没播"的理由。"""
+
+    def _inject(self, monkeypatch, sched):
+        monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
+        monkeypatch.setattr(core, "load_schedule", lambda: sched)
+        msgs = core.build_message_list("你怎么又鸽了", "p", [], "", [])
+        block = [m["content"] for m in msgs if "周表" in m["content"]]
+        return block[0] if block else ""
+
+    def test_fresh_note_injected(self, monkeypatch):
+        from datetime import date
+        text = self._inject(monkeypatch, {
+            "weekly": [{"day": "周一", "time": "20:00"}],
+            "近况": "这周在收拾搬家",
+            "近况_updated": str(date.today()),
+        })
+        assert "这周在收拾搬家" in text
+
+    def test_stale_note_not_injected(self, monkeypatch):
+        from datetime import date, timedelta
+        text = self._inject(monkeypatch, {
+            "weekly": [{"day": "周一", "time": "20:00"}],
+            "近况": "这周在收拾搬家",
+            "近况_updated": str(date.today() - timedelta(days=7)),
+        })
+        assert "搬家" not in text, "过期近况不该被当当前事实注入"
+        assert "周一 20:00" in text, "周表本身（weekday 制，不过期）要照常注入"
+
+    def test_weekly_injected_without_note(self, monkeypatch):
+        text = self._inject(monkeypatch, {"weekly": [{"day": "周六", "time": "19:00"}]})
+        assert "周六 19:00" in text
+
+
+class TestGroupEventAge:
+    """群近况事件存了 t，注入时要带相对时间（以前只取 text → 上周的事被当"现在"）。"""
+
+    async def test_event_injected_with_relative_age(self, monkeypatch):
+        import time as _t
+        now = _t.time()
+        monkeypatch.setattr(core, "get_user_history", lambda uid: [])
+        monkeypatch.setattr(core, "get_last_turn_gap_seconds", lambda uid: None)
+        monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
+        monkeypatch.setattr(core.group_memory, "get_group", lambda gid: {
+            "members": {"1": "绿冻A"},
+            "events": [{"t": now - 3 * 86400, "text": "群里在聊新游戏"},
+                       {"t": now - 60, "text": "刚有人发了张图"}],
+        })
+        monkeypatch.setattr(core, "load_schedule", lambda: {})
+
+        async def fake_probe(uid, msg, hist, client):
+            return msg
+
+        monkeypatch.setattr(core, "probe_session", fake_probe)
+
+        async def _no_intent(*a, **k):   # classify_behavior 是 await 的
+            return ""
+
+        monkeypatch.setattr(core, "classify_behavior", _no_intent)
+
+        captured = {}
+
+        async def fake_reply(messages):
+            captured["msgs"] = messages
+            return "嗯"
+
+        monkeypatch.setattr(core, "generate_reply", fake_reply)
+        monkeypatch.setattr(core, "append_user_history", lambda *a, **k: None)
+
+        async def _noop(*a, **k):
+            pass
+
+        monkeypatch.setattr(core, "update_memory_task", _noop)
+        await core.handle_chat("12345", "群里有啥好玩的", is_group=True)
+
+        block = next((m["content"] for m in captured["msgs"] if "群聊现场" in m["content"]), "")
+        assert "群里在聊新游戏（3天前）" in block, f"群近况该带相对时间，实际：{block}"
+        # 刚发生的事不带时间前缀（humanize_gap 对 <90s 返回空串）——读起来就是"现在"，
+        # 标个"1分钟前"反而是噪音。
+        assert "刚有人发了张图" in block and "发了张图（" not in block
+
+
 class TestPreferences:
     def test_injects_retrieved_preferences(self, monkeypatch):
         monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")

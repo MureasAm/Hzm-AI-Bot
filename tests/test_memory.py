@@ -1,5 +1,5 @@
 """memory_manager 记忆卡合并逻辑的单元测试（纯函数，不触 IO）。"""
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import pytest
 
@@ -125,3 +125,36 @@ class TestLastSeenInjection:
         # 时钟回拨/脏数据不该注入"负几天"
         card = {"last_seen": (datetime.now() + timedelta(days=5)).isoformat()}
         assert "距上次" not in build_memory_context(card)
+
+
+class TestSignificantMomentAge:
+    """"最近的记忆"一直存着 date 却从不注入 → 几个月前的事也被说成"最近的"。
+
+    和 schedule 近况 / 群近况同一个坑：**存了时间戳、注入时丢掉**。
+    """
+
+    def test_moment_injected_with_age(self):
+        card = {"significant_moments": [
+            {"date": (date.today() - timedelta(days=3)).isoformat(), "summary": "一起看了流星"}]}
+        ctx = build_memory_context(card)
+        assert "一起看了流星" in ctx
+        assert "3天前" in ctx
+
+    def test_recent_moment_has_no_age_prefix(self):
+        # 今天的事不用标"今天前"——humanize_gap 对 <90s 返回空串，这里日期差 0 天
+        card = {"significant_moments": [
+            {"date": date.today().isoformat(), "summary": "刚说的事"}]}
+        ctx = build_memory_context(card)
+        assert "刚说的事" in ctx
+        assert "前）" not in ctx
+
+    def test_moment_without_date_still_injected(self):
+        # 旧数据可能没有 date——不能因为它没时间就不注入内容
+        ctx = build_memory_context({"significant_moments": [{"summary": "一起看了流星"}]})
+        assert "一起看了流星" in ctx
+        assert "前）" not in ctx
+
+    def test_broken_date_ignored(self):
+        ctx = build_memory_context({"significant_moments": [{"date": "不是日期", "summary": "某事"}]})
+        assert "某事" in ctx
+        assert "前）" not in ctx
