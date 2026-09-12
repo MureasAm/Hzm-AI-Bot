@@ -9,13 +9,13 @@ NoneBot2 + OneBot v11(NapCat) 的"灰泽满"人格聊天机器人。核心是**�
 ## 黄金律（违反=返工）
 1. **样本 > 规则；素材层解决，别用提示词打补丁**。台词/例句放数据层（behaviors/phrases/legendary/terms），不写进 system_prompt。
 2. **行为 > 标签**：写"什么情境怎么反应"，别贴性格标签。
-3. **确定性后处理只兜底**（clean_reply/复读/措辞固化），能数据解决就别加代码规则。
+3. **确定性后处理只兜底**（clean_reply/防复读/换行归一），能数据解决就别加代码规则。**别让它伤到人设**——曾有个"防措辞固化"因为 75% 的触发都在拦她自己的自称"灰泽满"而被删掉。
 4. **单一真值**：同一件事只在一个文件维护（历史上 terms/behaviors/提示词三处打架）。
 5. **改数据要重算向量**：改 voice_samples/phrases/preferences/core_stories/statement_final/behaviors 后跑对应 `precompute`/`generate-vectors`，否则检索用旧文本。
 
 ## 怎么跑 / 怎么测
 - 启动：NapCat 自己开 → `env\python.exe api_v2.py`(GPT-SoVITS,端口9880) → `python bot.py`（或双击 `启动.bat`）。**改代码/数据后要重启 bot**（有进程内缓存）。
-- 测试：`.venv\Scripts\python.exe -m pytest -q`（**367 个**，全绿才算完；数字变了说明你增删了用例，顺手改这里）。
+- 测试：`.venv\Scripts\python.exe -m pytest -q`（**365 个**，全绿才算完；数字变了说明你增删了用例，顺手改这里）。
 - 推送：代理常抽风。先试 `git push origin main`（直连有时通），不行再用 `-c http.proxy=http://127.0.0.1:7897/7898`。
 
 ## 别碰 / 危险
