@@ -283,6 +283,39 @@ class TestHistoryGapNote:
         assert block and "距离上一轮对话" not in block[0]
 
 
+class TestConsistencyRuleWording:
+    """【一致性规则】只管事实、不管说法。
+
+    旧文案是"借口要与之前保持一致"——**直接教它复读**：第一次用了某个借口
+    （"威严"/"搬家"）就被规则锁死，错误只固化不自我纠正。
+    这里把判据钉住，防止有人翻回去又写成"保持一致"。
+    """
+
+    def _block(self, monkeypatch):
+        monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
+        monkeypatch.setattr(core, "load_schedule", lambda: {})
+        msgs = core.build_message_list("你怎么又鸽了", "p", [], "", ["用户：你又鸽了", "灰泽满：在忙"])
+        return next(m["content"] for m in msgs if m["content"].startswith("【最近对话记录】"))
+
+    def test_scoped_to_facts_not_wording(self, monkeypatch):
+        b = self._block(monkeypatch)
+        assert "【别自相矛盾】" in b
+        assert "只管**事实**" in b or "只管事实" in b
+
+    def test_no_longer_tells_her_to_keep_the_same_excuse(self, monkeypatch):
+        b = self._block(monkeypatch)
+        assert "借口要与之前保持一致" not in b, "这句会把它锁死在第一次的说法上"
+
+    def test_explicitly_tells_her_to_rephrase_not_copy(self, monkeypatch):
+        b = self._block(monkeypatch)
+        assert "别逐字复读" in b
+
+    def test_repeat_question_no_longer_exempts_anti_repeat(self, monkeypatch):
+        # 旧【防复读】写"用户没有主动追问时"才不重复 → 反复追问正好是复读高发场景却豁免了
+        b = self._block(monkeypatch)
+        assert "用户没有主动追问时" not in b
+
+
 class TestScheduleNoteInjection:
     """近况是"临时事实"，超期就不该注入——否则会被当"现在为什么迟到/没播"的理由。"""
 
