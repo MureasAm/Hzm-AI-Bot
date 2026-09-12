@@ -148,6 +148,46 @@ class TestNewPostPush:
         assert pushed == []
 
 
+class TestPostDeletionDedup:
+    """删博后接口"最新"退回旧博，不该重推（水位线判据，镜像 bili 的撤回场景）。
+
+    踩坑：状态只记一条 id、判据是"和上一条不同"。删掉最新那条后，接口的"最新"
+    退回上一条（更旧、id 更小），与记的不同 → 被判成新微博 → 把旧的又推一遍。
+    """
+
+    def _monitor(self, monkeypatch, post_id, state):
+        m = _make_monitor(uid="1", state=state, _primed=True)
+        _patch(monkeypatch, m, post_id=post_id)
+        monkeypatch.setattr(wb, "_save_state", lambda s: None)
+        monkeypatch.setattr(wb, "get_notify_whitelist", lambda: None)
+        return m
+
+    async def test_newer_post_pushes(self, monkeypatch):
+        m = self._monitor(monkeypatch, "5342326297725556", {"last_post_id": "5342134488270833"})
+        bot = FakeBot(friends=("111",))
+        await m._check_posts(bot)
+        assert len(bot.sent) == 1
+        assert m.state["last_post_id"] == "5342326297725556"
+
+    async def test_deleted_newest_does_not_repush(self, monkeypatch):
+        m = self._monitor(monkeypatch, "5342134488270833", {"last_post_id": "5342326297725556"})
+        bot = FakeBot(friends=("111",))
+        await m._check_posts(bot)
+        assert bot.sent == [], "删博后回退到的旧微博不该重推"
+        assert m.state["last_post_id"] == "5342326297725556"   # 水位线不降
+
+    async def test_prime_does_not_lower_watermark(self, monkeypatch):
+        m = self._monitor(monkeypatch, "5342134488270833", {"last_post_id": "5342326297725556"})
+        await m._prime()
+        assert m.state["last_post_id"] == "5342326297725556"
+
+    async def test_prime_raises_watermark_to_newest(self, monkeypatch):
+        # 停机期间发了新博 → 基线对齐到它，不推送（原本的"不补推停机期间事件"语义）
+        m = self._monitor(monkeypatch, "5342326297725556", {"last_post_id": "5342134488270833"})
+        await m._prime()
+        assert m.state["last_post_id"] == "5342326297725556"
+
+
 class TestNoCookie:
     async def test_no_cookie_skips_fetch_and_push(self, monkeypatch):
         m = _make_monitor(uid="1", state={}, _primed=True)

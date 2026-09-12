@@ -227,7 +227,10 @@ class BiliMonitor:
             print(f"⚠️ 基线-直播状态失败（忽略）: {e}")
         try:
             dyn = await self._fetch_latest_dynamic()
-            self.state["last_dynamic_id"] = dyn.get("id", "")
+            cur = dyn.get("id", "")
+            # 水位线只升不降：停机期间她若撤回/置顶，别把基线调低
+            if _bridge_common.is_newer_id(cur, self.state.get("last_dynamic_id", "")):
+                self.state["last_dynamic_id"] = cur
         except Exception as e:
             print(f"⚠️ 基线-动态失败（忽略）: {e}")
         self._primed = True
@@ -333,8 +336,10 @@ class BiliMonitor:
             return
         if not dyn["id"]:
             return
-        if dyn["id"] == str(self.state.get("last_dynamic_id", "") or ""):
-            return  # 已推送过
+        if not _bridge_common.is_newer_id(dyn["id"], self.state.get("last_dynamic_id", "")):
+            # 不是"更新"的动态：已推过的、或比她已发过的更旧（她撤回/置顶后
+            # 接口的"最新"会退回旧动态，只判"和上一条不同"会把旧的又推一遍）
+            return
 
         # B站表情在 QQ 无法内联变小（发出去就是一张独立大图），所以取舍：
         # 动态有真配图(照片) → 只发真配图(大)，跳过 emoji 装饰图，免得挤成一排大表情；

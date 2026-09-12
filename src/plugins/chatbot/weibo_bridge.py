@@ -146,7 +146,10 @@ class WeiboMonitor:
         """每次启动建基线：记录当前最新微博 id，不推送停机期间已发的。"""
         try:
             post = await self._fetch_latest_post()
-            self.state["last_post_id"] = post.get("id", "")
+            cur = post.get("id", "")
+            # 水位线只升不降：停机期间她若删博，别把基线调低
+            if _bridge_common.is_newer_id(cur, self.state.get("last_post_id", "")):
+                self.state["last_post_id"] = cur
         except Exception as e:
             print(f"⚠️ 微博基线失败（忽略）: {e}")
         self._primed = True
@@ -238,8 +241,10 @@ class WeiboMonitor:
             return
         if not post["id"]:
             return
-        if post["id"] == str(self.state.get("last_post_id", "") or ""):
-            return  # 已推送过
+        if not _bridge_common.is_newer_id(post["id"], self.state.get("last_post_id", "")):
+            # 不是"更新"的微博：已推过的、或比她已发过的更旧（删博后接口的"最新"
+            # 会退回旧博，只判"和上一条不同"会把旧的又推一遍）
+            return
 
         # 含图时下载配图一起发（多图全发、上限 6 张；失败不阻塞，仍发文字）
         image_paths = []

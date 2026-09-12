@@ -4,6 +4,7 @@
 """
 import pytest
 
+from src.plugins.chatbot import _bridge_common as _bc
 from src.plugins.chatbot import bili_bridge as bb
 
 
@@ -217,6 +218,94 @@ class TestDynamic:
         assert called == []  # 未配置 sessdata 不应尝试请求
 
 
+class TestDynamicRetraction:
+    """撤回/置顶导致的"最新退回旧动态"不该重推（水位线判据）。
+
+    踩坑：状态里只记一条 id、判据是"和上一条不同"。她撤回最新动态后，接口的
+    "最新"退回上一条（更旧、id 更小），与记的不同 → 被判成新动态 → 把昨天的又推一遍。
+    """
+
+    def _monitor(self, monkeypatch, dyn_id, state):
+        m = _make_monitor(uid="1298779265", state=state, _primed=True, _warned_no_sessdata=True)
+        monkeypatch.setattr(bb, "get_bili_sessdata", lambda: "SESSDATA=x")
+        monkeypatch.setattr(bb, "_save_state", lambda s: None)
+        monkeypatch.setattr(bb, "_download_image", lambda u: None)
+        monkeypatch.setattr(bb, "_resize_emote_if_large", lambda p, n: p)
+
+        async def fake_fetch():
+            return {"id": dyn_id, "text": "晚安🌙", "image_urls": [], "emote_urls": [],
+                    "local_emotes": []}
+
+        monkeypatch.setattr(m, "_fetch_latest_dynamic", fake_fetch)
+        return m
+
+    async def test_newer_dynamic_pushes(self, monkeypatch):
+        m = self._monitor(monkeypatch, "1246839524441456643", {"last_dynamic_id": "1246839524441456000"})
+        pushed = []
+
+        async def fake_push(bot, content, image_paths=None):
+            pushed.append(content)
+
+        monkeypatch.setattr(m, "_push", fake_push)
+        await m._check_dynamic(FakeBot())
+        assert len(pushed) == 1
+        assert m.state["last_dynamic_id"] == "1246839524441456643"
+
+    async def test_retracted_newest_does_not_repush(self, monkeypatch):
+        # 撤回最新那条 → 接口"最新"退回更旧的 → 不该重推
+        m = self._monitor(monkeypatch, "1246311690117578769", {"last_dynamic_id": "1246839524441456643"})
+        pushed = []
+
+        async def fake_push(bot, content, image_paths=None):
+            pushed.append(content)
+
+        monkeypatch.setattr(m, "_push", fake_push)
+        await m._check_dynamic(FakeBot())
+        assert pushed == [], "撤回后回退到的旧动态不该重推"
+        # 水位线不能被调低
+        assert m.state["last_dynamic_id"] == "1246839524441456643"
+
+    async def test_same_id_does_not_push(self, monkeypatch):
+        m = self._monitor(monkeypatch, "1246839524441456643", {"last_dynamic_id": "1246839524441456643"})
+        pushed = []
+
+        async def fake_push(bot, content, image_paths=None):
+            pushed.append(content)
+
+        monkeypatch.setattr(m, "_push", fake_push)
+        await m._check_dynamic(FakeBot())
+        assert pushed == []
+
+
+class TestIsNewerId:
+    """水位线判据本身（bili/weibo 共用，见 _bridge_common.is_newer_id）。"""
+
+    def test_larger_is_newer(self):
+        assert _bc.is_newer_id("1246839524441456643", "1246311690117578769") is True
+
+    def test_smaller_is_not_newer(self):
+        assert _bc.is_newer_id("1246311690117578769", "1246839524441456643") is False
+
+    def test_equal_is_not_newer(self):
+        assert _bc.is_newer_id("123", "123") is False
+
+    def test_no_previous_is_newer(self):
+        assert _bc.is_newer_id("123", "") is True
+
+    def test_empty_new_is_not_newer(self):
+        assert _bc.is_newer_id("", "123") is False
+
+    def test_different_length_compares_numerically(self):
+        # 位数不同也要按数值比，不能按字符串比（'999' > '1000' 是错的）
+        assert _bc.is_newer_id("1000", "999") is True
+        assert _bc.is_newer_id("999", "1000") is False
+
+    def test_non_numeric_falls_back_to_inequality(self):
+        # 异常数据（非数字 id）退回老行为：不同即新
+        assert _bc.is_newer_id("abc", "def") is True
+        assert _bc.is_newer_id("abc", "abc") is False
+
+
 class TestPrime:
     async def test_first_poll_establishes_baseline_without_push(self, monkeypatch):
         m = _make_monitor(uid="1", sessdata="sess", state={})
@@ -306,6 +395,39 @@ class TestPrime:
         bot = FakeBot()
         await m.poll_once(bot)
         assert pushed == ["转述:新动态"]  # 新动态触发推送
+
+
+    async def test_prime_does_not_lower_watermark(self, monkeypatch):
+        """停机期间她撤回/置顶，基线也不能被调低（水位线只升不降）。"""
+        m = _make_monitor(uid="1", state={"last_dynamic_id": "1246839524441456643"})
+        monkeypatch.setattr(bb, "_save_state", lambda s: None)
+
+        async def fake_dyn():
+            return {"id": "1246311690117578769", "text": "旧的"}
+
+        async def fake_live():
+            return {"live_status": 0, "title": "", "room_id": 0, "cover": ""}
+
+        monkeypatch.setattr(m, "_fetch_latest_dynamic", fake_dyn)
+        monkeypatch.setattr(m, "_fetch_live_status", fake_live)
+        await m._prime()
+        assert m.state["last_dynamic_id"] == "1246839524441456643"
+
+    async def test_prime_raises_watermark_to_newest(self, monkeypatch):
+        """停机期间发了新动态 → 基线对齐到它（保持"不补推停机期间事件"的语义）。"""
+        m = _make_monitor(uid="1", state={"last_dynamic_id": "1246311690117578769"})
+        monkeypatch.setattr(bb, "_save_state", lambda s: None)
+
+        async def fake_dyn():
+            return {"id": "1246839524441456643", "text": "新的"}
+
+        async def fake_live():
+            return {"live_status": 0, "title": "", "room_id": 0, "cover": ""}
+
+        monkeypatch.setattr(m, "_fetch_latest_dynamic", fake_dyn)
+        monkeypatch.setattr(m, "_fetch_live_status", fake_live)
+        await m._prime()
+        assert m.state["last_dynamic_id"] == "1246839524441456643"
 
 
 class TestPush:

@@ -10,6 +10,30 @@ import time
 from pathlib import Path
 
 
+def is_newer_id(new_id, last_id) -> bool:
+    """新抓到的 id 是否比"已见过的最大 id"更新（推送去重的水位线判据）。
+
+    B站动态 id / 微博 mid **都随时间严格递增**（实测各取 10~20 条验证过），
+    所以"更大 = 更新"。
+
+    踩坑（为什么不能只判"和上一条不同"）：状态里本来只记**一条** id，
+    判据是 `新 id != 记的那条`。她**撤回**最新那条动态后，接口返回的"最新"
+    退回成上一条（更旧、id 更小），与记的那条不同 → 被判成新动态，
+    **把昨天的动态又推了一遍**（用户实际遇到：撤回后重推了一条"晚安"）。
+    置顶/删博回退同理。改成水位线后，任何"比见过的更旧"的 id 一律不推。
+
+    数字不可比时（异常数据）退回"不同即新"，保持老行为、不倒退。
+    """
+    n, l = str(new_id or ""), str(last_id or "")
+    if not n:
+        return False
+    if not l:
+        return True                      # 还没记录过，当作新的
+    if n.isdigit() and l.isdigit():
+        return int(n) > int(l)
+    return n != l
+
+
 def load_state_file(path: Path) -> dict:
     """读去重状态文件；缺失/损坏返回空 dict。"""
     if path.exists():
