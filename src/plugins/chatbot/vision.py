@@ -27,21 +27,31 @@ MAX_IMAGE_BYTES = 15 * 1024 * 1024  # 15MB 上限，超出跳过
 
 _QQ_IMAGE_DOMAINS = ("qq.com", "qpic.cn")
 _BILI_IMAGE_DOMAINS = ("bilibili.com", "hdslb.com", "biliimg.com")
+# 微博图床：sinaimg.cn 的 wx1-4 / ww1-4 / tvax1-4 等子域，全走这一个主域。
+# 踩坑：微博动态能抓到图链、图却发不出去——因为这里没登记，Referer 为空被图床 403
+# 挡掉（实测 wx1.sinaimg.cn 不带 Referer = 403/238字节，带 weibo.com = 200/331KB）。
+_WEIBO_IMAGE_DOMAINS = ("sinaimg.cn",)
 
 
 def _referer_for(url: str) -> str:
-    """按图链域名选 Referer（hotlink 校验，选错会 400/403）。
+    """按图链域名选 Referer（hotlink 校验，选错或漏选会 400/403）。
 
     - QQ 图链（multimedia.nt.qq.com.cn / gchat.qpic.cn 等）→ QQ 域 Referer。
       踩坑：曾统一改成 B站 Referer 导致 QQ 图片下载 400 'invalid rkey'（QQ CDN hotlink 校验）。
     - B站图链（hdslb.com 等）→ B站 Referer（B站 WAF 拦默认 UA/Referer）。
+    - 微博图床（sinaimg.cn 等）→ 微博 Referer（不带直接 403）。
     - 其他域名 → 不强加 Referer（留空）。
+
+    教训：**每加一个图源就要回来登记一次**——漏一个的表现是"文字发得出去、图全丢"，
+    因为下载失败只打日志、不阻塞推送（见 weibo_bridge._check_posts 的兜底）。
     """
     host = url.split("//", 1)[1].split("/", 1)[0].lower() if "//" in url else ""
     if any(d in host for d in _BILI_IMAGE_DOMAINS):
         return "https://www.bilibili.com/"
     if any(d in host for d in _QQ_IMAGE_DOMAINS):
         return "https://qun.qq.com/"
+    if any(d in host for d in _WEIBO_IMAGE_DOMAINS):
+        return "https://weibo.com/"
     return ""
 
 

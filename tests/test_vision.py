@@ -2,6 +2,7 @@
 import base64
 import io
 
+import pytest
 from PIL import Image
 
 from src.plugins.chatbot import vision
@@ -54,7 +55,11 @@ class TestDetectImageMime:
 
 
 class TestRefererFor:
-    """Referer 按图链域名选择（QQ 用 QQ 域、B站用 B站域、其他不强加）。"""
+    """Referer 按图链域名选择（QQ 用 QQ 域、B站用 B站域、微博用微博域、其他不强加）。
+
+    教训：**每加一个图源都要回来登记**——漏一个的表现是"文字发得出去、图全丢"，
+    因为下载失败只打日志、不阻塞推送。
+    """
 
     def test_qq_multimedia(self):
         assert vision._referer_for(
@@ -69,6 +74,16 @@ class TestRefererFor:
 
     def test_bili_biliimg(self):
         assert vision._referer_for("https://archive.biliimg.com/xxx.jpg") == "https://www.bilibili.com/"
+
+    @pytest.mark.parametrize("url", [
+        "https://wx1.sinaimg.cn/orj1080/0098QVdCgy1ih0ut9jxq2j349m39n1l0.jpg",
+        "https://wx4.sinaimg.cn/large/abc.jpg",
+        "https://ww2.sinaimg.cn/large/abc.jpg",
+        "https://tvax1.sinaimg.cn/large/abc.jpg",
+    ])
+    def test_weibo_sinaimg(self, url):
+        # 微博图床不带 Referer 直接 403（实测 403/238字节 vs 带 Referer 200/331KB）
+        assert vision._referer_for(url) == "https://weibo.com/"
 
     def test_other_domain_no_referer(self):
         assert vision._referer_for("https://example.com/a.jpg") == ""
@@ -118,6 +133,12 @@ class TestReadImageHeaders:
         captured = await self._capture(monkeypatch)
         await vision._read_image_bytes("https://i0.hdslb.com/bfs/xxx.jpg")
         assert captured["headers"]["Referer"] == "https://www.bilibili.com/"
+
+    async def test_weibo_download_uses_weibo_referer(self, monkeypatch):
+        captured = await self._capture(monkeypatch)
+        await vision._read_image_bytes(
+            "https://wx1.sinaimg.cn/orj1080/0098QVdCgy1ih0ut9jxq2j349m39n1l0.jpg")
+        assert captured["headers"]["Referer"] == "https://weibo.com/"
 
     async def test_other_download_no_referer(self, monkeypatch):
         captured = await self._capture(monkeypatch)
