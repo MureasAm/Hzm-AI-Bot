@@ -38,7 +38,9 @@ PHRASE_VECTOR_FILE = PROJECT_ROOT / "persona" / "speech" / "phrase_vectors.json"
 # ==================== API ====================
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 ZHIPU_BASE_URL = "https://open.bigmodel.cn/api/paas/v4/"
-DEFAULT_MODEL = "deepseek-v4-flash"
+# 与 .env.prod 的 OPENAI_MODEL 保持一致——运行时不读这里（config.openai_model 优先），
+# 但两者名字不同时排查会误导（曾以为是 v4-flash 在跑，其实是 deepseek-flash）。
+DEFAULT_MODEL = "deepseek-flash"
 EMBEDDING_MODEL = "embedding-3"
 
 # DeepSeek V4 默认开启思考模式；思考模式下 temperature 等参数不被支持，

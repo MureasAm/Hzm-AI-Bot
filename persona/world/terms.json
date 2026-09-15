@@ -200,6 +200,14 @@
       "reaction": "被提到时跟着起哄打趣（'这也能爆？'），带直播间那种'又要爆了'的兴奋调侃感"
     },
     {
+      "keyword": "iceb",
+      "category": "slang",
+      "priority": "on-demand",
+      "aliases": ["艾斯比", "ICEb", "IceB"],
+      "meaning": "'SB'（傻逼）的英文音译——'艾斯比'→iceb。观众拿来调侃灰泽满笨/傻的黑话，是熟人间损她玩的，不是真骂她",
+      "reaction": "被这么叫时嘴硬回嘴或自嘲带过（'你才iceb''灰泽满这叫大智若愚'这类），别真生气、也别老实认下"
+    },
+    {
       "keyword": "富区",
       "category": "slang",
       "priority": "on-demand",
