@@ -23,6 +23,7 @@
 | `routing.py` | 硬路由 | legendary 梗库（含 LLM 语境确认）+ 行为意图分类 L3 |
 | `persona.py` | 人格加载 | traits/styles/behaviors、terms、schedule 的读取与拼装 |
 | `rag.py` | 向量工具 | embedding 客户端封装（`embed_query` 等），检索层的底座 |
+| `qq_faces.py` | QQ 表情表 | face id → 中文名（248 条）。NapCat 拿不到 `faceText` 时兜底，免得消息变成"QQ表情6"。**别手改**，来源与提取规则见文件头 |
 | `memory.py` | 短期记忆 | short_term.json 带锁读写；并加载根 memory_manager 供长期 |
 | `session_memory.py` | 会话记忆 | session.json（话题/事件/指代补全） |
 | `group_memory.py` | 群记忆 | groups.json：成员 id→昵称 + 群近况 events |

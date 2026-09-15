@@ -24,6 +24,7 @@ from nonebot.adapters.onebot.v11 import (
 )
 
 from .constants import AUTO_ACCEPT_FRIEND, PROJECT_ROOT
+from .qq_faces import face_name
 from . import bili_bridge  # noqa: F401  导入即注册启动时的后台监听任务
 from . import weibo_bridge  # noqa: F401  导入即注册启动时的微博后台监听任务
 from . import chat_window
@@ -163,8 +164,10 @@ def _extract_face_text(msg) -> str:
         if text:
             return text.lstrip("/")
         fid = seg.data.get("id")
-        if fid:  # 兜底：无 raw 时用 id
-            return f"QQ表情{fid}"
+        if fid:
+            # 兜底：NapCat 没给 faceText 时，用 QQ 客户端自带的 id→名字表还原。
+            # 否则会退化成"QQ表情6"，模型完全不知道那是什么表情（实测踩坑）。
+            return face_name(fid) or f"QQ表情{fid}"
     return ""
 
 
