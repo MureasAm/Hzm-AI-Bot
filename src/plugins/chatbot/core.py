@@ -495,8 +495,24 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
     return messages
 
 
+# 生成失败时的兜底文案（**只发给用户，绝不进记忆**——见 is_fallback_reply）
+_FALLBACK_REPLY = "哎呀，hzm脑子卡了一下……"
+_FALLBACK_SILENT = "……（沉默，可能是信号不好）"
+
+
+def is_fallback_reply(text: str) -> bool:
+    """这句是不是"没生成出来"的兜底文案。
+
+    用途：兜底文案不该写进记忆。踩坑：上游偶发 `choices: null` 那一轮，
+    兜底文案被当成"她的回复"存进了短期记忆，于是她的历史里永久留着一句
+    `哎呀，hzm脑子卡了一下……（错误: ...）`——**AI 腔的故障信息变成了"她说过的话"，
+    还会作为 few-shot 喂回去**。一次上游抖动 = 一份永久污染。
+    """
+    return (text or "").strip() in (_FALLBACK_REPLY, _FALLBACK_SILENT)
+
+
 async def generate_reply(messages: list) -> str:
-    """调用 DeepSeek 生成回复；失败时返回带错误的兜底文本。"""
+    """调用 DeepSeek 生成回复；失败时返回兜底文案（调用方负责"别把它记进记忆"）。"""
     try:
         deepseek_client, _ = _get_clients()
         response = await deepseek_client.chat.completions.create(
@@ -510,10 +526,10 @@ async def generate_reply(messages: list) -> str:
         reply = extract_chat_content(response)
     except Exception as e:
         # 异常原文不再塞进回复：那是内部信息，会原样发给 QQ 上的每个用户。
-        # 打到控制台即可（watchdog 日志也在），她这边只回一句人话。
+        # 打到控制台即可，她这边只回一句人话。
         print(f"⚠️ 生成失败: {e}")
-        reply = "哎呀，hzm脑子卡了一下……"
-    return reply if reply else "……（沉默，可能是信号不好）"
+        reply = _FALLBACK_REPLY
+    return reply if reply else _FALLBACK_SILENT
 
 
 def _repair_llm_json(text: str) -> str:
@@ -779,6 +795,12 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     # 否则她带换行/多括号的原始输出会存进记忆，再作为"她自己怎么说话"的 few-shot 喂回去，
     # 变成自我强化回路——后处理每次都得再洗一遍，坏习惯却一直被喂养。
     record_msg = _compose_record_msg(user_msg, vision_desc)
+    if is_fallback_reply(reply):
+        # 这一轮压根没生成出来（上游异常），**整轮都不记**：
+        # 记了就等于让她"记得自己说过"一句故障文案，还会当 few-shot 喂回去。
+        # 用户的这句话也随之不留——但她这轮并没有真的回应过，不记比记错干净。
+        print("[记忆] 本轮是兜底回复（生成失败），不写入短期/长期记忆")
+        return reply
     append_user_history(user_id, record_msg, clean_reply(reply))
 
     # --- 📝 异步更新长期记忆（会话级记忆已在对话前 probe_session 同步更新） ---

@@ -1,4 +1,6 @@
 """core 层：图片消息记忆记录 + 图片消息处理逻辑的单元测试。"""
+import asyncio
+
 from src.plugins.chatbot import core
 from src.plugins.chatbot import rag
 from src.plugins.chatbot import reply_style
@@ -281,6 +283,65 @@ class TestHistoryGapNote:
             "在吗", "p", [], "", ["用户：在吗"], history_gap_note="")
         block = [m["content"] for m in msgs if m["content"].startswith("【最近对话记录】")]
         assert block and "距离上一轮对话" not in block[0]
+
+
+class TestFallbackReplyNotRemembered:
+    """生成失败的兜底文案**不能进记忆**。
+
+    踩坑（实测发生）：上游偶发 `choices: null` 那一轮，兜底文案被当成"她的回复"存进短期记忆，
+    她的历史里就永久留着一句 `哎呀，hzm脑子卡了一下……（错误: 'NoneType' ...）`
+    ——AI 腔的故障信息变成"她说过的话"，还会作为 few-shot 喂回去。一次上游抖动 = 一份永久污染。
+    """
+
+    def test_is_fallback_reply_detects_both(self):
+        assert core.is_fallback_reply("哎呀，hzm脑子卡了一下……")
+        assert core.is_fallback_reply("……（沉默，可能是信号不好）")
+        assert core.is_fallback_reply("  哎呀，hzm脑子卡了一下……  ")
+
+    def test_normal_reply_is_not_fallback(self):
+        assert not core.is_fallback_reply("在呢，你说")
+        assert not core.is_fallback_reply("")
+
+    async def _run(self, monkeypatch, reply_text):
+        captured = {"short": 0, "long": 0}
+
+        async def fake_probe(uid, msg, hist, client):
+            return "用户发了个偷笑的表情"   # 纯情绪 → 跳过检索，最小 harness
+
+        async def fake_reply(messages):
+            return reply_text
+
+        def fake_append(*a, **k):
+            captured["short"] += 1
+
+        async def fake_update(*a, **k):
+            captured["long"] += 1
+
+        async def _noop(*a, **k):
+            pass
+
+        monkeypatch.setattr(core, "probe_session", fake_probe)
+        monkeypatch.setattr(core, "generate_reply", fake_reply)
+        monkeypatch.setattr(core, "get_user_history", lambda uid: [])
+        monkeypatch.setattr(core, "get_last_turn_gap_seconds", lambda uid: None)
+        monkeypatch.setattr(core, "append_user_history", fake_append)
+        monkeypatch.setattr(core, "update_memory_task", fake_update)
+        monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
+
+        out = await core.handle_chat("u", "可惜🤭")
+        await asyncio.sleep(0)   # 长期记忆走 asyncio.create_task，让调度器跑一拍
+        return out, captured
+
+    async def test_fallback_reply_not_stored(self, monkeypatch):
+        out, captured = await self._run(monkeypatch, "哎呀，hzm脑子卡了一下……")
+        assert out == "哎呀，hzm脑子卡了一下……", "兜底文案照常回给用户"
+        assert captured["short"] == 0, "兜底文案不该进短期记忆"
+        assert captured["long"] == 0, "兜底文案也不该触发长期记忆提取"
+
+    async def test_normal_reply_still_stored(self, monkeypatch):
+        out, captured = await self._run(monkeypatch, "在呢，你说")
+        assert captured["short"] == 1
+        assert captured["long"] == 1
 
 
 class TestConsistencyRuleWording:
