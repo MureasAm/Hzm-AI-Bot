@@ -1,6 +1,8 @@
 """读秒窗口（chat_window）攒批/读图/归纳/分批发送逻辑的单元测试。"""
 import asyncio
 
+import pytest
+
 from src.plugins.chatbot import chat_window as cw
 
 
@@ -168,6 +170,67 @@ class TestVoiceFlush:
         sent, voice_calls = await self._run_flush(monkeypatch, "今天直播聊得特别开心（小声）下次再一起")
         assert voice_calls == []  # 内心戏括号是文字专属表达，TTS 表达不了
         assert sent
+
+
+class TestVoiceSurvivesInterrupt:
+    """插话取消不该让"已经合成好的语音"卡在中间发不出去。
+
+    实测症状：TTS 转出来了、消息没发出去，且**时有时无**。原因是 send_voice 里
+    await _synthesize() 要几秒（GPU），用户在这几秒插话 → enqueue 的 win.task.cancel()
+    打断在 await 上的它 → wav 已生成、没发出，且文字兜底也不会走
+    （CancelledError 是 BaseException，except Exception 抓不到）。
+    """
+
+    SENTENCE = TestVoiceFlush.SENTENCE
+
+    async def _setup(self, monkeypatch, supersede_during_handle=False):
+        win = cw._UserWindow("u9")
+        win.pending = [("u9", "在吗", "", "")]
+        sent, voice_done = [], []
+
+        async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False):
+            if supersede_during_handle:
+                win.generation += 1   # 模拟"她还在组织语言时，用户又发了一条"
+            return self.SENTENCE
+
+        async def fake_summarize(msgs):
+            return ""
+
+        started = asyncio.Event()
+
+        async def slow_send_voice(bot, target_id, is_private, reply_text_):
+            started.set()
+            await asyncio.sleep(0.05)          # 模拟 TTS 合成的耗时
+            voice_done.append(reply_text_)
+            return True
+
+        async def fake_send(win_, content):
+            sent.append(content)
+
+        monkeypatch.setattr(cw, "handle_chat", fake_handle)
+        monkeypatch.setattr(cw, "summarize_batch", fake_summarize)
+        monkeypatch.setattr(cw, "should_voice", lambda t: True)
+        monkeypatch.setattr(cw, "send_voice", slow_send_voice)
+        monkeypatch.setattr(cw, "_send", fake_send)
+        return win, sent, voice_done, started
+
+    async def test_cancel_during_synthesis_still_delivers_voice(self, monkeypatch):
+        win, sent, voice_done, started = await self._setup(monkeypatch)
+        task = asyncio.create_task(cw._flush(win))
+        await started.wait()          # 合成已开始
+        task.cancel()                 # 用户此时插话
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await asyncio.sleep(0.15)     # 让 shield 的内层跑完
+        assert voice_done, "语音已经合成好了，插话取消不该让它发不出去（用户会什么都收不到）"
+
+    async def test_superseded_before_synthesis_skips_voice(self, monkeypatch):
+        """起跑后已被新消息取代 → 不占 GPU 合成（合成完也送不出去）。"""
+        win, sent, voice_done, started = await self._setup(
+            monkeypatch, supersede_during_handle=True)
+        await cw._flush(win)
+        assert voice_done == [], "已被取代就不该再去合成"
+        assert sent == [], "这轮回复已作废，别再把旧内容刷出去"
 
 
 class TestEnqueue:

@@ -188,6 +188,7 @@ async def _flush(win: _UserWindow) -> None:
     if not win.pending:
         return
     msgs, win.pending = win.pending, []
+    my_gen = win.generation   # 起跑时的代际；后面用它判断"我是否已被新消息取代"
 
     # 读图：本批所有图片统一在回复前解析（不是收到就秒解析，避免节奏割裂）
     async def _parse(u: str, f: str) -> str:
@@ -232,7 +233,19 @@ async def _flush(win: _UserWindow) -> None:
     # 成功就不刷文字分段（互斥不双发）；未启用/合成失败时 send_voice 返回 False，
     # 落回下方文字分段兜底，绝不影响收到回复。
     if should_voice(reply):
-        if await send_voice(win.bot, win.target_id, win.is_private, reply):
+        if win.generation != my_gen:
+            # 已经被新消息取代：别再占 GPU 去合成（合成了也送不出去）
+            print("[读秒] 语音：已被新消息取代，跳过合成")
+            return
+        # ⚠️ shield：合成+发送**一旦开始就让它做完**。
+        # 不 shield 的话：用户在这几秒里插话 → enqueue 的 win.task.cancel() 会把
+        # await 中的 send_voice 打断 → **wav 已经生成、消息没发出去**，而且文字兜底
+        # 也不会走（CancelledError 是 BaseException，except Exception 抓不到）——
+        # 她那边什么都收不到。实测症状就是"TTS 转出来了但没发出去"，且**时有时无**
+        # （取决于插话有没有落在合成那几秒里）。
+        # 语义上也说得通：文字分段是"发一段是一段"，语音是一条整消息，
+        # 所以"已开始就等于第一段已发出"。
+        if await asyncio.shield(send_voice(win.bot, win.target_id, win.is_private, reply)):
             return
 
     parts = split_reply(reply) if SPLIT_REPLY_ENABLED else [reply]

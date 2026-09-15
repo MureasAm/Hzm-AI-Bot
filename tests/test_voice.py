@@ -1,10 +1,49 @@
-"""语音模块单元测试：should_voice 触发规则 / 文本清洗 / 情绪选参考 / 开关解析 / 静音裁剪。"""
+"""语音模块单元测试：should_voice 触发规则 / 文本清洗 / 情绪选参考 / 开关解析 / 静音裁剪 / 发送路径。"""
 import array
 import math
 import wave
+from pathlib import Path
+
+import pytest
 
 from src.plugins.chatbot import config as cfg
 from src.plugins.chatbot import voice as v
+
+
+class TestToQqVoiceUrl:
+    """wav → `file:///` URL：**必须是正斜杠**。
+
+    踩坑：`Path.resolve()` 在 Windows 上给反斜杠，直接拼出 `file:///D:\\a\\b.wav`
+    ——那不是合法 file URL。NapCat（Node）会把反斜杠当路径里的普通字符，找不到文件，
+    语音就发不出去（而接入方案「三.4」当初试通的是正斜杠版）。
+    """
+
+    def test_uses_forward_slashes(self, tmp_path):
+        wav = tmp_path / "a.wav"
+        wav.write_bytes(b"x")
+        url = v._to_qq_voice(str(wav))
+        assert url.startswith("file:///")
+        assert "\\" not in url, f"反斜杠的 file URL 会让 NapCat 找不到文件：{url}"
+        assert url.endswith("/a.wav")
+
+    def test_absolute_path(self):
+        url = v._to_qq_voice(str(Path("data/voice_cache/x.wav")))
+        # 必须是绝对路径（相对路径 NapCat 无从解析）
+        assert ":" in url.split("file:///", 1)[1][:3], f"路径该是绝对的：{url}"
+
+    def test_empty_path_returns_none(self):
+        assert v._to_qq_voice("") is None
+
+    def test_real_cache_file_shape(self, tmp_path, monkeypatch):
+        # 贴近真实形态：项目里的 data/voice_cache/*.wav
+        monkeypatch.chdir(tmp_path)
+        d = tmp_path / "data" / "voice_cache"
+        d.mkdir(parents=True)
+        wav = d / "voice_abc.wav"
+        wav.write_bytes(b"x")
+        url = v._to_qq_voice(str(wav))
+        assert url.count("/") >= 4 and "\\" not in url
+        assert url.endswith("data/voice_cache/voice_abc.wav")
 
 
 class TestShouldVoice:

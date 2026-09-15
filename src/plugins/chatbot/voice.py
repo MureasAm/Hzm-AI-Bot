@@ -272,11 +272,20 @@ async def _synthesize(reply_text: str) -> str | None:
 
 
 def _to_qq_voice(wav_path: str) -> str | None:
-    """wav → QQ 语音文件。方案 A：NapCat 较新版本支持本地文件路径自动转。
+    """wav → QQ 语音文件 URL。方案 A：NapCat 较新版本支持本地文件路径自动转。
+
+    ⚠️ **必须是正斜杠**。`Path.resolve()` 在 Windows 上给出反斜杠路径，直接拼进
+    `file:///` 会得到 `file:///D:\\a\\b.wav`——这**不是合法的 file URL**：
+    NapCat 是 Node 写的，URL 解析会把反斜杠当成路径里的普通字符（不是分隔符），
+    于是去找一个叫 `D:\a\b.wav` 的文件，找不到 → 语音发不出去。
+    踩坑：接入方案「三.4」当初试通的是 `file:///D:/...`（正斜杠），实现时用了
+    `.resolve()` 忘了转 `.as_posix()`，于是一直在发反斜杠版本。
 
     若 NapCat 不认 wav，需要装 silk 编码器转（方案 B，见接入方案「三.4」）。
     """
-    return f"file:///{Path(wav_path).resolve()}"
+    if not wav_path:
+        return None
+    return "file:///" + Path(wav_path).resolve().as_posix()
 
 
 async def send_voice(bot, target_id: str, is_private: bool, reply_text: str) -> bool:
@@ -299,8 +308,11 @@ async def send_voice(bot, target_id: str, is_private: bool, reply_text: str) -> 
         else:
             await bot.send_group_msg(group_id=target_id,
                                      message=MessageSegment.record(file=voice_file))
-        print(f"[语音] 已发送语音 {len(_tts_text(reply_text))}字: {reply_text}")
+        print(f"[语音] 已发送语音 {len(_tts_text(reply_text))}字 file={voice_file}")
         return True
     except Exception as e:
+        # 把 file= 一起打出来：语音发不出去时，第一个要确认的就是"发出去的到底是什么路径"
+        # （曾经发的是反斜杠版 file:///D:\...，非法 URL，见 _to_qq_voice 的注释）
         print(f"⚠️ 语音发送失败（忽略，文字已回）: {e}")
+        print(f"    发出去的 file={voice_file!r}")
         return False
