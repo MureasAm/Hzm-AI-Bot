@@ -52,6 +52,37 @@ def _get_clients():
     return _clients_cache
 
 
+def extract_chat_content(resp) -> str:
+    """从 chat completion 响应里安全取正文；取不到就抛一个**看得懂**的错误。
+
+    为什么必须有这个：7 个调用点以前都直接写 `resp.choices[0].message.content.strip()`，
+    而这只在"响应形状永远正确"时才成立。实测踩过：上游偶发返回 `choices: null`，
+    三个调用点**同时**报 `'NoneType' object is not subscriptable`——看不出是哪个环节、
+    也看不出是上游形状问题，只能一行行猜。这里把三种坏形状统一翻译成人话。
+
+    顺带挡一个**静默**的坑（更危险，因为它不报错）：
+    DeepSeek 部分模型（如 `deepseek-flash`）**默认开思考模式**，推理内容会先吃掉
+    max_tokens，于是 `content` 是**空串**、`finish_reason=length`。以前这种情况会
+    静默返回 ""，调用方当"这次没结果"处理——**功能悄悄失灵，日志上什么都看不到**。
+    所以空正文也抛错（调用方本来都有 try/except，行为不变，只是能看见了）。
+    """
+    choices = getattr(resp, "choices", None)
+    if not choices:
+        raise RuntimeError("LLM 响应没有 choices（上游返回了异常形状？）")
+    choice = choices[0]
+    content = getattr(getattr(choice, "message", None), "content", None)
+    finish = getattr(choice, "finish_reason", "?")
+    if content is None:
+        raise RuntimeError(f"LLM 响应 content 为 None（finish_reason={finish}）")
+    text = content.strip()
+    if not text:
+        reasoning = getattr(getattr(choice, "message", None), "reasoning_content", None) or ""
+        raise RuntimeError(
+            f"LLM 响应正文为空（finish_reason={finish}，思考内容 {len(reasoning)} 字）"
+            f"——多半是思考模式吃光了 max_tokens；该模型不支持禁用思考时要把额度调大")
+    return text
+
+
 def _get_model_name() -> str:
     """解析对话模型名：优先 config.openai_model，回退到 DEFAULT_MODEL。"""
     try:

@@ -14,7 +14,7 @@ from pathlib import Path
 import httpx
 from PIL import Image
 
-from .config import get_vision_model
+from .config import get_vision_model, extract_chat_content
 from .constants import VISION_MAX_TOKENS, VISION_THINKING_DISABLED
 
 VISION_PROMPT = (
@@ -164,7 +164,7 @@ async def describe_image_bytes(zhipu_client, data: bytes, model: str = None) -> 
             max_tokens=VISION_MAX_TOKENS,
             **VISION_THINKING_DISABLED,
         )
-        return (resp.choices[0].message.content or "").strip()
+        return extract_chat_content(resp)
     except Exception as e:
         print(f"⚠️ 视觉模型调用失败: {e}")
         return ""
@@ -187,7 +187,7 @@ async def describe_image(zhipu_client, source: str, model: str = None) -> str:
                 max_tokens=VISION_MAX_TOKENS,
                 **VISION_THINKING_DISABLED,
             )
-            return (resp.choices[0].message.content or "").strip()
+            return extract_chat_content(resp)
         except Exception as e:
             print(f"⚠️ 视觉模型调用失败: {e}")
             return ""

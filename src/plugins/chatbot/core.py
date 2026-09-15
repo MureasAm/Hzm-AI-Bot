@@ -62,7 +62,7 @@ else:
 
 # ==================== 🛠️ API 客户端（惰性初始化） ====================
 # 挪到了 config.py（基础设施层）。core 从这里 import，routing 也从 config 取，避免循环依赖。
-from .config import _get_clients, _get_model_name  # noqa: E402
+from .config import _get_clients, _get_model_name, extract_chat_content  # noqa: E402
 
 
 async def summarize_batch(msgs: list) -> str:
@@ -93,7 +93,7 @@ async def summarize_batch(msgs: list) -> str:
             max_tokens=80,
             **THINKING_DISABLED,
         )
-        return (resp.choices[0].message.content or "").strip()
+        return extract_chat_content(resp)
     except Exception as e:
         print(f"⚠️ 批量归纳失败（忽略）: {e}")
         return ""
@@ -245,7 +245,7 @@ async def confirm_ambiguous_terms(user_msg: str, deepseek_client=None) -> set:
             max_tokens=200,
             **THINKING_DISABLED,
         )
-        content = (resp.choices[0].message.content or "").strip()
+        content = extract_chat_content(resp)
         if "```" in content:
             content = content.split("```")[1].split("```")[0].strip()
         data = json.loads(content)
@@ -507,9 +507,12 @@ async def generate_reply(messages: list) -> str:
             max_tokens=CHAT_MAX_TOKENS,
             **THINKING_DISABLED,
         )
-        reply = response.choices[0].message.content.strip()
+        reply = extract_chat_content(response)
     except Exception as e:
-        reply = f"哎呀，hzm脑子卡了一下……（错误: {e}）"
+        # 异常原文不再塞进回复：那是内部信息，会原样发给 QQ 上的每个用户。
+        # 打到控制台即可（watchdog 日志也在），她这边只回一句人话。
+        print(f"⚠️ 生成失败: {e}")
+        reply = "哎呀，hzm脑子卡了一下……"
     return reply if reply else "……（沉默，可能是信号不好）"
 
 
@@ -585,7 +588,7 @@ async def update_memory_task(user_id: str, user_msg: str, reply: str, user_memor
             max_tokens=MEMORY_EXTRACT_MAX_TOKENS,
             **THINKING_DISABLED,
         )
-        content = resp.choices[0].message.content.strip()
+        content = extract_chat_content(resp)
         print(f"[长期记忆] 提取结果: {content}")
         if content and content.strip() != "null":
             updates = _parse_memory_extract(content)
@@ -606,7 +609,7 @@ async def update_memory_task(user_id: str, user_msg: str, reply: str, user_memor
                 max_tokens=MEMORY_EXTRACT_MAX_TOKENS,
                 **THINKING_DISABLED,
             )
-            content2 = resp2.choices[0].message.content.strip()
+            content2 = extract_chat_content(resp2)
             print(f"[长期记忆] 重试提取: {content2}")
             updates = _parse_memory_extract(content2)
             if updates:

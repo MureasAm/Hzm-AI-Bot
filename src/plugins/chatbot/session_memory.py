@@ -17,7 +17,7 @@ from pathlib import Path
 from datetime import datetime
 
 from .constants import PROJECT_ROOT, THINKING_DISABLED
-from .config import _get_model_name
+from .config import _get_model_name, extract_chat_content
 
 SESSION_MEMORY_FILE = PROJECT_ROOT / "user_memory" / "session.json"
 
@@ -116,7 +116,7 @@ async def _llm(client, prompt: str, max_tokens: int = 200, temperature: float = 
             max_tokens=max_tokens,
             **THINKING_DISABLED,
         )
-        content = (resp.choices[0].message.content or "").strip()
+        content = extract_chat_content(resp)
         if "```json" in content:
             content = content.split("```json")[1].split("```")[0].strip()
         elif "```" in content:

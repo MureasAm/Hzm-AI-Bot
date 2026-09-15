@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 
 from .constants import THINKING_DISABLED, PROJECT_ROOT
-from .config import _get_clients, _get_model_name
+from .config import _get_clients, _get_model_name, extract_chat_content
 
 LEGENDARY_FILE = PROJECT_ROOT / "persona" / "world" / "legendary.json"
 
@@ -60,7 +60,7 @@ async def legendary_confirmed(user_msg: str, prompt_template: str, history: str 
             max_tokens=10,
             **THINKING_DISABLED,
         )
-        c = (resp.choices[0].message.content or "").strip()
+        c = extract_chat_content(resp)
         # 确认模板要求只答"是/否"：以"是"开头且不是"不是/是不是"这类否定/疑问才放行
         return c.startswith("是") and not c.startswith("不是") and not c.startswith("是不是")
     except Exception as e:
@@ -126,7 +126,7 @@ async def classify_behavior(deepseek_client, user_msg: str, history_text: str, b
             max_tokens=20,
             **THINKING_DISABLED,
         )
-        content = (resp.choices[0].message.content or "").strip()
+        content = extract_chat_content(resp)
         if "```json" in content:
             content = content.split("```json")[1].split("```")[0].strip()
         elif "```" in content:
