@@ -203,11 +203,28 @@ class WeiboMonitor:
             data = resp.json()
         except Exception as e:
             raise RuntimeError(f"微博接口 JSON 解析失败: {e}")
-        if not data.get("ok"):
-            raise RuntimeError(f"微博接口返回 ok={data.get('ok')} msg={data.get('msg')}")
+        ok = data.get("ok")
+        # ⚠️ 必须按 **== 1** 判成功，不能写 `if not ok`：微博的失败码是**负数**
+        # （-100 = 未登录/被风控），而 `not -100` 是 False ——truthy 判断会让整个错误分支
+        # 被跳过，接着 data 是 null → list 空 → 报成"该 UID 暂无微博"，把排查带偏
+        # （实测就是这样：明明是 Cookie 失效，却一直显示"暂无微博"）。
+        if ok != 1:
+            # 另一处坑：未登录时返回的是 **HTTP 200 + {"ok": -100, "url": ".../login.php?..."}**
+            # ——登录态藏在 **body 的 url** 里，不在 HTTP `location` 头里（那是 302 才有的），
+            # 只查 location 同样会漏判。
+            # 措辞里要带"登录"：_check_posts 靠 `"login" in msg or "登录" in msg` 判断
+            # 是不是 cookie 失效（走半小时节流的明确提示，而不是 5 分钟一次的"忽略"）。
+            body_url = str(data.get("url") or "")
+            if "login" in body_url.lower():
+                raise RuntimeError(
+                    f"微博 Cookie 已失效（接口返回 ok={ok} 并指向登录页）"
+                    f"——重新登录微博、复制完整 Cookie 填进 .env.prod 的 WEIBO_COOKIE")
+            raise RuntimeError(f"微博接口返回 ok={ok} msg={data.get('msg')}")
         lst = (data.get("data") or {}).get("list") or []
         if not lst:
-            raise RuntimeError("该 UID 暂无微博")
+            # 别断言"该 UID 暂无微博"——实测更常见的是**被风控限流时返回空列表**
+            # （cookie 只是部分有效时也这样），把它说成"没有微博"会把人带到错误方向。
+            raise RuntimeError("微博接口返回了空列表（多半是风控限流；也可能是该 UID 当前无可见微博）")
         item = lst[0]
         mid = str(item.get("id", "") or "")
         mblogid = str(item.get("mblogid", "") or "") or _mid_to_bid(mid)

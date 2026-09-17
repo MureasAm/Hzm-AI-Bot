@@ -15,7 +15,7 @@ NoneBot2 + OneBot v11(NapCat) 的"灰泽满"人格聊天机器人。核心是**�
 
 ## 怎么跑 / 怎么测
 - 启动：NapCat 自己开 → `env\python.exe api_v2.py`(GPT-SoVITS,端口9880) → `python bot.py`（或双击 `启动.bat`）。**改代码/数据后要重启 bot**（有进程内缓存）。
-- 测试：`.venv\Scripts\python.exe -m pytest -q`（**422 个**，全绿才算完；数字变了说明你增删了用例，顺手改这里）。
+- 测试：`.venv\Scripts\python.exe -m pytest -q`（**425 个**，全绿才算完；数字变了说明你增删了用例，顺手改这里）。
 - 推送：代理常抽风。先试 `git push origin main`（直连有时通），不行再用 `-c http.proxy=http://127.0.0.1:7897/7898`。
 
 ## 别碰 / 危险

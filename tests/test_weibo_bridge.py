@@ -188,6 +188,60 @@ class TestPostDeletionDedup:
         assert m.state["last_post_id"] == "5342326297725556"
 
 
+class TestFetchErrorMessages:
+    """拉取失败时的报错要能指向真正的原因（踩过两次坑）。"""
+
+    async def _fetch_with(self, monkeypatch, payload, status=200, resp_headers=None):
+        m = _make_monitor(uid="1", state={})
+        monkeypatch.setattr(wb, "_load_jar", lambda: {})
+        monkeypatch.setattr(wb, "_save_jar", lambda c: None)
+        hdrs = resp_headers or {"content-type": "application/json"}
+
+        class _Resp:
+            status_code = status
+            headers = hdrs   # 类体里不能引用同名的外层变量，换个名字
+            cookies = {}     # _save_jar(resp.cookies) 会读它
+
+            def json(self):
+                return payload
+
+        class _Client:
+            def __init__(self, **kw):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def get(self, url, params=None):
+                return _Resp()
+
+        monkeypatch.setattr(wb.httpx, "AsyncClient", _Client)
+        with pytest.raises(RuntimeError) as e:
+            await m._fetch_post_once()
+        return str(e.value)
+
+    async def test_cookie_expired_detected_from_body_url(self, monkeypatch):
+        # 实测形态：HTTP 200 + {"ok": -100, "url": "https://weibo.com/login.php?..."}
+        # 登录态在 body 的 url 里，不在 HTTP location 头里——只查 location 会漏判。
+        msg = await self._fetch_with(monkeypatch, {
+            "ok": -100, "url": "https://weibo.com/login.php?url=https%3A%2F%2Fweibo.com%2Fu%2F1"})
+        assert "Cookie 已失效" in msg
+        assert "登录" in msg, "这句要能被 _check_posts 的 cookie 分支认出（它查 '登录'/'login'）"
+
+    async def test_other_error_code_kept_verbatim(self, monkeypatch):
+        msg = await self._fetch_with(monkeypatch, {"ok": -200, "msg": "别的错误"})
+        assert "-200" in msg and "别的错误" in msg
+
+    async def test_empty_list_not_blamed_on_the_uid(self, monkeypatch):
+        # 空列表多半是风控限流；说成"该 UID 暂无微博"会把人带偏
+        msg = await self._fetch_with(monkeypatch, {"ok": 1, "data": {"list": []}})
+        assert "空列表" in msg
+        assert "暂无微博" not in msg
+
+
 class TestNoCookie:
     async def test_no_cookie_skips_fetch_and_push(self, monkeypatch):
         m = _make_monitor(uid="1", state={}, _primed=True)
