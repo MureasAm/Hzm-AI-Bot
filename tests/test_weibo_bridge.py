@@ -8,6 +8,8 @@
 
 所有外部调用（微博接口、好友列表、私聊发送、状态写入、配图下载）全部打桩。
 """
+import json
+
 import pytest
 
 from src.plugins.chatbot import weibo_bridge as wb
@@ -186,6 +188,55 @@ class TestPostDeletionDedup:
         m = self._monitor(monkeypatch, "5342326297725556", {"last_post_id": "5342134488270833"})
         await m._prime()
         assert m.state["last_post_id"] == "5342326297725556"
+
+
+class TestCookieJarInvalidation:
+    """换了 .env 的 cookie 之后，旧 jar 不能把它顶掉。
+
+    踩坑（实测）：jar 的优先级高于 .env（要让微博续期下发的 Set-Cookie 能盖住初始值），
+    于是用户把新 cookie 填进 .env 后，**旧 jar 里那份失效会话仍然赢** ——
+    症状是"明明换了 cookie 还是报 ok=-100"，而且换几次都没用。
+    修法：jar 存下"基于哪份 .env cookie 续期"的指纹；指纹对不上就整份忽略。
+    """
+
+    def _patch(self, monkeypatch, tmp_path, env_cookie: str, jar_content):
+        jar = tmp_path / "weibo_cookies.json"
+        if jar_content is not None:
+            jar.write_text(json.dumps(jar_content, ensure_ascii=False), encoding="utf-8")
+        monkeypatch.setattr(wb, "_COOKIE_JAR_FILE", jar)
+        monkeypatch.setattr(wb, "get_weibo_cookie", lambda: env_cookie)
+        return jar
+
+    def test_matching_fingerprint_applies_jar(self, monkeypatch, tmp_path):
+        env = "SUB=fresh; SUBP=x"
+        fp = wb._cookie_fingerprint(env)
+        self._patch(monkeypatch, tmp_path, env, {"_base_fp": fp, "cookies": {"SUB": "refreshed"}})
+        assert wb._load_jar()["SUB"] == "refreshed"
+
+    def test_stale_fingerprint_ignored(self, monkeypatch, tmp_path):
+        # 用户换了 cookie → 旧 jar 的指纹对不上 → 整份忽略，回到 .env 的新值
+        self._patch(monkeypatch, tmp_path, "SUB=fresh-new", {"_base_fp": "deadbeefdead", "cookies": {"SUB": "expired-old"}})
+        assert wb._load_jar()["SUB"] == "fresh-new", "旧 jar 会把新 cookie 顶掉（实测就是这么坏掉的）"
+
+    def test_legacy_flat_jar_ignored(self, monkeypatch, tmp_path):
+        # 老格式（扁平 dict、无 _base_fp）一律视为过期，安全迁移
+        self._patch(monkeypatch, tmp_path, "SUB=fresh", {"SUB": "legacy-old"})
+        assert wb._load_jar()["SUB"] == "fresh"
+
+    def test_no_jar_uses_env(self, monkeypatch, tmp_path):
+        self._patch(monkeypatch, tmp_path, "SUB=only-env", None)
+        assert wb._load_jar()["SUB"] == "only-env"
+
+    def test_empty_env_cookie_returns_empty(self, monkeypatch, tmp_path):
+        self._patch(monkeypatch, tmp_path, "", {"_base_fp": "x", "cookies": {"SUB": "y"}})
+        assert wb._load_jar() == {}
+
+    def test_save_writes_fingerprint(self, monkeypatch, tmp_path):
+        jar = self._patch(monkeypatch, tmp_path, "SUB=fresh", None)
+        wb._save_jar({"SUB": "from-set-cookie"})
+        saved = json.loads(jar.read_text(encoding="utf-8"))
+        assert saved["_base_fp"] == wb._cookie_fingerprint("SUB=fresh")
+        assert saved["cookies"]["SUB"] == "from-set-cookie"
 
 
 class TestFetchErrorMessages:

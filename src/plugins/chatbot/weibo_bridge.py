@@ -10,6 +10,7 @@ import asyncio
 import random
 import re
 import json
+import hashlib
 import tempfile
 import time
 from pathlib import Path
@@ -48,13 +49,34 @@ def _parse_cookie_str(s: str) -> dict:
     return d
 
 
+def _cookie_fingerprint(raw: str) -> str:
+    """`.env` 里那份 cookie 的指纹——用来判断运行时的 jar 是不是基于**当前**这份续期出来的。
+
+    为什么要它：jar 的优先级高于 .env（微博续期下发的 Set-Cookie 要能盖住初始值）。
+    但用户**换了新 cookie 之后**，旧 jar 会把新值整个顶掉 → 一直报 "ok=-100 Cookie 已失效"，
+    症状是"明明换了 cookie 还是不行"。实测踩坑：新旧 cookie 在 SUB/WBPSESS/XSRF-TOKEN
+    上都不同，而 `base.update(jar)` 让旧的那份赢了。
+    """
+    return hashlib.sha1((raw or "").strip().encode("utf-8")).hexdigest()[:12]
+
+
 def _load_jar() -> dict:
-    """初始 cookie = .env 的 WEIBO_COOKIE，再用运行时 jar（微博续期下发的）覆盖。"""
-    base = _parse_cookie_str(get_weibo_cookie())
+    """初始 cookie = .env 的 WEIBO_COOKIE，再用运行时 jar（微博续期下发的）覆盖。
+
+    **但只在 jar 确实基于当前这份 .env cookie 时才覆盖**——见 _cookie_fingerprint。
+    旧格式（扁平 dict、无 _base_fp）一律视为过期，直接忽略、回到 .env 的值。
+    """
+    raw = get_weibo_cookie()
+    base = _parse_cookie_str(raw)
+    if not base:
+        return {}
     try:
         if _COOKIE_JAR_FILE.exists():
             saved = json.loads(_COOKIE_JAR_FILE.read_text("utf-8"))
-            base.update({k: v for k, v in saved.items() if v})
+            if isinstance(saved, dict) and saved.get("_base_fp") == _cookie_fingerprint(raw):
+                for k, v in (saved.get("cookies") or {}).items():
+                    if v:
+                        base[k] = v
     except Exception:
         pass
     return base
@@ -69,7 +91,10 @@ def _save_jar(resp_cookies) -> None:
         cur = _load_jar()
         cur.update(add)
         _COOKIE_JAR_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _COOKIE_JAR_FILE.write_text(json.dumps(cur, ensure_ascii=False), encoding="utf-8")
+        # 存成 {_base_fp, cookies}：带上"基于哪份 .env cookie"，换 cookie 时旧 jar 自动失效
+        _COOKIE_JAR_FILE.write_text(
+            json.dumps({"_base_fp": _cookie_fingerprint(get_weibo_cookie()), "cookies": cur},
+                       ensure_ascii=False), encoding="utf-8")
     except OSError as e:
         print(f"⚠️ 微博 cookie jar 写失败: {e}")
 
