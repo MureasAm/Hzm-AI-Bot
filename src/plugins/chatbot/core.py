@@ -181,6 +181,17 @@ def build_terms_note(user_msg: str, denied_terms: set | None = None) -> str:
     return "；".join(notes) if notes else ""
 
 
+def _qq_face_of(msg: str) -> str:
+    """`[表情：可怜]` → `可怜`；不是纯 QQ 表情返回空串。
+
+    QQ 内置表情的含义**就是它的名字**，不需要模型去"理解"——见 handle_chat 里的用法。
+    """
+    t = (msg or "").strip()
+    if t.startswith("[表情：") and t.endswith("]"):
+        return t[len("[表情："):-1].strip()
+    return ""
+
+
 def _hits_on_demand_term(msg: str) -> bool:
     """消息是否命中某个 on-demand 术语（关键词/别名/正则）。
 
@@ -476,12 +487,16 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
     if query_hint:
         # 纯表情消息：按表情的真实情绪回应，体现情绪该有的态度，不被当前话题绑架
         if is_emoji_msg(final_user):
+            # 这里**只做"别读错情绪"的正确性约束，不规定她该怎么反应**——
+            # 「什么情绪 → 她怎么回应」属于数据层，该由 behaviors 的条目 + 真人样本承担。
+            # （我曾在这里写过"委屈/可怜 → 她该放软、别嘴硬顶着"，那是提示词补丁，已回退：
+            #   同一个会话里我刚把 😅 那行的"规定动作"删掉，转手又加一条，方向自相矛盾。
+            #   见 待办清单.md / 交接文档：纯表情消息目前会跳过 L3，所以数据层压根没参与。）
             emoji_hint = (
                 f"【用户发了表情】{query_hint}\n"
-                "用户只发了一个表情，没有任何文字。请按这个表情的真实情绪回应，并体现这种情绪该有的态度：\n"
-                "- 无语/无奈（😅）→ 先认出这是无语/无奈就好，怎么接按她的性子自然来，不规定动作\n"
-                "- 委屈/哭（😭）→ 心软安慰，但不要套用当前话题的模板\n"
-                "- 其他情绪 → 按情绪的自然反应回应\n"
+                "用户只发了一个表情，没有任何文字。**以这个表情本身的情绪为准**，别读成别的情绪"
+                "（尤其别因为她上一句在嘴硬，就把这个表情读成'他在怼我/他对我无语'）。\n"
+                "按这个情绪自然回应，**具体怎么反应以注入的【行为指令】与她的样本为准，这里不规定**。\n"
                 "不要复述表情，不要顺着当前话题硬接，只回应这个情绪。"
             )
             messages.append({"role": "system", "content": emoji_hint})
@@ -662,6 +677,14 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     # 术语自己已定义含义，回退用原文，避免错误扩充污染检索与语境提示
     if query_text and _hits_on_demand_term(query_text):
         retrieval_query = query_text
+    # 纯 QQ 表情（[表情：可怜]）：**含义就在名字里，别让 LLM 再猜**。
+    # 踩坑：probe 会拿表情去"理解"，带上下文时容易猜偏（实测把它读成"无语"，
+    # 于是回复变成"无语了？灰泽满又没说错什么"——而用户发的是"可怜"）。
+    # 直接在代码层还原名字，确定性、且省一次 LLM 猜。
+    _face = _qq_face_of(query_text)
+    if _face:
+        retrieval_query = f"用户发了一个「{_face}」的QQ表情"
+        print(f"[表情] 按字面含义注入（不猜）: {retrieval_query}")
     # 话题/事件已在本轮探测中更新，取最新会话状态
     session_context = build_session_context(user_id)
 
