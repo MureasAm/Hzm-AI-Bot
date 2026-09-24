@@ -171,12 +171,91 @@ def _extract_face_text(msg) -> str:
     return ""
 
 
+# 被引用消息注入时的文本上限：引用是"指路"，不是把整条消息搬进来
+QUOTE_TEXT_MAX = 80
+
+
+def _extract_quote_text(event) -> str:
+    """把"用户在引用哪条消息"还原成可注入的文本；没有引用返回空串。
+
+    **不用自己调 get_msg**：适配器在 `Bot.handle_event` 里对每条消息都跑过
+    `_check_reply`（nonebot/adapters/onebot/v11/bot.py:22）——发现 reply 段就自动
+    `get_msg(message_id=int(seg.data["id"]))`，结果挂在 `event.reply` 上，
+    同时把 reply 段从 `event.message` 删掉（所以 extract_plain_text 看不到，得从这取）。
+
+    **为什么要带"是谁说的"**：引用她自己的话 vs 引用另一个群友的话，她的反应完全不同
+    （前者是"解释/defend 自己说过的话"，后者是"接别人的话"）。群聊里这点尤其要紧
+    ——群记忆早就叮嘱过"别把不同的人当成同一个你"。
+    """
+    reply = getattr(event, "reply", None)
+    if reply is None:
+        return ""
+
+    text = ""
+    try:
+        text = (reply.message.extract_plain_text() or "").strip()
+    except Exception:
+        text = ""
+    if not text:
+        text = (getattr(reply, "raw_message", "") or "").strip()
+    if len(text) > QUOTE_TEXT_MAX:
+        text = text[:QUOTE_TEXT_MAX] + "…"
+
+    try:
+        sender_id = str(reply.sender.user_id)
+    except Exception:
+        sender_id = ""
+    if sender_id and sender_id == str(getattr(event, "self_id", "")):
+        who = "灰泽满自己"          # 引用的是她自己说过的话
+    elif sender_id and sender_id == str(event.get_user_id()):
+        who = "对方自己"
+    else:
+        nick = ""
+        try:
+            nick = (reply.sender.nickname or "").strip()
+        except Exception:
+            pass
+        who = f"另一个绿冻{nick}" if nick else "另一个绿冻"
+
+    # 引用的那条还带了什么（图片/表情）——不然模型只知道文字部分
+    has_image, qface = False, ""
+    try:
+        has_image = any(seg.type == "image" for seg in reply.message)
+        qface = _extract_face_text(reply.message)
+    except Exception:
+        pass
+
+    if not text:
+        # 引用的是一条纯图片/纯表情：没有文字可指路，但**不能让引用整个丢失**
+        if has_image and qface:
+            what = "一张带表情的图"
+        elif has_image:
+            what = "一张图"
+        elif qface:
+            what = f"表情「{qface}」"
+        else:
+            return ""   # 引用了一条空消息，没什么可说的
+        return f"[引用{who}发的{what}]"
+
+    extra = ""
+    if has_image:
+        extra += "（带图）"
+    if qface:
+        extra += f"（表情：{qface}）"
+    return f"[引用{who}说的：「{text}」{extra}]"
+
+
 @chat.handle()
 async def _handle_chat(bot: Bot, event: Event):
     msg = event.get_message()
     user_msg = msg.extract_plain_text().strip()
     image_url, image_file = _extract_image_source(msg)
     face_text = _extract_face_text(msg)
+
+    # 引用回复：把"引用了哪条"放到消息最前——它是这条消息的语境，不是新内容
+    quote_text = _extract_quote_text(event)
+    if quote_text:
+        user_msg = f"{quote_text} {user_msg}".strip() if user_msg else quote_text
 
     # QQ 内置表情（face）：把含义转成消息，纯表情也能回应
     if face_text:
@@ -189,7 +268,9 @@ async def _handle_chat(bot: Bot, event: Event):
     user_id = event.get_user_id()
     is_private = getattr(event, "message_type", "private") == "private"
     target_id = str(user_id if is_private else getattr(event, "group_id", ""))
-    print(f"[收到消息] user={user_id}, msg={user_msg[:40]!r}, img={'有' if (image_url or image_file) else '无'}")
+    print(f"[收到消息] user={user_id}, msg={user_msg[:40]!r}, "
+          f"img={'有' if (image_url or image_file) else '无'}, "
+          f"引用={'有' if quote_text else '无'}")
 
     # 读秒窗口（方案B）：攒批 + 静默后统一回复（含读图/归纳/分批发送）
     # target_id=会话标识（私聊=user_id，群聊=group_id），群聊按群攒批实现多人对话
