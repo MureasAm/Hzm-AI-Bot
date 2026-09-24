@@ -295,9 +295,16 @@ def _run_mine_phrases(args):
 # ==================== 子命令：regression ====================
 
 def _add_regression(sub):
-    p = sub.add_parser("regression", help="回复『灵性』回归测试（A/B 对比）")
+    p = sub.add_parser("regression",
+                       help="回复回归：--check 跑真实翻车判据；缺省打印回复供人工看")
     p.add_argument("--ab", action="store_true",
                    help="A/B：V0(无声音样本) vs 当前(有样本) 对比")
+    p.add_argument("--check", action="store_true",
+                   help="★判据回归：跑 scripts/regression_cases.json，失败则退出码非 0")
+    p.add_argument("--case", default=None,
+                   help="配合 --check：只跑某一条（case id）")
+    p.add_argument("--cases", default=None,
+                   help="配合 --check：自定义判据文件（缺省 scripts/regression_cases.json）")
     p.add_argument("-i", "--danmaku", default=None,
                    help="自定义弹幕 JSON/文本（缺省用内置虚构弹幕）")
     p.add_argument("-o", "--out-dir", default=None,
@@ -309,6 +316,10 @@ def _run_regression(args):
     import regression_test
     out_dir = Path(args.out_dir) if args.out_dir else _common.OUT_REGRESSION
     out_dir.mkdir(parents=True, exist_ok=True)
+    if getattr(args, "check", False):
+        rc = regression_test.check(case_id=args.case, cases_file=args.cases,
+                                   out_dir=str(out_dir))
+        sys.exit(1 if rc else 0)
     regression_test.run(ab_mode=args.ab, danmaku_file=args.danmaku,
                         out_dir=str(out_dir))
 

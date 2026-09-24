@@ -1,0 +1,47 @@
+{
+  "_readme": "人格回归集：把**真实翻车案例**固化成可复跑的判据。跑法见 scripts/regression_test.py --check。每条的判据都是**确定性**的（禁词/同质率/复读率），不用 LLM 当裁判——调研文档 §2.4 实测过：LLM judge 对'话题沾边但写错'的接受率高达 62.81%，靠不住。判据来自 记录.txt 与 待办清单.md 里已归档的踩坑。",
+  "_fields": {
+    "runs": "跑几次（temperature=0.85，必须 >1 才量得出同质）",
+    "forbid": "每条回复都不能出现这些词（命中即 FAIL）",
+    "require_any": "每条回复至少要含其中一个（都不含即 FAIL）",
+    "opener_homogeneity_max": "最高频开头词占比上限（0.5 = 同一开头最多占一半）",
+    "verbatim_repeat_max": "完全相同的回复最多允许几条",
+    "source": "这条判据是从哪次真实翻车来的"
+  },
+  "cases": [
+    {
+      "id": "no_old_fact_as_current_reason",
+      "desc": "问'今天为什么不直播'时，不能拿几个月前的旧事当现在的理由",
+      "user": "为什么今天不直播 我想你想的浑身难受",
+      "runs": 5,
+      "forbid": ["搬家", "搬东西"],
+      "source": "记录.txt 2026-09-18。她答'搬家的事还没弄完'，而搬家出自 2026-06-30 那场，差 80 天；被追问'你这是什么时间线'后还编出了'房东那边的事'。根因是 voice_samples 里 miss_6/casual_6 两条把它当'她本人的话'注入。"
+    },
+    {
+      "id": "emoji_pitiful_not_read_as_speechless",
+      "desc": "用户发[可怜]示弱时，不能把表情读成'无语'",
+      "user": "[表情：可怜]",
+      "runs": 5,
+      "forbid": ["无语"],
+      "source": "交接文档 §二。当时她上一句在嘴硬，模型就把'可怜'读成了'他在怼我/他对我无语'。已由 core._qq_face_of 确定性还原（纯 QQ 表情按字面），这条防它退回去。"
+    },
+    {
+      "id": "no_fixed_opener_when_deflecting",
+      "desc": "被反复求交往时不能每轮同一个词开头、也不能逐字复读同一句",
+      "user": "我是认真的，我想和你交往",
+      "runs": 8,
+      "opener_homogeneity_max": 0.5,
+      "verbatim_repeat_max": 1,
+      "source": "记录.txt Joker 段 8/14 条以'呃，'开头。根因是 behaviors #3 的 response 明文写\"'呃…'起头\"，且 samples 里那句例句被逐字照抄（旧版 10/10 逐字相同）。已删例句 + response 去措辞规定。"
+    },
+    {
+      "id": "no_verbatim_repeat_after_late",
+      "desc": "被催迟到时不能逐字复读同一句解释",
+      "user": "你怎么又迟到了，说好八点的",
+      "runs": 6,
+      "verbatim_repeat_max": 1,
+      "opener_homogeneity_max": 0.6,
+      "source": "行为 #8『失约被催时认栽滑跪』。历史上'搬家''威严'都被【一致性规则】锁死过一个又一个来回；这条防的是它换个词再来一次。"
+    }
+  ]
+}

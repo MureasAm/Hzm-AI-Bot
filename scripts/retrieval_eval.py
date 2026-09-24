@@ -27,7 +27,13 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from openai import AsyncOpenAI
 
-from src.plugins.chatbot import retrieval  # noqa: E402  (可无 NoneBot 直接导入)
+# ⚠️ 必须先 init NoneBot：`src/plugins/chatbot/__init__.py` 在模块级就调用
+# `@get_driver().on_bot_connect`，不 init 直接导入会崩 "NoneBot has not been initialized"。
+# （本文件曾注释"可无 NoneBot 直接导入"，那句后来失效了 —— 于是整个脚本静默跑不起来。）
+import nonebot  # noqa: E402
+nonebot.init()
+
+from src.plugins.chatbot import retrieval  # noqa: E402
 from src.plugins.chatbot.rag import embed_query  # noqa: E402
 from src.plugins.chatbot.constants import ZHIPU_BASE_URL, DEEPSEEK_BASE_URL  # noqa: E402
 from src.plugins.chatbot.persona import load_persona_rules  # noqa: E402

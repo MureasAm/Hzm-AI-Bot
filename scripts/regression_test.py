@@ -1,20 +1,36 @@
-"""灰泽满回复"灵性"回归测试（虚构弹幕 A/B 对比）。
+"""灰泽满回复回归：虚构弹幕浏览 + **真实翻车案例的自动判据**。
 
 用法：
-    python scripts/regression_test.py            # 只跑 V1（有声音样本）
-    python scripts/regression_test.py --ab       # A/B：V0(无样本) vs V1(有样本) 对比
+    python scripts/regression_test.py                 # 跑一遍内置弹幕，打印回复（人工看）
+    python scripts/regression_test.py --ab            # A/B：V0(无样本) vs V1(有样本) 对比
+    python scripts/regression_test.py --check         # ★判据回归：跑 scripts/regression_cases.json
+    python scripts/regression_test.py --check --case no_old_fact_as_current_reason
+
+`--check` 是这套工具的重点：它把**真实翻过的车**（记录.txt / 待办清单.md 里归档的）
+固化成**确定性判据**（禁词 / 开头同质率 / 逐字复读率），跑一次就知道有没有回退。
+
+⚠️ 为什么判据要确定性、不用 LLM 当裁判：调研文档 §2.4 实测——LLM judge 对
+"话题沾边但写错了"的答案接受率高达 62.81%，是"具体但错误"策略的约 6 倍。
+**宽松的裁判比没有裁判更糟**，因为它给的是通过。
 
 说明：
-- 弹幕为虚构，覆盖被夸/被催播/被越界/表达依赖/日常等典型场景
 - 使用临时记忆文件，不污染线上 user_memory/short_term.json 与 long_term.json
 - 长期记忆提取被禁用（只测回复质量，不测记忆副作用）
+- **--check 每次跑都用不同 user_id**：否则同一会话的短期记忆会把"她上一轮说过的话"
+  喂回来，同质率就测不准了（测出来的是复读自己，不是复读数据层）
 """
 import asyncio
 import json
 import os
+import re
 import sys
 import tempfile
+from collections import Counter
 from pathlib import Path
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+CASES_FILE = PROJECT_ROOT / "scripts" / "regression_cases.json"
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -92,6 +108,111 @@ def _load_danmaku(danmaku_file=None) -> list:
         return [line.strip() for line in f if line.strip()]
 
 
+# ==================== 判据回归（--check） ====================
+
+_SELF_RE = re.compile(r"^(灰泽满|hzm|小满|满姐)")
+_BRACKET_RE = re.compile(r"^[（(][^）)]{0,14}[）)]\s*")
+_PUNCT_RE = re.compile(r"^[，。！？~～、…\s]+")
+
+
+def _opener(reply: str) -> str:
+    """取"去掉自称/括号动作/语气标点后的头两个字"，用来量开头同质。
+
+    （愣了一下）灰泽满收到咯 → 收到
+    "灰泽满"要剥掉：用名字自称是她的人设，不是同质（曾有防措辞固化错杀过这个，别重蹈）。
+    """
+    t = _BRACKET_RE.sub("", (reply or "").strip())
+    t = _SELF_RE.sub("", t)
+    t = _PUNCT_RE.sub("", t)
+    return t[:2]
+
+
+def _load_cases(path=None) -> list:
+    p = Path(path) if path else CASES_FILE
+    data = json.loads(p.read_text(encoding="utf-8"))
+    return data.get("cases", data) if isinstance(data, dict) else data
+
+
+def _run_case(core, case: dict) -> dict:
+    """跑一个 case N 次，每次换一个 user_id（空短期记忆），返回回复与指标。"""
+    cid = case["id"]
+    runs = int(case.get("runs", 3))
+    replies = [asyncio.run(core.handle_chat(f"regr_{cid}_{i}", case["user"]))
+               for i in range(runs)]
+    openers = Counter(_opener(r) for r in replies)
+    top_opener, top_n = openers.most_common(1)[0]
+    return {
+        "replies": replies,
+        "opener": top_opener,
+        "homogeneity": top_n / len(replies),
+        "verbatim": max(Counter(replies).values()),
+    }
+
+
+def _judge(case: dict, res: dict) -> list:
+    """返回失败原因列表（空 = 通过）。"""
+    fails = []
+    for word in case.get("forbid", []):
+        hit = [r for r in res["replies"] if word in r]
+        if hit:
+            fails.append(f"出现禁词「{word}」×{len(hit)}（例：{hit[0][:40]}）")
+
+    req = case.get("require_any", [])
+    if req:
+        miss = [r for r in res["replies"] if not any(w in r for w in req)]
+        if miss:
+            fails.append(f"{len(miss)} 条回复一个都没含 {req}（例：{miss[0][:40]}）")
+
+    cap = case.get("opener_homogeneity_max")
+    if cap is not None and res["homogeneity"] > cap:
+        fails.append(f"开头同质 {res['homogeneity']:.0%} > 上限 {cap:.0%}"
+                     f"（{res['homogeneity'] * len(res['replies']):.0f}/{len(res['replies'])} "
+                     f"条以「{res['opener']}」开头）")
+
+    vr = case.get("verbatim_repeat_max")
+    if vr is not None and res["verbatim"] > vr:
+        fails.append(f"逐字复读 {res['verbatim']} 条 > 上限 {vr}")
+
+    return fails
+
+
+def check(case_id=None, cases_file=None, out_dir=None) -> int:
+    """跑判据回归。返回失败数（0 = 全过）。"""
+    cases = _load_cases(cases_file)
+    if case_id:
+        cases = [c for c in cases if c.get("id") == case_id]
+        if not cases:
+            print(f"❌ 没有 id 为 {case_id!r} 的 case")
+            return 1
+
+    out = Path(out_dir) if out_dir else Path("outputs/eval/regression")
+    out.mkdir(parents=True, exist_ok=True)
+    core = _init()
+
+    lines, failed = [], 0
+    for case in cases:
+        res = _run_case(core, case)
+        fails = _judge(case, res)
+        failed += len(fails)
+        flag = "FAIL" if fails else "PASS"
+        header = f"[{flag}] {case['id']}  ({case.get('desc', '')})"
+        print(header)
+        for r in res["replies"]:
+            print(f"        · {r}")
+        for f in fails:
+            print(f"        ✗ {f}")
+        print()
+        lines += [header] + [f"    · {r}" for r in res["replies"]] \
+                 + [f"    ✗ {f}" for f in fails] + [""]
+
+    print("=" * 46)
+    print(f"case 通过率: {len(cases) - int(bool(failed))}/{len(cases)}"
+          f"   失败判据数: {failed}")
+    (out / "check.txt").write_text("\n".join(lines), encoding="utf-8")
+    print(f"✅ 明细已保存: {out / 'check.txt'}")
+    return failed
+
+
 def run(ab_mode=False, danmaku_file=None, out_dir=None):
     """参数化入口（供 run_tool 调用）。"""
     global DANMAKU
@@ -131,8 +252,14 @@ def run(ab_mode=False, danmaku_file=None, out_dir=None):
 
 
 def main():
-    ab_mode = "--ab" in sys.argv
-    run(ab_mode=ab_mode)
+    if "--check" in sys.argv:
+        case_id = None
+        if "--case" in sys.argv:
+            i = sys.argv.index("--case")
+            if i + 1 < len(sys.argv):
+                case_id = sys.argv[i + 1]
+        sys.exit(1 if check(case_id=case_id) else 0)
+    run(ab_mode="--ab" in sys.argv)
 
 
 if __name__ == "__main__":
