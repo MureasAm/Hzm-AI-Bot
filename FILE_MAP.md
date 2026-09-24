@@ -10,6 +10,8 @@
 | `bot.py` | 启动入口：初始化 NoneBot、注册 OneBotV11、加载 `src/plugins` 插件 |
 | `memory_manager.py` | **长期记忆**实现（user_memory/long_term.json）：用户画像/承诺/印象卡读写与 LLM 提取 |
 | `启动.bat` | 一键开两个窗口：GPT-SoVITS api + bot（NapCat 自己开） |
+| `更新周表.bat` | **把周表图拖上去**即识图并写入 `persona/world/schedule.json`（只覆盖 weekly）。双击=处理 `data/schedule_inbox/` 里最新一张。改完要重启 bot |
+| `记录.txt` | 用户手放的**真实翻车对话**（不入库），供分析用 |
 
 ## 二、运行时核心（`src/plugins/chatbot/`）
 
@@ -52,7 +54,7 @@
 | `world/preferences.json(+_vectors)` | 偏好档案 | 命中注入"偏好" |
 | `world/core_stories.json(+_vectors)` | 印象最深的经历 | 低阈值浮现"核心记忆" |
 | `world/legendary.json` | 经典梗固定应答（含确认） | 硬路由直回 |
-| `world/schedule.json` | 周表+近况（OCR 半自动更新） | 每轮注入"周表" |
+| `world/schedule.json` | 周表（根目录 `更新周表.bat` 拖图 OCR 更新） | 每轮注入"周表" |
 | `world/statement_final.json → corpus_vectors.json` | 直播记忆语料源(322) → 向量 | 机器人只读向量 |
 
 ## 四、离线工具（`scripts/`）
@@ -64,7 +66,8 @@
 - **向量**：`generate-vectors -i persona/world/statement_final.json`；`precompute voice-samples|phrases|preferences|core-stories`
 - **评测**：regression / persona-eval / retrieval-eval
 - **工具**：bili-check / bili-login / vision-test
-- **独立运行（不在 run_tool）**：`watchdog.py`（假死自愈进程）、`notifier.py`（SMTP，被 watchdog 用）、`update_schedule.py`（周表图丢 `data/schedule_inbox/` 后无参跑）
+- **独立运行（不在 run_tool）**：`watchdog.py`（假死自愈进程）、`notifier.py`（SMTP，被 watchdog 用）、`update_schedule.py`（周表识图；日常用根目录 `更新周表.bat` 拖图，也可丢 `data/schedule_inbox/` 后无参跑）
+- **判据回归集**：`scripts/regression_cases.json`（真实翻车固化成确定性判据）→ `run_tool.py regression --check`
 
 > ⚠️ `generate-persona` 会覆盖人格三件套，需 `--danger`；`generate-vectors` 缺省指向 statement_final，别靠内置 RAW_CORPUS。
 

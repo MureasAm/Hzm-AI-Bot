@@ -176,6 +176,9 @@ data/voice_cache/
 # 只匹配直接子文件，`user_memory/_backup_*/` 这类备份目录里的真实聊天记忆会漏网被提交。
 user_memory/**/*.json
 user_memory/*.json
+# 同理，备份后缀（如 `short_term.json.bak-20260915-101436`）不以 .json 结尾，上面两条盖不住，
+# 但里面同样是完整的真实聊天记录 —— 单独收掉。
+user_memory/*.bak*
 # Playwright MCP 的临时快照（工具产物）
 .playwright-mcp/
 # 微博会话 jar（敏感，运行时生成）
