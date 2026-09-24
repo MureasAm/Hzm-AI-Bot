@@ -21,16 +21,16 @@ GROUP_MEMORY_FILE = PROJECT_ROOT / "user_memory" / "groups.json"              # 
 # 群近况事件写入冷却（秒）+ 上限条数（防碎碎念刷爆记忆）
 GROUP_EVENT_COOLDOWN = 300
 GROUP_EVENT_MAX = 20
-SCHEDULE_FILE = PROJECT_ROOT / "persona" / "world" / "schedule.json"          # 她的周表+近况(手动维护,注入地面真值)
+SCHEDULE_FILE = PROJECT_ROOT / "persona" / "world" / "schedule.json"          # 她的周表(手动维护,注入地面真值)
 
-# ==================== 事实类通道的时效 ====================
-# 踩坑：近况（"这周在收拾搬家"）以前是**无条件注入**的，只在文本里附一句
-# "（更新于 X，过期就忽略）"指望模型自己判断——但模型既不知道过期阈值，也没有
-# "今天 vs 更新日"的对比习惯。结果"搬家"被当成当前理由用了一周，还被【一致性规则】
-# 锁死（借口要与之前一致 → 错误只固化、不自我纠正）。
-# **时效必须由代码保证，不能交给模型判断**：超期就当作不存在，不注入。
-# 7 天：近况文本自己写着"这周…"，一周就是它的自然边界。
-SCHEDULE_NOTE_TTL_DAYS = 7
+# ==================== 已删除：schedule 的「近况」====================
+# 曾经的「近况」（一个自由文本 + 更新日期 + 7 天 TTL，如"这周在收拾搬家"）已**整条删除**。
+# 脉络：① 它被无条件注入时把"搬家"当成了当前理由，且被【一致性规则】锁死用了一周；
+#       ② 于是加了 TTL，超期就不注入；③ 但 2026-09-25 实测发现——近况当时早已过期（19 天），
+#          漏的根本不是它，而是 voice_samples 里一条"她本人说过"的搬家（详见 待办清单.md「本土化」）。
+# **结论：近况治不了「用旧记忆回答当下」**——那条通道是 assistant turn（"她本人的话"），
+# 远强于任何 system 说明。且这个字段手动维护必烂（实测烂了 20 天）。
+# **别再把它加回来**：真正该做的是保持样本库/corpus 与直播内容同步，而不是再设一个会烂的字段。
 VECTOR_FILE = PROJECT_ROOT / "persona" / "world" / "corpus_vectors.json"         # 直播记忆向量库（灰泽满的人物记忆，归 world/）
 VOICE_SAMPLE_VECTOR_FILE = PROJECT_ROOT / "persona" / "speech" / "voice_sample_vectors.json"  # 声音样本向量缓存（跟 voice_samples.json）
 PHRASE_VECTOR_FILE = PROJECT_ROOT / "persona" / "speech" / "phrase_vectors.json"   # 措辞指纹向量缓存（跟 phrases.json）

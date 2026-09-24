@@ -9,8 +9,7 @@
     python scripts/run_tool.py ...  # 或直接：
     python scripts/update_schedule.py <图片路径> [--preview]   # --preview 只看结果不写文件
 
-半自动的含义：weekly（固定周表）由 OCR 填好；「近况」那一行是临时安排，OCR 不猜，
-需要的话自己顺手在 schedule.json 里改，并把 近况_updated 更新成当天。
+本脚本只负责 weekly（固定周表）——它由 OCR 填好，只覆盖 weekly 字段，其它字段原样保留。
 改完 / 脚本写完后要【重启 bot】才生效（周表有进程内缓存）。
 """
 import json
@@ -88,7 +87,7 @@ def main():
     print(f"识图: {img.name}\nweekly:")
     for x in weekly:
         print(f"  {x['day']}  {x['time']}")
-    print(f"\n原近况仍保留: {cur.get('近况','')!r}（如需改临时安排/请假，编辑 {SCHEDULE} 那行）")
+    print(f"\n已只更新 weekly（{SCHEDULE.name} 的其它字段原样保留）")
     if not preview:
         SCHEDULE.write_text(json.dumps(cur, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         print(f"[OK] 已写入 {SCHEDULE} —— 记得【重启 bot】生效（周表有缓存）。")

@@ -377,8 +377,12 @@ class TestConsistencyRuleWording:
         assert "用户没有主动追问时" not in b
 
 
-class TestScheduleNoteInjection:
-    """近况是"临时事实"，超期就不该注入——否则会被当"现在为什么迟到/没播"的理由。"""
+class TestScheduleInjection:
+    """周表注入：只讲"什么时候播"。
+
+    曾有的「近况」（自由文本+TTL）已整条删除——它治不了"用旧记忆回答当下"，
+    真正的漏点是 voice_samples 那条 assistant turn 通道。见 constants.py 的说明。
+    """
 
     def _inject(self, monkeypatch, sched):
         monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
@@ -387,28 +391,18 @@ class TestScheduleNoteInjection:
         block = [m["content"] for m in msgs if "周表" in m["content"]]
         return block[0] if block else ""
 
-    def test_fresh_note_injected(self, monkeypatch):
-        from datetime import date
-        text = self._inject(monkeypatch, {
-            "weekly": [{"day": "周一", "time": "20:00"}],
-            "近况": "这周在收拾搬家",
-            "近况_updated": str(date.today()),
-        })
-        assert "这周在收拾搬家" in text
-
-    def test_stale_note_not_injected(self, monkeypatch):
-        from datetime import date, timedelta
-        text = self._inject(monkeypatch, {
-            "weekly": [{"day": "周一", "time": "20:00"}],
-            "近况": "这周在收拾搬家",
-            "近况_updated": str(date.today() - timedelta(days=7)),
-        })
-        assert "搬家" not in text, "过期近况不该被当当前事实注入"
-        assert "周一 20:00" in text, "周表本身（weekday 制，不过期）要照常注入"
-
-    def test_weekly_injected_without_note(self, monkeypatch):
+    def test_weekly_injected(self, monkeypatch):
         text = self._inject(monkeypatch, {"weekly": [{"day": "周六", "time": "19:00"}]})
         assert "周六 19:00" in text
+
+    def test_note_field_no_longer_injected(self, monkeypatch):
+        # 防回归：就算有人把「近况」写回 schedule.json，也不该被注入
+        text = self._inject(monkeypatch, {
+            "weekly": [{"day": "周一", "time": "20:00"}],
+            "近况": "这周在收拾搬家",
+        })
+        assert "搬家" not in text, "被删除的近况字段不该再被注入"
+        assert "周一 20:00" in text, "周表（weekday 制，不过期）要照常注入"
 
 
 class TestGroupEventAge:

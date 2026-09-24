@@ -1,13 +1,13 @@
-"""人格规则加载：traits/styles/behaviors + trigger 向量缓存 + terms 名词库。
+"""人格规则加载：traits/styles/behaviors + 周表 + terms 名词库。
 
-trigger 向量已离线预计算到 trigger_vectors.json，运行时读缓存。
+behaviors **不走向量**（L3 改为「判别词 + LLM 意图分类」，见 retrieval.select_behavior_item），
+所以改 behaviors.json 后不需要重算任何向量（旧文档提的 trigger_vectors.json 已废弃）。
 """
 import json
-from datetime import date, datetime
 
 from .constants import (
     TRAITS_FILE, STYLES_FILE, BEHAVIORS_FILE,
-    TERMS_FILE, SCHEDULE_FILE, SCHEDULE_NOTE_TTL_DAYS,
+    TERMS_FILE, SCHEDULE_FILE,
 )
 
 
@@ -32,10 +32,12 @@ def load_terms() -> list:
 
 
 def load_schedule():
-    """加载 persona/world/schedule.json（周表+近况，手动维护）。
+    """加载 persona/world/schedule.json（只有周表，手动维护）。
 
     周表是回答"明天/这周/几点播"类问题的**地面真值**——记忆里带"明天/下周"的话
     是过去某场直播当时的说法，可能早已过期，不能当现在的安排答。
+    weekly 是 weekday 制的固定表，到周自动对，**永远不会过期**，这是它比
+    "近况"可靠的地方（后者已删除，见 待办清单.md）。
     """
     global _schedule_cache
     if _schedule_cache is not None:
@@ -48,37 +50,6 @@ def load_schedule():
         except (json.JSONDecodeError, OSError):
             _schedule_cache = {}
     return _schedule_cache
-
-
-def schedule_note_age_days(sched: dict) -> float | None:
-    """近况（"这周在收拾搬家"这类临时事实）距今多少天。
-
-    返回 None = 没有近况或日期缺失/解析不了（调用方当作"不可信"，别当当前事实用）。
-    """
-    if not isinstance(sched, dict):
-        return None
-    raw = str(sched.get("近况_updated") or "").strip()
-    if not raw:
-        return None
-    try:
-        d = date.fromisoformat(raw) if len(raw) == 10 else datetime.fromisoformat(raw).date()
-    except (TypeError, ValueError):
-        return None
-    delta = (date.today() - d).days
-    return float(delta) if delta >= 0 else None   # 未来日期 = 脏数据，不可信
-
-
-def schedule_note_is_fresh(sched: dict, ttl_days: int = SCHEDULE_NOTE_TTL_DAYS) -> bool:
-    """近况是否还在有效期内。**超期就该整条不注入**——过期的事实等于不存在。
-
-    为什么在代码里判、不交给模型：模型不知道阈值、也不会拿"更新于 X"去和当前时间
-    做减法；更要命的是【一致性规则】会把第一次用错的借口锁死，错误只固化不自我纠正。
-    实测踩坑：近况"这周在收拾搬家"（更新于 09-05）被当当前理由用了一周。
-    """
-    age = schedule_note_age_days(sched)
-    if age is None:
-        return False
-    return age < ttl_days
 
 
 def load_persona_rules():
@@ -140,9 +111,15 @@ def build_global_persona_context(traits, styles):
 def _format_behavior_rule(rule: dict) -> str:
     """将一条行为规则格式化为注入文本。供检索层（select_behavior_item）使用。
 
-    新版格式含 samples（真人原话示范，few-shot）：
-    - response 给行为指令
-    - samples 给"她真实怎么说话"的示范（必须来自素材原文，不得改写）
+    格式含 samples（真人原话示范，few-shot）：
+    - response 描述"**做什么**"（什么情境怎么反应），**不规定"用哪个词"**
+      ——措辞是台词，按黄金律第 1 条归 samples 承担。曾把"'呃…'起头"写进 response，
+      配上注入端的"请严格按此模式回应"，导致同一情境反复触发时每次都同一个开头
+      （实测 14 条回复里 8 条以"呃，"开头，而 86 条真实素材里 0 条这么开头）。
+    - samples 给"她真实怎么说话"的示范。**来自素材，但允许本土化同义改写**
+      （素材是直播弹幕语境、这里是私聊，语境变了就要适配；这不是"素材掺假"）。
+      判据见 待办清单.md 的「本土化」条：携带**某一回的具体情境**的样本会被模型当
+      **现在**复用（"明天要搬家"→ 三个月后还在说搬家），要改写成"她一贯如何"。
     """
     name = rule.get("name", "")
     desc = rule.get("response", "")

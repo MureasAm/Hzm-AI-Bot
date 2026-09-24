@@ -17,7 +17,7 @@ from openai import AsyncOpenAI
 # 项目根目录（scripts/ 的上一级），所有路径基于它构建
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = PROJECT_ROOT / ".env.prod"
-VOICE_FILE = PROJECT_ROOT / "persona" / "persona/speech/voice_samples.json"
+VOICE_FILE = PROJECT_ROOT / "persona" / "speech" / "voice_samples.json"
 OUTPUT_FILE = PROJECT_ROOT / "persona" / "speech" / "voice_sample_vectors.json"
 EMBEDDING_MODEL = "embedding-3"
 ZHIPU_BASE_URL = "https://open.bigmodel.cn/api/paas/v4/"

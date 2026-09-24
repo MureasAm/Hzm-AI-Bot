@@ -21,7 +21,6 @@ from .constants import (
 )
 from .persona import (
     load_persona_rules, build_global_persona_context, load_schedule,
-    schedule_note_is_fresh, schedule_note_age_days,
 )
 from .memory import (
     get_user_history, append_user_history,
@@ -291,25 +290,17 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
         base_system += "\n\n" + global_persona
     messages.append({"role": "system", "content": base_system})
 
-    # 周表 + 近况（地面真值）：被问"明天来吗/这周/几点播"以它为准。
+    # 周表（地面真值）：被问"明天来吗/这周/几点播"以它为准。
     # 记忆里带"明天/下周"的话是过去某场直播当时的说法，可能早过期，不能当现在的安排。
+    # 这里**只有 weekly**（weekday 制，到周自动对，永不过期）——曾有的「近况」字段已整条删除，
+    # 它治不了"用旧记忆回答当下"（漏点在 voice_samples），且手动维护必烂。见 constants.py 的说明。
     sched = load_schedule()
     weekly = sched.get("weekly") if sched else None
     if weekly:
         lines = "、".join(f"{x.get('day')} {x.get('time')}" for x in weekly if x.get('day'))
-        # 近况是"临时事实"，超期就不注入——**她在忙什么**会被当"现在为什么迟到/没播"的理由，
-        # 而旧近况 + 【一致性规则】会把那个借口锁死（实测"搬家"被用了一周）。
-        # weekly 是 weekday 制的固定表，到周自动对，不受此影响。
-        note = (sched.get("近况") or "").strip()
-        note_txt = ""
-        if note and schedule_note_is_fresh(sched):
-            note_txt = f"。近况：{note}"
-        elif note:
-            age = schedule_note_age_days(sched)
-            print(f"[周表] 近况已过期（{age:.0f} 天前更新），本轮不注入：{note[:30]}")
         messages.append({
             "role": "system",
-            "content": f"【灰泽满的周表】她的固定直播安排：{lines}{note_txt}。"
+            "content": f"【灰泽满的周表】她的固定直播安排：{lines}。"
                        f"被问'明天/这周/几点播/来不来直播'时，以这个周表为准回答（带她的嘴硬风格），"
                        f"不要拿直播记忆里过去某场的旧安排当现在的计划。",
         })
@@ -759,7 +750,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         members = [n for n in (gm.get("members") or {}).values() if n]
         names = "、".join(members[-12:]) or "（还没太熟的几个绿冻）"
         # 带相对时间注入：群近况事件存了 t，以前注入时丢掉 → 上周的事被当"现在"。
-        # 和 schedule 近况是同一个坑（存了时间戳、注入时丢），见 constants.SCHEDULE_NOTE_TTL_DAYS 的注释。
+        # 和长期记忆 last_seen 是同一个坑（存了时间戳、注入时丢）。
         events = []
         for e in (gm.get("events") or [])[:3]:
             txt = (e.get("text") or "").strip()
@@ -802,7 +793,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
             "role": "system",
             "content": f"警告：你刚说过『{reply}』，几乎原样复读会很生硬。"
                        f"对方很可能在重复同一句/同一情绪。别再复读上轮的解释，换一个动作："
-                       f"认怂答应去做、自嘲一句、或直接点破'你是不是在闹我'。重新回复这条消息。",
+                       f"认怂答应去做、自嘲一句、或者直接点破对方又在闹。重新回复这条消息。",
         }
         for _ in range(3):
             reply = await generate_reply(list(messages) + [nudge])

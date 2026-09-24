@@ -324,7 +324,7 @@ def build_memory_context(card: dict) -> str:
         recent = last["summary"] if isinstance(last, dict) else str(last)
         if _not_null_str(recent):
             # 带相对时间：这条一直存着 date 却从不注入，于是几个月前的时刻也被说成"最近的记忆"。
-            # 和 schedule 近况/群近况是同一个坑——见 constants.SCHEDULE_NOTE_TTL_DAYS 的注释。
+            # 和群近况事件是同一个坑（存了时间戳、注入时丢）。
             # 用 format_day_gap（按天）而不是 format_last_seen_gap（按秒）：纯日期没有小时精度。
             gap = format_day_gap(last.get("date") if isinstance(last, dict) else None)
             parts.append(f"你们之间最近的记忆{'（' + gap + '）' if gap else ''}：{recent}。"
