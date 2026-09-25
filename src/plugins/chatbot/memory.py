@@ -88,7 +88,11 @@ def get_last_turn_gap_seconds(user_id: str) -> float | None:
 
 
 def append_user_history(user_id: str, user_msg: str, reply: str) -> None:
-    """追加一轮对话到短期记忆（带时间戳），保留最近 N 条。全程持锁。"""
+    """追加一轮对话到短期记忆（带时间戳），保留最近 N 条。全程持锁。
+
+    `reply` 传空串 = **她这批没开口**（群聊接话门判定安静）。这时只记"群里说了什么"，
+    不记一条空的"灰泽满："——她看到了、只是没接，下一轮判定和生成仍该看得到上下文。
+    """
     with _memory_lock:
         memory = load_short_memory()
         history = memory.get(user_id, [])
@@ -98,7 +102,8 @@ def append_user_history(user_id: str, user_msg: str, reply: str) -> None:
             history = []
         now = time.time()
         history.append({"t": now, "text": f"用户：{user_msg}"})
-        history.append({"t": now, "text": f"灰泽满：{reply}"})
+        if reply:
+            history.append({"t": now, "text": f"灰泽满：{reply}"})
         if len(history) > SHORT_MEMORY_LINES:
             history = history[-SHORT_MEMORY_LINES:]
         memory[user_id] = history

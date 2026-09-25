@@ -59,6 +59,21 @@ class TestHistoryBackCompat:
         memory.append_user_history("u1", "还来", "来了")
         assert memory.get_user_history("u1") == ["用户：在吗", "用户：还来", "灰泽满：来了"]
 
+    def test_empty_reply_records_only_her_side(self, tmp_memory):
+        """群聊接话门判定"不接"时走这条：她看到了、只是没说。
+
+        只记"群里说了什么"，**不记一条空的"灰泽满："**；而且要留得下
+        ——下一轮判定和生成都得看得到上下文，否则她会开始"装作知道上文"。
+        """
+        memory.append_user_history("g1", "小李：我服了\n小王：哈哈", "")
+        assert memory.get_user_history("g1") == ["用户：小李：我服了\n小王：哈哈"]
+
+    def test_silent_batch_still_caps_length(self, tmp_memory):
+        for i in range(12):
+            memory.append_user_history("g1", f"群消息{i}", "")
+        raw = json.loads(tmp_memory.read_text(encoding="utf-8"))["g1"]
+        assert len(raw) == memory.SHORT_MEMORY_LINES
+
 
 class TestLastTurnGap:
     def test_no_history_is_none(self, tmp_memory):

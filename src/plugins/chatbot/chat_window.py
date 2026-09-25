@@ -19,6 +19,8 @@ from nonebot.adapters.onebot.v11 import Message
 from .core import (
     handle_chat, summarize_batch, _get_clients,
 )
+from .memory import get_user_history, append_user_history
+from .group_gate import should_reply_in_group
 from .reply_style import (
     split_reply, split_delay, clean_reply,
 )
@@ -225,6 +227,19 @@ async def _flush(win: _UserWindow) -> None:
         last_t = (g.get("events") or [{}])[0].get("t", 0.0) if g.get("events") else 0.0
         if time.time() - last_t >= GROUP_EVENT_COOLDOWN:
             group_memory.add_event(win.target_id, batch_summary)
+
+    # 群聊接话判定：群友不是每条都接，攒批安静下来时先问一句"这批要不要开口"。
+    # **私聊不过门**——被人直接找来必回，那是另一回事。
+    # 判定不接时：不生成、不发送，但**仍把这一批记进短期记忆**（只记用户侧）——
+    # 她"看到了、只是没说"；不记的话下一轮判定看不到上下文，她就会开始"装作知道上文"。
+    if not win.is_private:
+        deepseek_client, _ = _get_clients()
+        hist = "\n".join(get_user_history(win.target_id)[-8:])
+        if not await should_reply_in_group(deepseek_client, hist, combined):
+            append_user_history(win.target_id, combined, "")
+            print(f"[读秒] 群={win.target_id} 这批不接，只记不发")
+            return
+
     reply = await handle_chat(win.target_id, combined, vision_desc=vision_desc,
                               batch_summary=batch_summary, is_group=not win.is_private)
     reply = clean_reply(reply)  # 去括号前缀 + 整条至多 1 个括号

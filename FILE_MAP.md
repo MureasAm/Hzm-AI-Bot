@@ -19,7 +19,8 @@
 |---|---|---|
 | `__init__.py` | 事件入口 | 收消息→进读秒窗口；心跳/在线信号(data/heartbeat\|qq_alive\|qq_offline)；自动通过好友 |
 | `core.py` | 主循环 | 十层提示注入、六路检索融合、生成、记忆提取、防复读、梗/行为路由落地 |
-| `chat_window.py` | 读秒攒批窗口 | 群=整群一窗；回复前读图+归纳；语音优先；`split_reply` 分批发（打字感） |
+| `chat_window.py` | 读秒攒批窗口 | 群=整群一窗；回复前读图+归纳；**群聊先过接话门**（私聊不过）；语音优先；`split_reply` 分批发（打字感） |
+| `group_gate.py` | **群聊接话门** | 攒批安静下来时判"这批要不要开口"（判据=用户标定：情绪/经历/点名才接，纯事务附和收尾不接）。失败按"接"放行。`GROUP_GATE=0` 可关 |
 | `reply_style.py` | 纯函数后处理 | 拆句/分批延迟/`clean_reply`（换行归一、去括号、省略号纪律、自指兜底）/防复读检测 |
 | `retrieval.py` | 检索融合 | corpus/voice/phrase 向量 + behavior(L3) 走 RRF；preference/core_story 命中才带；关键词门/预算 |
 | `routing.py` | 硬路由 | legendary 梗库（含 LLM 语境确认）+ 行为意图分类 L3 |
