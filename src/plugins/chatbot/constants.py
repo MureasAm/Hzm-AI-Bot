@@ -21,6 +21,12 @@ GROUP_MEMORY_FILE = PROJECT_ROOT / "user_memory" / "groups.json"              # 
 # 群近况事件写入冷却（秒）+ 上限条数（防碎碎念刷爆记忆）
 GROUP_EVENT_COOLDOWN = 300
 GROUP_EVENT_MAX = 20
+
+# ==================== 表情包 ====================
+# 距上次发过表情包至少隔几轮才再考虑发一张。真人不会每轮都甩表情包
+# （qq-bridge 那边的经验值也是"普通闲聊每 3~5 轮一张"）。
+# 注意这只是**冷却**，不是频率——真正决定发不发的是"表情与这句话是否十分对应"。
+STICKER_COOLDOWN_TURNS = 3
 SCHEDULE_FILE = PROJECT_ROOT / "persona" / "world" / "schedule.json"          # 她的周表(手动维护,注入地面真值)
 
 # ==================== 已删除：schedule 的「近况」====================

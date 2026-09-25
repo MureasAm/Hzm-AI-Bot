@@ -21,6 +21,7 @@
 | `core.py` | 主循环 | 十层提示注入、六路检索融合、生成、记忆提取、防复读、梗/行为路由落地 |
 | `chat_window.py` | 读秒攒批窗口 | 群=整群一窗；回复前读图+归纳；**群聊先过接话门**（私聊不过）；语音优先；`split_reply` 分批发（打字感） |
 | `group_gate.py` | **群聊接话门** | 攒批安静下来时判"这批要不要开口"（判据=用户标定：情绪/经历/点名才接，纯事务附和收尾不接）。失败按"接"放行。`GROUP_GATE=0` 可关 |
+| `stickers.py` | **表情包** | 判「她这句话配哪张表情」，十分对应才发（失败**不发**，与接话门相反）。标注在 `persona/media/stickers.json`，图在 `assets/stickers/`。`STICKER=0` 可关 |
 | `reply_style.py` | 纯函数后处理 | 拆句/分批延迟/`clean_reply`（换行归一、去括号、省略号纪律、自指兜底）/防复读检测 |
 | `retrieval.py` | 检索融合 | corpus/voice/phrase 向量 + behavior(L3) 走 RRF；preference/core_story 命中才带；关键词门/预算 |
 | `routing.py` | 硬路由 | legendary 梗库（含 LLM 语境确认）+ 行为意图分类 L3 |
@@ -67,7 +68,7 @@
 - **向量**：`generate-vectors -i persona/world/statement_final.json`；`precompute voice-samples|phrases|preferences|core-stories`
 - **评测**：regression / persona-eval / retrieval-eval
 - **工具**：bili-check / bili-login / vision-test
-- **独立运行（不在 run_tool）**：`watchdog.py`（假死自愈进程）、`notifier.py`（SMTP，被 watchdog 用）、`update_schedule.py`（周表识图；日常用根目录 `更新周表.bat` 拖图，也可丢 `data/schedule_inbox/` 后无参跑）
+- **独立运行（不在 run_tool）**：`watchdog.py`（假死自愈进程）、`notifier.py`（SMTP，被 watchdog 用）、`update_schedule.py`（周表识图；日常用根目录 `更新周表.bat` 拖图，也可丢 `data/schedule_inbox/` 后无参跑）、`label_stickers.py`（给 `assets/stickers/` 打标，**加了新表情就重跑它**，幂等）
 - **判据回归集**：`scripts/regression_cases.json`（真实翻车固化成确定性判据）→ `run_tool.py regression --check`
 
 > ⚠️ `generate-persona` 会覆盖人格三件套，需 `--danger`；`generate-vectors` 缺省指向 statement_final，别靠内置 RAW_CORPUS。

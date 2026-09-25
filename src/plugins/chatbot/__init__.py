@@ -245,6 +245,89 @@ def _extract_quote_text(event) -> str:
     return f"[引用{who}说的：「{text}」{extra}]"
 
 
+def _flatten_forward_content(content) -> str:
+    """把转发里一条消息的 content 拍成纯文本。
+
+    各实现给的形状不一样（字符串 / 段数组 / Message 对象），所以三种都认。
+    图片/表情拍成占位符——她要的是"知道聊了啥"，不需要图片字节。
+    """
+    if isinstance(content, str):
+        return content.strip()
+    if hasattr(content, "extract_plain_text"):      # nonebot Message 对象
+        try:
+            return (content.extract_plain_text() or "").strip()
+        except Exception:
+            return ""
+    if isinstance(content, list):
+        out = []
+        for s in content:
+            if not isinstance(s, dict):
+                continue
+            t = s.get("type")
+            if t == "text":
+                out.append(str((s.get("data") or {}).get("text", "")))
+            elif t == "image":
+                out.append("[图片]")
+            elif t == "face":
+                out.append("[表情]")
+        return "".join(out).strip()
+    return ""
+
+
+def _render_forward(resp) -> str:
+    """把 get_forward_msg 的返回拍成「昵称：内容」逐行。认不出的形状返回空串。"""
+    nodes = []
+    if isinstance(resp, dict):
+        nodes = resp.get("message") or resp.get("messages") or []
+    elif isinstance(resp, list):
+        nodes = resp
+    lines = []
+    for nd in nodes:
+        if not isinstance(nd, dict):
+            continue
+        d = nd.get("data") if isinstance(nd.get("data"), dict) else nd
+        text = _flatten_forward_content(d.get("content") or d.get("message") or "")
+        if not text:
+            continue
+        nick = str(d.get("nickname") or d.get("name") or "").strip()
+        lines.append(f"{nick}：{text}" if nick else text)
+    return "\n".join(lines)
+
+
+async def _extract_forward_text(event, bot) -> str:
+    """把"用户转发的聊天记录"取回并**摘要**成可注入的一段；没有转发返回空串。
+
+    取回走 `bot.get_forward_msg`（走 Bot.__getattr__ → call_api，OneBot 标准动作）。
+    **只注入摘要、不注入原文**：转发几十条几千字，原文会挤爆上下文——
+    详见 core.summarize_forward 的说明。
+    """
+    try:
+        segs = list(event.get_message())
+    except Exception:
+        return ""
+    for seg in segs:
+        if seg.type != "forward":
+            continue
+        fid = str(seg.data.get("id") or "").strip()
+        if not fid:
+            continue
+        try:
+            resp = await bot.get_forward_msg(id=fid)
+        except Exception as e:
+            print(f"⚠️ 取转发内容失败: {e}")
+            return "[转发了一条聊天记录，但没取到内容]"
+        raw = _render_forward(resp)
+        if not raw:
+            return "[转发了一条聊天记录，但里面没有文字内容]"
+        from .core import summarize_forward
+        summary = await summarize_forward(raw)
+        n = raw.count("\n") + 1
+        print(f"[转发] 取回 {n} 条 → 摘要 {len(summary)} 字")
+        return (f"[转发的聊天记录（{n} 条）：{summary}]" if summary
+                else f"[转发了一条聊天记录（{n} 条，内容较长没细看）]")
+    return ""
+
+
 @chat.handle()
 async def _handle_chat(bot: Bot, event: Event):
     msg = event.get_message()
@@ -256,6 +339,11 @@ async def _handle_chat(bot: Bot, event: Event):
     quote_text = _extract_quote_text(event)
     if quote_text:
         user_msg = f"{quote_text} {user_msg}".strip() if user_msg else quote_text
+
+    # 合并转发：取回聊天记录 → 摘要 → 注入（只注入摘要，原文不进上下文）
+    forward_text = await _extract_forward_text(event, bot)
+    if forward_text:
+        user_msg = f"{forward_text} {user_msg}".strip() if user_msg else forward_text
 
     # QQ 内置表情（face）：把含义转成消息，纯表情也能回应
     if face_text:
@@ -270,7 +358,8 @@ async def _handle_chat(bot: Bot, event: Event):
     target_id = str(user_id if is_private else getattr(event, "group_id", ""))
     print(f"[收到消息] user={user_id}, msg={user_msg[:40]!r}, "
           f"img={'有' if (image_url or image_file) else '无'}, "
-          f"引用={'有' if quote_text else '无'}")
+          f"引用={'有' if quote_text else '无'}, "
+          f"转发={'有' if forward_text else '无'}")
 
     # 读秒窗口（方案B）：攒批 + 静默后统一回复（含读图/归纳/分批发送）
     # target_id=会话标识（私聊=user_id，群聊=group_id），群聊按群攒批实现多人对话

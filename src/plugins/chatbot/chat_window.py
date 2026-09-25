@@ -14,13 +14,14 @@ import random
 import time
 from pathlib import Path
 
-from nonebot.adapters.onebot.v11 import Message
+from nonebot.adapters.onebot.v11 import Message, MessageSegment
 
 from .core import (
     handle_chat, summarize_batch, _get_clients,
 )
 from .memory import get_user_history, append_user_history
 from .group_gate import should_reply_in_group
+from .stickers import pick_sticker
 from .reply_style import (
     split_reply, split_delay, clean_reply,
 )
@@ -28,7 +29,7 @@ from .voice import should_voice, send_voice
 from .vision import describe_image_bytes, _read_image_bytes
 from .constants import (
     READ_WINDOW_MIN_SECONDS, READ_WINDOW_MAX_SECONDS, SPLIT_REPLY_ENABLED,
-    GROUP_EVENT_COOLDOWN,
+    GROUP_EVENT_COOLDOWN, STICKER_COOLDOWN_TURNS, PROJECT_ROOT,
 )
 from . import group_memory
 
@@ -47,6 +48,10 @@ class _UserWindow:
         self.generation = 0                        # 每次 enqueue 自增
         self.bot = None
         self.is_private = True
+        # 表情包冷却：距上次发过几张回复了（见 STICKER_COOLDOWN_TURNS），
+        # 以及最近发过的 id（提示模型别连着用同一张）。窗口空闲清理时一并重置。
+        self.turns_since_sticker = STICKER_COOLDOWN_TURNS
+        self.recent_stickers: list[str] = []
 
 
 _windows: dict[str, _UserWindow] = {}
@@ -270,6 +275,43 @@ async def _flush(win: _UserWindow) -> None:
         await _send(win, p)
         await asyncio.sleep(split_delay(p))
     await _send(win, parts[-1])
+
+    # 表情包：文字发完之后，若某张表情与这句话"十分对应"就补一张。
+    # 走语音那条路时不发（语音本身就是长句/情绪表达，再配图很怪）。
+    await _maybe_send_sticker(win, reply)
+
+
+async def _maybe_send_sticker(win: _UserWindow, reply: str) -> None:
+    """冷却到点 + 有十分对应的表情 → 补发一张。全程不影响已经发出去的文字。"""
+    if win.turns_since_sticker < STICKER_COOLDOWN_TURNS:
+        win.turns_since_sticker += 1
+        return
+    deepseek_client, _ = _get_clients()
+    hit = await pick_sticker(deepseek_client, reply, avoid_ids=win.recent_stickers)
+    if not hit:
+        win.turns_since_sticker += 1
+        return
+    img = MessageSegment.image(file=_to_qq_image(hit["file"]))
+    try:
+        if win.is_private:
+            await win.bot.send_private_msg(user_id=win.target_id, message=img)
+        else:
+            await win.bot.send_group_msg(group_id=win.target_id, message=img)
+        print(f"[表情包] 已发送 {hit['id']}")
+    except Exception as e:
+        print(f"⚠️ 表情包发送失败（忽略）: {e}")
+    # 无论发没发成功都重置冷却并记下最近用过的，避免连着同一张
+    win.turns_since_sticker = 0
+    win.recent_stickers = ([hit["id"]] + win.recent_stickers)[:3]
+
+
+def _to_qq_image(rel_path: str) -> str:
+    """本地图片 → 合法的 file URL。
+
+    和语音同一个坑：必须 `/` 正斜杠 + `file:///` 三斜杠，反斜杠版不是合法 URL。
+    """
+    p = (PROJECT_ROOT / rel_path).resolve()
+    return "file:///" + p.as_posix()
 
 
 async def _send(win: _UserWindow, content: str) -> None:

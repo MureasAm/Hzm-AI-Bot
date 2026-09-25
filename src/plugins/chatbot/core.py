@@ -98,6 +98,40 @@ async def summarize_batch(msgs: list) -> str:
         return ""
 
 
+# 转发摘要的输入上限：转发动辄几十条、几千字，先截再喂，防把上下文挤爆
+FORWARD_FOR_SUMMARY_CHARS = 4000
+
+
+async def summarize_forward(raw: str) -> str:
+    """把别人转发的聊天记录压成一两句，供她理解后自然回应。
+
+    **为什么不让模型直接读原文**：转发记录动辄几十条、几千字，全塞进上下文会挤爆
+    （而且她要的是"知道这帮人聊了啥"，不是逐条读）。所以先摘要、只注入摘要。
+
+    失败返回空串（调用方降级成"内容较长没细看"，原文不入上下文）。
+    """
+    text = (raw or "").strip()
+    if not text:
+        return ""
+    try:
+        deepseek_client, _ = _get_clients()
+        resp = await deepseek_client.chat.completions.create(
+            model=_get_model_name(),
+            messages=[{"role": "user", "content":
+                       "下面是一段 QQ 群里转发的聊天记录（多人对话）。用**一两句话**概括他们聊了什么，"
+                       "供别人理解后自然接话。\n"
+                       "要求：只概括不评价、不加戏；说清'谁在跟谁聊什么、大致什么氛围'；不要逐条复述。\n\n"
+                       f"聊天记录：\n{text[:FORWARD_FOR_SUMMARY_CHARS]}\n\n"
+                       "只输出摘要本身，不要任何前缀。"}],
+            temperature=0.3,
+            max_tokens=120,
+            **THINKING_DISABLED,
+        )
+        return extract_chat_content(resp).strip()
+    except Exception as e:
+        print(f"⚠️ 转发摘要失败（忽略）: {e}")
+        return ""
+
 
 def _compose_record_msg(user_msg: str, vision_desc: str) -> str:
     """短期记忆里记录的用户消息：纯图片用视觉描述兜底，图文都有则拼接。"""
