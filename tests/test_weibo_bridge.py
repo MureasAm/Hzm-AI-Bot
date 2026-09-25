@@ -15,6 +15,18 @@ import pytest
 from src.plugins.chatbot import weibo_bridge as wb
 
 
+@pytest.fixture(autouse=True)
+def _no_llm(monkeypatch):
+    """微博推送现在会先试着转成"她会主动说的那句话"（要调 LLM）。
+
+    **单测一律让它返回 None**（走回退的通知模板）——否则每个用例都会真的请求一次，
+    又慢又贵又不稳，而且测的就不是推送逻辑了。
+    """
+    async def _none(*a, **k):
+        return None
+    monkeypatch.setattr(wb, "compose_proactive", _none)
+
+
 class TestParseCookie:
     def test_basic(self):
         assert wb._parse_cookie_str("SUB=abc; ULV=1; WBPSESS=x=y") == {

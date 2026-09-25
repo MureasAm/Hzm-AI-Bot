@@ -21,6 +21,7 @@ from nonebot import get_bot, get_driver
 from nonebot.adapters.onebot.v11 import Message, MessageSegment
 
 from .constants import WEIBO_STATE_FILE
+from .proactive import compose_proactive
 from . import _bridge_common
 from .config import get_weibo_uid, get_weibo_cookie, get_notify_whitelist, get_push_interval
 from .vision import _read_image_bytes, _normalize_image
@@ -298,8 +299,10 @@ class WeiboMonitor:
         if image_paths:
             print(f"[微博] 配图已下载 {len(image_paths)} 张")
 
-        content = self._format_post_push(post["text"], post["url"])
-        print(f"[微博] 检测到新微博 -> {content}")
+        # 同 B站：优先转成"她会主动说的那句话"，转不了/失败就退回结构化通知
+        said = await compose_proactive(post["text"], "微博")
+        content = said or self._format_post_push(post["text"], post["url"])
+        print(f"[微博] 检测到新微博 ({'主动发言' if said else '通知模板'}) -> {content}")
         await self._push(bot, content, image_paths=image_paths)
         self.state["last_post_id"] = post["id"]
         _save_state(self.state)

@@ -21,6 +21,7 @@
 | `core.py` | 主循环 | 十层提示注入、六路检索融合、生成、记忆提取、防复读、梗/行为路由落地 |
 | `chat_window.py` | 读秒攒批窗口 | 群=整群一窗；回复前读图+归纳；**群聊先过接话门**（私聊不过）；语音优先；`split_reply` 分批发（打字感） |
 | `group_gate.py` | **群聊接话门** | 攒批安静下来时判"这批要不要开口"（判据=用户标定：情绪/经历/点名才接，纯事务附和收尾不接）。失败按"接"放行。`GROUP_GATE=0` 可关 |
+| `proactive.py` | **主动发言** | 抓到动态/微博 → 转成「她会主动说的那句话」（走人设 + 按内容检索的风格样本）；转不了/失败返回 None，桥上退回原通知模板。`PROACTIVE=0` 可关 |
 | `stickers.py` | **表情包** | 判「她这句话配哪张表情」，十分对应才发（失败**不发**，与接话门相反）。标注在 `persona/media/stickers.json`，图在 `assets/stickers/`。`STICKER=0` 可关 |
 | `reply_style.py` | 纯函数后处理 | 拆句/分批延迟/`clean_reply`（换行归一、去括号、省略号纪律、自指兜底）/防复读检测 |
 | `retrieval.py` | 检索融合 | corpus/voice/phrase 向量 + behavior(L3) 走 RRF；preference/core_story 命中才带；关键词门/预算 |
@@ -48,7 +49,7 @@
 |---|---|---|
 | `core/system_prompt.txt` | 核心人格提示词（骨架：身份框架/自我称呼/说话节奏/括号语义） | 每轮 base system |
 | `core/traits.json` · `styles.json` | 性格基底 / 语言风格（name+desc+evidence） | →【性格基底】/【语言风格】 |
-| `behavior/behaviors.json` | 情境→反应示范（8~9 条，含真人 samples） | L3 分类命中才注入 |
+| `behavior/behaviors.json` | 情境→反应示范（11 条，含真人 samples） | L3 分类命中才注入 |
 | `behavior/behavior_keywords.json` | 行为判别词（确定性兜底，跳 LLM） | retrieval |
 | `speech/voice_samples.json(+_vectors)` | 她说话原话 few-shot（86 条，风格来源） | RRF 注入"说话方式参考" |
 | `speech/phrases.json(+_vectors)` | 措辞指纹（同意思→她真实原话） | 命中注入"固定说法" |
@@ -73,7 +74,7 @@
 
 > ⚠️ `generate-persona` 会覆盖人格三件套，需 `--danger`；`generate-vectors` 缺省指向 statement_final，别靠内置 RAW_CORPUS。
 
-## 五、测试（`tests/`，280 个）
+## 五、测试（`tests/`，495 个）
 `conftest.py` 初始化 NoneBot 并加载插件。核心逻辑（reply_style/retrieval/session/voice/chat_window/bili/group_memory/weibo/short_memory 纯函数）覆盖较全；weibo 推送、config、`__init__` 心跳、watchdog/notifier 覆盖少。
 
 ## 六、运行产物/状态（不入库）

@@ -8,6 +8,18 @@ from src.plugins.chatbot import _bridge_common as _bc
 from src.plugins.chatbot import bili_bridge as bb
 
 
+@pytest.fixture(autouse=True)
+def _no_llm(monkeypatch):
+    """动态推送现在会先试着转成"她会主动说的那句话"（要调 LLM）。
+
+    **单测一律让它返回 None**（走回退的通知模板）——否则每个用例都会真的请求一次，
+    又慢又贵又不稳，而且测的就不是推送逻辑了。要测主动发言那条路，用例自己再打桩。
+    """
+    async def _none(*a, **k):
+        return None
+    monkeypatch.setattr(bb, "compose_proactive", _none)
+
+
 class FakeBot:
     """模拟 OneBot Bot：记录私聊发送，返回固定好友列表。"""
 
@@ -176,6 +188,42 @@ class TestLiveMessage:
         msg = bb._live_open_message("测试直播")
         assert "https://live.bilibili.com" in msg
         assert "今天的内容是：测试直播" in msg
+
+
+class TestProactiveDynamic:
+    """动态优先转成"她会主动说的那句话"；转不了就退回结构化通知。"""
+
+    def _setup(self, monkeypatch, said):
+        m = _make_monitor(uid="1", sessdata="sess", state={"last_dynamic_id": "old"})
+        pushed = []
+
+        async def fake_push(bot, content, image_paths=None):
+            pushed.append(content)
+
+        monkeypatch.setattr(m, "_push", fake_push)
+        monkeypatch.setattr(m, "_format_dynamic_push", lambda text: f"通知:{text}")
+
+        async def _dyn():
+            return {"id": "new", "text": "正文", "image_urls": []}
+
+        monkeypatch.setattr(m, "_fetch_latest_dynamic", _dyn)
+        monkeypatch.setattr(bb, "_save_state", lambda s: None)
+
+        async def _compose(*a, **k):
+            return said
+        monkeypatch.setattr(bb, "compose_proactive", _compose)
+        return m, pushed
+
+    async def test_uses_her_sentence_when_convertible(self, monkeypatch):
+        m, pushed = self._setup(monkeypatch, "灰泽满今天收拾到半夜，累死了。")
+        await m._check_dynamic(FakeBot())
+        assert pushed == ["灰泽满今天收拾到半夜，累死了。"]
+
+    async def test_falls_back_to_notice_when_not_suitable(self, monkeypatch):
+        # 不适合主动说（纯转发/抽奖）→ 回退通知，**信息不能丢**
+        m, pushed = self._setup(monkeypatch, None)
+        await m._check_dynamic(FakeBot())
+        assert pushed == ["通知:正文"]
 
 
 class TestDynamic:

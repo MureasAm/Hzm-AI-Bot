@@ -22,6 +22,7 @@ from nonebot import get_bot, get_driver
 from nonebot.adapters.onebot.v11 import Message, MessageSegment
 
 from .constants import BILI_STATE_FILE
+from .proactive import compose_proactive
 from . import _bridge_common
 from .config import get_bili_uid, get_bili_sessdata, get_notify_whitelist, get_push_interval
 from .vision import _read_image_bytes, _normalize_image
@@ -367,8 +368,11 @@ class BiliMonitor:
             if image_paths:
                 print(f"[B站] 纯表情动态：表情 {len(image_paths)} 张（已压到 ≤{_EMOJI_MAX_SIDE}px）")
 
-        content = self._format_dynamic_push(dyn["text"])
-        print(f"[B站] 检测到新动态 -> {content}")
+        # 优先转成"她会主动说的那句话"；转不了（纯转发/抽奖等）或生成失败时，
+        # 退回原来的结构化通知——**信息不丢，行为和以前一致**。
+        said = await compose_proactive(dyn["text"], "B站")
+        content = said or self._format_dynamic_push(dyn["text"])
+        print(f"[B站] 检测到新动态 ({'主动发言' if said else '通知模板'}) -> {content}")
         await self._push(bot, content, image_paths=image_paths)
         self.state["last_dynamic_id"] = dyn["id"]
         _save_state(self.state)
