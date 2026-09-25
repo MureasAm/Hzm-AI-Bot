@@ -21,6 +21,7 @@ from .core import (
 )
 from .memory import get_user_history, append_user_history
 from .group_gate import should_reply_in_group
+from .chatlog import log_turn
 from .stickers import pick_sticker
 from .reply_style import (
     split_reply, split_delay, clean_reply,
@@ -248,6 +249,10 @@ async def _flush(win: _UserWindow) -> None:
     reply = await handle_chat(win.target_id, combined, vision_desc=vision_desc,
                               batch_summary=batch_summary, is_group=not win.is_private)
     reply = clean_reply(reply)  # 去括号前缀 + 整条至多 1 个括号
+
+    # 聊天落盘（分析用，gitignore）。放这里而不是发完之后：下面**语音那条路会提前 return**，
+    # 放到发送之后会漏掉所有语音回复。这里记的是"她这轮说了什么"（不管最终是语音还是文字）。
+    log_turn(win.target_id, not win.is_private, combined, reply)
 
     # 语音优先：成句回复(≥30字、无内心戏括号/链接)朗读成语音条——像真人"话多就录给你听"。
     # 成功就不刷文字分段（互斥不双发）；未启用/合成失败时 send_voice 返回 False，

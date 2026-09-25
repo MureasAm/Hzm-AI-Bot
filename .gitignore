@@ -185,3 +185,6 @@ user_memory/*.bak*
 data/weibo_cookies.json
 # 周表识图收件夹（运行时投递的原图 + 处理完的存档）
 data/schedule_inbox/
+
+# 聊天落盘（真实用户对话，分析用；**PUBLIC 仓库绝不能入库**）
+data/chat_log/
