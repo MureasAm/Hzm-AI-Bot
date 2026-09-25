@@ -114,6 +114,11 @@ async def pick_sticker(deepseek_client, reply: str, avoid_ids: list | None = Non
         if hit is None:
             print(f"⚠️ 表情判定给了不存在的 id={sid!r}，忽略")
             return None
+        # 「最近发过的」在提示词里也说了，但**模型不一定听**（实测 2 次里 1 次照选）。
+        # 所以这里再用代码拦一道：宁可这轮不发，也不连着甩同一张。
+        if sid in (avoid_ids or []):
+            print(f"[表情包] 判定选了最近刚发过的 {sid}，这轮不发")
+            return None
         print(f"[表情包] 选 {sid}（{str(data.get('why') or '')[:20]}）")
         return hit
     except Exception as e:

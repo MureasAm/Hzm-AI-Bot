@@ -129,6 +129,21 @@ class TestPick:
         assert await pick_sticker(c, "   ") is None
 
     @pytest.mark.asyncio
+    async def test_avoid_ids_are_enforced_in_code(self, two_stickers):
+        """提示词里说了"别再选"，但**模型不一定听**（实测 2 次里 1 次照选）。
+
+        所以还要代码拦一道：宁可这轮不发，也不连着甩同一张。
+        """
+        c = _StubClient(content='{"id": "st_aaa", "why": "又选它"}')
+        assert await pick_sticker(c, "无语", avoid_ids=["st_aaa"]) is None
+
+    @pytest.mark.asyncio
+    async def test_avoid_ids_lets_other_stickers_through(self, two_stickers):
+        c = _StubClient(content='{"id": "st_bbb"}')
+        hit = await pick_sticker(c, "无语", avoid_ids=["st_aaa"])
+        assert hit and hit["id"] == "st_bbb"
+
+    @pytest.mark.asyncio
     async def test_avoid_ids_reaches_prompt(self, two_stickers):
         seen = {}
 
