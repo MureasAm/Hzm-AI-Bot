@@ -134,11 +134,26 @@ def _load_cases(path=None) -> list:
 
 
 def _run_case(core, case: dict) -> dict:
-    """跑一个 case N 次，每次换一个 user_id（空短期记忆），返回回复与指标。"""
+    """跑一个 case N 次，每次换一个 user_id（空短期记忆），返回回复与指标。
+
+    支持的可选字段：
+    - `history`：[{"user": …, "reply": …}, …] 先垫进短期记忆再问最后那句。
+      **多轮场景必须用它**——"被追问时会不会改口/复读"这类问题，单轮问不出来。
+    - `is_group`：true 时按群会话跑（user_id 当群号），用来测群聊行为（如接话门）。
+    """
+    from src.plugins.chatbot import memory  # 懒导入：要在 _init() 之后
     cid = case["id"]
     runs = int(case.get("runs", 3))
-    replies = [asyncio.run(core.handle_chat(f"regr_{cid}_{i}", case["user"]))
-               for i in range(runs)]
+    is_group = bool(case.get("is_group"))
+    history = case.get("history") or []
+
+    def one(i: int) -> str:
+        uid = f"regr_{cid}_{i}"
+        for h in history:  # 垫历史：她"记得"前面发生过什么
+            memory.append_user_history(uid, h.get("user", ""), h.get("reply", ""))
+        return asyncio.run(core.handle_chat(uid, case["user"], is_group=is_group))
+
+    replies = [one(i) for i in range(runs)]
     openers = Counter(_opener(r) for r in replies)
     top_opener, top_n = openers.most_common(1)[0]
     return {
@@ -149,13 +164,33 @@ def _run_case(core, case: dict) -> dict:
     }
 
 
+def core_is_fallback(reply: str) -> bool:
+    """这一条是不是"没生成出来"的兜底文案。懒导入，避免 _init() 之前碰 core。"""
+    from src.plugins.chatbot.core import is_fallback_reply
+    return is_fallback_reply(reply)
+
+
 def _judge(case: dict, res: dict) -> list:
     """返回失败原因列表（空 = 通过）。"""
     fails = []
+
+    # 兜底文案（生成失败）不是"回复质量差"，是**这一轮压根没生成出来**。
+    # 不单独报的话，判据会拿一句故障文案当普通回复去判，结论是假的。
+    fb = [r for r in res["replies"] if core_is_fallback(r)]
+    if fb:
+        fails.append(f"{len(fb)} 条是兜底文案（生成失败），这轮结论不可信：{fb[0][:30]}")
     for word in case.get("forbid", []):
         hit = [r for r in res["replies"] if word in r]
         if hit:
             fails.append(f"出现禁词「{word}」×{len(hit)}（例：{hit[0][:40]}）")
+
+    # 正则判据：禁词表表达不了的（如"灰泽满…她"这种自指错误、"括号用了 3 个"）
+    pat = case.get("forbid_pattern")
+    if pat:
+        rx = re.compile(pat)
+        hit = [r for r in res["replies"] if rx.search(r)]
+        if hit:
+            fails.append(f"命中禁用模式 /{pat}/ ×{len(hit)}（例：{hit[0][:40]}）")
 
     req = case.get("require_any", [])
     if req:

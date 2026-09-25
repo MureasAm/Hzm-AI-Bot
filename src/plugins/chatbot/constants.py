@@ -74,15 +74,23 @@ CORPUS_STRONG_KEYWORD = 0.8        # 强关键词重叠直接放行（专名/罕
 # ==================== 六路检索（corpus/样本/行为/措辞 走 RRF；偏好/核心记忆命中才带）====================
 CORPUS_TOP_N = 3              # 直播记忆每路取 top（315 条库后 2→3，相关背景更容易命中）
 VOICE_SAMPLE_TOP_N = 3        # 风格样本每路取 top
-VOICE_SAMPLE_THRESHOLD = 0.60 # 风格样本阈值（0.60：真直播命中≈0.70，日常"聊时间"伪关联≈0.575，取中间值切断伪关联）
+# 阈值不是拍的：跑 `python scripts/threshold_scan.py` 量「噪声地板」
+# （15 条明确无关的输入打到每路上的最高分），阈值必须在地板之上，否则等于没有阈值。
+# 2026-09-25 体检：voice_sample 地板 0.610 → 原 0.60 压在 Threshold 上，提到 0.66。
+VOICE_SAMPLE_THRESHOLD = 0.66 # 风格样本阈值（噪声地板 0.610 + 余量）
 VOICE_SAMPLE_KEEPALIVE = True # 样本全低于阈值时保底注入 1 条（保住口癖）
-VOICE_SAMPLE_KEEPALIVE_MIN_SIM = 0.60  # 保底注入的最低相关度：与主阈值一致，低于则不注入（宁断档不错话题，防"日常聊时间"被塞直播样本）
+VOICE_SAMPLE_KEEPALIVE_MIN_SIM = 0.66  # 保底注入的最低相关度：与主阈值一致，低于则不注入（宁断档不错话题，防"日常聊时间"被塞直播样本）
 VOICE_SAMPLE_MIN_K = 1        # 保底注入条数
 VOICE_SAMPLE_PREFER_SHORT = True  # 注入时优先 short 档样本（控制回复长度）
 
 # ==================== V3 措辞指纹检索 ====================
 PHRASE_TOP_N = 2              # 措辞组每路取 top
-PHRASE_THRESHOLD = 0.40       # 措辞组阈值（略高于样本，避免误命中）
+# ⚠️ 这里是**已知失效但暂时回滚**的：措辞组的 trigger 只有六到十个字（"日常高频使用"），
+# 短文本嵌入挤在向量空间中心 —— 15 条明确无关的输入能打出 0.575（中位 0.461），
+# 而**正例**（"你唱得真好听！"→brag_deny）只有 **0.573**。**两者完全重叠，余弦分不开。**
+# 试过提到 0.63：噪声挡住了，但正例一起被误杀（eval 27/29 → 25/29）。
+# **结论：这一路该换判据（关键词/LLM 分类，像 behaviors 那样），不是调阈值。**
+PHRASE_THRESHOLD = 0.40
 PHRASE_PHASES_MAX = 3         # 每个措辞组注入的短语条数上限
 
 # ==================== V3 RRF 融合 ====================
@@ -146,7 +154,9 @@ AUTO_ACCEPT_FRIEND = True
 
 # 偏好档案（第 5 路语义检索）
 PREFERENCE_VECTOR_FILE = PROJECT_ROOT / "persona" / "world" / "preference_vectors.json"
-PREFERENCE_THRESHOLD = 0.55       # 偏好命中阈值（实测：真实命中 0.58+，短句偏好向量泛化过头会误命中，取 0.55 压误命中）
+# ⚠️ 同上：噪声地板 0.565 插在正例（0.501/0.552/0.590）**正中间** —— 余弦分不开。
+# 试过 0.62：三个正例全被误杀。**该换判据，不是调阈值。**
+PREFERENCE_THRESHOLD = 0.55
 PREFERENCE_TOP_N = 2              # 最多注入几条偏好条目
 
 # 核心记忆（印象最深的结晶，独立于 corpus 单独检索，低阈值高浮现）
