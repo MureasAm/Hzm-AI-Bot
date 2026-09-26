@@ -30,7 +30,7 @@ from .voice import should_voice, send_voice
 from .vision import describe_image_bytes, _read_image_bytes
 from .constants import (
     READ_WINDOW_MIN_SECONDS, READ_WINDOW_MAX_SECONDS, SPLIT_REPLY_ENABLED,
-    GROUP_EVENT_COOLDOWN, STICKER_COOLDOWN_TURNS, PROJECT_ROOT,
+    GROUP_EVENT_COOLDOWN, STICKER_COOLDOWN_TURNS, STICKER_RECENT_KEEP, PROJECT_ROOT,
 )
 from . import group_memory
 
@@ -49,10 +49,7 @@ class _UserWindow:
         self.generation = 0                        # 每次 enqueue 自增
         self.bot = None
         self.is_private = True
-        # 表情包冷却：距上次发过几张回复了（见 STICKER_COOLDOWN_TURNS），
-        # 以及最近发过的 id（提示模型别连着用同一张）。窗口空闲清理时一并重置。
-        self.turns_since_sticker = STICKER_COOLDOWN_TURNS
-        self.recent_stickers: list[str] = []
+        # 表情包冷却**不放这里**——窗口空闲会被销毁，放这儿等于每次重置（见 _sticker_state 的注释）
 
 
 _windows: dict[str, _UserWindow] = {}
@@ -286,15 +283,31 @@ async def _flush(win: _UserWindow) -> None:
     await _maybe_send_sticker(win, reply)
 
 
+# 表情包冷却状态：**必须按 target_id 持久，不能挂在 _UserWindow 上**。
+# 踩坑：放在 _UserWindow 上时，窗口一空闲就被销毁（_windows.pop），下次重建
+# 两个字段都回到初始值 —— 而私聊里每轮之间**必然有静默**，所以每次都重建，
+# **冷却形同虚设**。表现成"睡觉话题每次都会发那张眠了"。
+# （同一个坑还让 avoid_ids 永远是空 —— 跨轮防重复也一起失效。）
+_sticker_state: dict[str, dict] = {}
+
+
+def _sticker_st(target_id: str) -> dict:
+    return _sticker_state.setdefault(
+        target_id, {"turns": STICKER_COOLDOWN_TURNS, "recent": []})
+
+
 async def _maybe_send_sticker(win: _UserWindow, reply: str) -> None:
     """冷却到点 + 有十分对应的表情 → 补发一张。全程不影响已经发出去的文字。"""
-    if win.turns_since_sticker < STICKER_COOLDOWN_TURNS:
-        win.turns_since_sticker += 1
+    st = _sticker_st(win.target_id)
+    if st["turns"] < STICKER_COOLDOWN_TURNS:
+        st["turns"] += 1
         return
     deepseek_client, _ = _get_clients()
-    hit = await pick_sticker(deepseek_client, reply, avoid_ids=win.recent_stickers)
+    # avoid 传**全部**最近发过的（不只最近 3 条）：光防"连着发"不够，
+    # 用户报的是"同类"太频繁 —— 换个话题回来还会撞上同一张，那要更长的冷却池。
+    hit = await pick_sticker(deepseek_client, reply, avoid_ids=st["recent"])
     if not hit:
-        win.turns_since_sticker += 1
+        st["turns"] += 1
         return
     img = MessageSegment.image(file=_to_qq_image(hit["file"]))
     try:
@@ -305,9 +318,8 @@ async def _maybe_send_sticker(win: _UserWindow, reply: str) -> None:
         print(f"[表情包] 已发送 {hit['id']}")
     except Exception as e:
         print(f"⚠️ 表情包发送失败（忽略）: {e}")
-    # 无论发没发成功都重置冷却并记下最近用过的，避免连着同一张
-    win.turns_since_sticker = 0
-    win.recent_stickers = ([hit["id"]] + win.recent_stickers)[:3]
+    st["turns"] = 0
+    st["recent"] = ([hit["id"]] + st["recent"])[:STICKER_RECENT_KEEP]
 
 
 def _to_qq_image(rel_path: str) -> str:

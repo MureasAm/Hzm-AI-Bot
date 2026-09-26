@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from .constants import (
     PROJECT_ROOT,
     VOICE_SAMPLE_VECTOR_FILE, PHRASE_VECTOR_FILE, PREFERENCE_VECTOR_FILE, CORE_STORY_VECTOR_FILE,
-    RAG_THRESHOLD, CORPUS_TOP_N,
+    RAG_THRESHOLD, CORPUS_TOP_N, CORPUS_CANDIDATE_N,
     CORPUS_KEYWORD_FLOOR, CORPUS_STRONG_KEYWORD,
     VOICE_SAMPLE_THRESHOLD, VOICE_SAMPLE_TOP_N, VOICE_SAMPLE_KEEPALIVE, VOICE_SAMPLE_MIN_K,
     VOICE_SAMPLE_KEEPALIVE_MIN_SIM,
@@ -128,6 +128,25 @@ def retrieve_corpus(user_query: str, query_vector,
         if not _corpus_gate_pass(user_query, it["text"], sim):
             continue
         scored.append(RetrievalItem(source="corpus", item_id=str(i), score=sim, text=it["text"]))
+    scored.sort(key=lambda x: x.score, reverse=True)
+    return scored[:top_n]
+
+
+def retrieve_corpus_candidates(user_query: str, query_vector,
+                               top_n: int = CORPUS_CANDIDATE_N) -> list:
+    """corpus 的**候选召回**：不过阈值、不过关键词门，只按余弦取 top-N。
+
+    给 LLM 判定用的输入（见 corpus_judge）。**为什么敢不过阈值**：
+    实测正例对正确那条的**排名**是对的（「你多高啊」→ 身高那条排第 1），只是分数（0.443）
+    低于噪声地板——**排序有用、阈值没用**。所以这里把打分交给排序，把"相关不相关"交给 LLM 判。
+    """
+    db = load_vector_db()
+    if not db or not user_query or not query_vector:
+        return []
+    scored = [RetrievalItem(source="corpus", item_id=str(i),
+                            score=cosine_similarity(query_vector, it["vector"]),
+                            text=it["text"])
+              for i, it in enumerate(db)]
     scored.sort(key=lambda x: x.score, reverse=True)
     return scored[:top_n]
 

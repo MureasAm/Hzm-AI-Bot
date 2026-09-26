@@ -300,10 +300,13 @@ class WeiboMonitor:
             print(f"[微博] 配图已下载 {len(image_paths)} 张")
 
         # 同 B站：优先转成"她会主动说的那句话"，转不了/失败就退回结构化通知
+        # 同 B站：原文 + 她会说的那句话，两条都发（转写失败就只发原文）
+        notice = self._format_post_push(post["text"], post["url"])
         said = await compose_proactive(post["text"], "微博")
-        content = said or self._format_post_push(post["text"], post["url"])
-        print(f"[微博] 检测到新微博 ({'主动发言' if said else '通知模板'}) -> {content}")
-        await self._push(bot, content, image_paths=image_paths)
+        print(f"[微博] 检测到新微博 -> {'原文 + 主动发言' if said else '原文（转写失败）'}")
+        await self._push(bot, notice, image_paths=image_paths)
+        if said:
+            await self._push(bot, said)
         self.state["last_post_id"] = post["id"]
         _save_state(self.state)
 

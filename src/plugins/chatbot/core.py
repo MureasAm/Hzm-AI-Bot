@@ -30,9 +30,10 @@ from .memory import (
 )
 from .rag import embed_query
 from .retrieval import (
-    retrieve_corpus, retrieve_voice_samples, retrieve_phrases,
+    retrieve_corpus, retrieve_corpus_candidates, retrieve_voice_samples, retrieve_phrases,
     retrieve_preferences, retrieve_core_stories, fuse_and_truncate, select_behavior_item,
 )
+from .corpus_judge import judge_corpus
 from .constants import (
     PHRASE_PHASES_MAX, SPLIT_MIN_LEN, SPLIT_MAX_PARTS, SPLIT_MERGE_MIN_CHARS,
     SPLIT_DELAY_BASE_MS, SPLIT_DELAY_PER_CHAR_MS,
@@ -763,7 +764,15 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
                 behavior_item = select_behavior_item(query_text, behavior_intent, behaviors)
                 behavior_items = [behavior_item] if behavior_item else []
             query_vector = await embed_query(zhipu_client, retrieval_query or query_text)
+            # corpus 两段式：① 关键词门放行的照旧直通（高置信、零成本、行为不变）
+            #              ② 门没放行的取 top-N 交 LLM 判「用户是不是在问她这段」（填平"口语问句 vs
+            #                 第三人称陈述"的鸿沟——实测「你多高啊」只有 0.443，靠分数永远进不来）。
+            # 判不出来一律不带（宁可漏不可错，见 corpus_judge 模块头）。
             corpus_items = retrieve_corpus(retrieval_query or query_text, query_vector)
+            seen_ids = {it.item_id for it in corpus_items}
+            candidates = [c for c in retrieve_corpus_candidates(retrieval_query or query_text, query_vector)
+                          if c.item_id not in seen_ids]
+            corpus_items += await judge_corpus(deepseek_client, query_text, candidates)
             sample_items = retrieve_voice_samples(retrieval_query or query_text, query_vector)
             phrase_items = retrieve_phrases(retrieval_query or query_text, query_vector)
             fused_items = fuse_and_truncate(corpus_items, sample_items, behavior_items, phrase_items)

@@ -1,5 +1,5 @@
 {
-  "_readme": "检索层评测标注集。每条 = query + 对各路的期望（should=期望命中的 id，should_not_hit=该路应不命中，contains=返回文本应含的关键词）。来源：ROADMAP 已记录的回归案例 + 代表性正例。跑法：python scripts/retrieval_eval.py",
+  "_readme": "检索层评测标注集。每条 = query + 对各路的期望（should=期望命中的 id，should_not_hit=该路应不命中，contains=返回文本应含的关键词）。来源：ROADMAP 已记录的回归案例 + 代表性正例。跑法：python scripts/retrieval_eval.py。⚠️ corpus 一路**镜像线上**：关键词门直通 + 门没放行的交 LLM 判（见 corpus_judge.py）。2026-09-25 新增 co6~co8：co6 是只有 LLM 判才能捞到的正例（「你多高啊」靠余弦只有 0.443，被阈值挡）；co7/co8 是只有 LLM 判才挡得住的反例（词面/句式都撞得上，但差在「她到底有没有这段经历」这个事实）。",
   "cases": [
     { "id": "b1_youxiao", "query": "你是不是在敷衍我", "expect": { "behavior": { "should": ["被质疑时心虚辩解"] } } },
     { "id": "b2_shishuo", "query": "说好的八点直播呢？都八点四十了", "expect": { "behavior": { "should": ["失约被催时认栽滑跪"] } } },
@@ -29,6 +29,9 @@
     { "id": "co2_nvshiyou", "query": "你和室友关系怎么样", "expect": { "corpus": { "contains": ["女室友", "女同学"] } } },
     { "id": "co3_neg_time", "query": "9点是你那边", "expect": { "corpus": { "should_not_hit": true } } },
     { "id": "co4_neg_weather", "query": "今天天气不错，出去走走吗", "expect": { "corpus": { "should_not_hit": true } } },
-    { "id": "co5_neg_lan", "query": "灰泽满是不是很懒", "expect": { "corpus": { "should_not_hit": true } } }
+    { "id": "co5_neg_lan", "query": "灰泽满是不是很懒", "expect": { "corpus": { "should_not_hit": true } } },
+    { "id": "co6_shengao", "query": "你多高啊", "expect": { "corpus": { "contains": ["1米6", "身高"] } } },
+    { "id": "co7_neg_meeting", "query": "明天几点开会", "expect": { "corpus": { "should_not_hit": true } } },
+    { "id": "co8_neg_cold", "query": "感冒吃什么药", "expect": { "corpus": { "should_not_hit": true } } }
   ]
 }

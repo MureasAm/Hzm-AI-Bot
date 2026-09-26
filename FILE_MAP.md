@@ -2,6 +2,7 @@
 
 > 给使用者/接手的开发者看。按"入口 → 运行时 → 人格数据 → 工具 → 测试 → 产物"组织。
 > 版本史见 `ROADMAP.md`；**还没做的问题**见 `待办清单.md`（从 2026-09 全项目通读蒸馏）。
+> **想看"素材怎么被注进去"的全貌**（每层注入什么、多少字符、阈值多少、为什么这么设计）见 `注入链路.md`。
 
 ## 一、入口（怎么跑起来）
 
@@ -21,6 +22,7 @@
 | `core.py` | 主循环 | 十层提示注入、六路检索融合、生成、记忆提取、防复读、梗/行为路由落地 |
 | `chat_window.py` | 读秒攒批窗口 | 群=整群一窗；回复前读图+归纳；**群聊先过接话门**（私聊不过）；语音优先；`split_reply` 分批发（打字感） |
 | `group_gate.py` | **群聊接话门** | 攒批安静下来时判"这批要不要开口"（判据=用户标定：情绪/经历/点名才接，纯事务附和收尾不接）。失败按"接"放行。`GROUP_GATE=0` 可关 |
+| `corpus_judge.py` | **corpus 语义判** | 判"这段直播经历和用户刚说的话是不是一回事"（填平"口语问句 vs 第三人称陈述"的鸿沟——「你多高啊」靠余弦只有 0.443，永远进不来）。门放行的直通，门没放行的取 top-N 交它判。失败**不带经历**（与接话门相反：宁可漏不可错）。`CORPUS_JUDGE=0` 可关 |
 | `proactive.py` | **主动发言** | 抓到动态/微博 → 转成「她会主动说的那句话」（走人设 + 按内容检索的风格样本）；转不了/失败返回 None，桥上退回原通知模板。`PROACTIVE=0` 可关 |
 | `chatlog.py` | **聊天落盘** | 每轮追加 JSONL（`data/chat_log/`，**gitignore**）供事后分析——短时记忆只有 10 条滚动窗口，超出就没了。`CHATLOG=0` 可关 |
 | `stickers.py` | **表情包** | 判「她这句话配哪张表情」，十分对应才发（失败**不发**，与接话门相反）。标注在 `persona/media/stickers.json`，图在 `assets/stickers/`。`STICKER=0` 可关 |
@@ -75,7 +77,7 @@
 
 > ⚠️ `generate-persona` 会覆盖人格三件套，需 `--danger`；`generate-vectors` 缺省指向 statement_final，别靠内置 RAW_CORPUS。
 
-## 五、测试（`tests/`，504 个）
+## 五、测试（`tests/`，528 个）
 `conftest.py` 初始化 NoneBot 并加载插件。核心逻辑（reply_style/retrieval/session/voice/chat_window/bili/group_memory/weibo/short_memory 纯函数）覆盖较全；weibo 推送、config、`__init__` 心跳、watchdog/notifier 覆盖少。
 
 ## 六、运行产物/状态（不入库）

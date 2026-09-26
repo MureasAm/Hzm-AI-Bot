@@ -75,6 +75,34 @@ class TestDecision:
         assert await should_reply_in_group(client, "历史", "   ") is False
 
 
+class TestAddressedToHer:
+    """点名了她 → 确定性放行，不调 LLM。
+
+    踩坑（2026-09-25）：群里 @了她、还写了名字，却被门判成"不用接"。
+    能确定的事不该调 LLM——多一次调用就多一次判错的机会。
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("text", [
+        "@灰泽满 你今天怎么没播", "灰泽满在吗", "hzm出来", "小满帮我看看", "满姐晚安",
+    ])
+    async def test_named_always_replies_without_llm(self, text):
+        calls = []
+
+        class _Boom(_StubClient):
+            async def create(self, **kw):
+                calls.append(1)
+                raise AssertionError("点名了不该调 LLM")
+        assert await should_reply_in_group(_Boom(), "历史", text) is True
+        assert calls == []
+
+    @pytest.mark.asyncio
+    async def test_others_still_go_through_gate(self):
+        # 没点名 → 照常走判定（这条是反例，防止把"谁都放行"当修好）
+        client = _StubClient(content='{"reply": false}')
+        assert await should_reply_in_group(client, "历史", "你们吃了吗") is False
+
+
 class TestFailOpen:
     """判定失败一律按"接"——宁滥勿缺。她该说时不说，比多说几句难发现得多。"""
 

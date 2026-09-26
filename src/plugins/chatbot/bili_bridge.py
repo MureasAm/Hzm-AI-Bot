@@ -80,27 +80,49 @@ def _live_open_message(room_title: str, room_id: int = 0) -> str:
     return f"灰泽满宣布开播！\n\n今天的内容是：{title}\n\n{url}"
 
 
-def _extract_dynamic_text(item: dict) -> str:
-    """从 bilibili-api 的动态 item 里提取正文（防御式，兼容多种类型）。
+# 转发动态里，被转发原文最多带几个字进正文——
+# 目的是让通知模板/主动发言"知道在说什么"，不是把整篇公告搬进来。
+_FORWARD_TEXT_MAX = 150
 
-    旧格式（ARCHIVE/DRAW）：module_dynamic.desc.text；转发取 orig.desc.text。
-    新格式（OPUS 图文/文字动态）：major.opus.summary.text。
+
+def _own_text_of(item: dict) -> str:
+    """只取**这条动态自己写的那部分**（不含转发内容）。
+
+    两种格式：旧 `module_dynamic.desc.text`；新 OPUS `major.opus.summary.text`。
     """
-    modules = item.get("modules", {}) or {}
-    md = modules.get("module_dynamic", {}) or {}
-    text = (md.get("desc", {}) or {}).get("text", "") or ""
+    md = (item.get("modules") or {}).get("module_dynamic") or {}
+    text = (md.get("desc") or {}).get("text", "") or ""
     if not text:
-        orig = md.get("orig", {}) or {}
-        text = (orig.get("desc", {}) or {}).get("text", "") or ""
-    if not text:
-        # OPUS 新格式
-        opus = (md.get("major", {}) or {}).get("opus", {}) or {}
+        opus = ((md.get("major") or {}).get("opus") or {})
         summary = opus.get("summary")
         if isinstance(summary, dict):
             text = summary.get("text", "") or ""
         elif isinstance(summary, str):
             text = summary
-    return text.strip()
+    return (text or "").strip()
+
+
+def _extract_dynamic_text(item: dict) -> str:
+    """从 bilibili-api 的动态 item 里提取正文（防御式，兼容多种类型）。
+
+    ⚠️ **转发动态的被转发原文在 `item["orig"]`（顶层），不在 `module_dynamic["orig"]`。**
+    旧代码查的是后者 → 永远取不到 → 转发类的动态只剩自己的半句话。
+    实测踩坑（2026-09-25）：她转发一条游戏公告只写了"晚上九点～"，
+    于是转出来的主动发言就真的只有"晚上九点"，跟打卡一样。
+    （顶层 `orig` 还可能是**嵌套转发**，所以递归取。）
+
+    转发时把两段拼起来：`{她写的话}（转发自：{原文前 N 字}）`——
+    这样通知模板能显示原文、主动发言也有内容可讲。
+    """
+    text = _own_text_of(item)
+    orig = item.get("orig")
+    if not isinstance(orig, dict):
+        return text
+    inner = _extract_dynamic_text(orig)          # 递归：嵌套转发
+    inner = inner.strip()[:_FORWARD_TEXT_MAX]
+    if not inner:
+        return text
+    return f"{text}（转发自：{inner}）" if text else f"（转发自：{inner}）"
 
 
 # ==================== 表情解析 ====================

@@ -5,7 +5,7 @@ import pytest
 
 from src.plugins.chatbot.retrieval import (
     RetrievalItem,
-    retrieve_corpus,
+    retrieve_corpus, retrieve_corpus_candidates,
     retrieve_voice_samples,
     select_behavior_item,
     rrf_fuse,
@@ -110,6 +110,42 @@ class TestRetrieveCorpus:
     def test_empty_db_returns_empty(self, monkeypatch):
         monkeypatch.setattr("src.plugins.chatbot.retrieval.load_vector_db", lambda: [])
         assert retrieve_corpus("q", _vec()) == []
+
+
+class TestRetrieveCorpusCandidates:
+    """候选召回：**不过阈值、不过关键词门**，只按余弦取 top-N。
+
+    它存在的理由：实测正例对正确那条的**排名**是对的（「你多高啊」→ 身高那条排第 1），
+    只是分数（0.443）低于噪声地板——**排序有用、阈值没用**。打分交给排序，
+    "相关不相关"交给 LLM 判（corpus_judge）。
+    """
+
+    def test_low_sim_still_returned(self, monkeypatch):
+        # 门槛会滤掉的那条（0.443 < 0.48），候选召回必须给出来
+        db = [{"text": "灰泽满被问到身高，直接说1米6", "vector": [0.443, 0.9, 0, 0]}]
+        monkeypatch.setattr("src.plugins.chatbot.retrieval.load_vector_db", lambda: db)
+        assert retrieve_corpus("你多高啊", [1, 0, 0, 0], threshold=0.48) == []
+        cands = retrieve_corpus_candidates("你多高啊", [1, 0, 0, 0], top_n=3)
+        assert [c.text for c in cands] == [db[0]["text"]]
+
+    def test_sorted_by_score_and_top_n(self, monkeypatch):
+        db = [
+            {"text": "A", "vector": [0.2, 1, 0, 0]},
+            {"text": "B", "vector": [0.9, 0, 0, 0]},
+            {"text": "C", "vector": [0.5, 0, 0, 0]},
+        ]
+        monkeypatch.setattr("src.plugins.chatbot.retrieval.load_vector_db", lambda: db)
+        cands = retrieve_corpus_candidates("q", [1, 0, 0, 0], top_n=2)
+        assert [c.text for c in cands] == ["B", "C"]
+        assert all(c.source == "corpus" for c in cands)
+
+    def test_no_query_or_vector_returns_empty(self, monkeypatch):
+        monkeypatch.setattr("src.plugins.chatbot.retrieval.load_vector_db",
+                            lambda: [{"text": "A", "vector": [1, 0, 0, 0]}])
+        assert retrieve_corpus_candidates("q", None) == []
+        assert retrieve_corpus_candidates("", [1, 0, 0, 0]) == []
+        monkeypatch.setattr("src.plugins.chatbot.retrieval.load_vector_db", lambda: [])
+        assert retrieve_corpus_candidates("q", [1, 0, 0, 0]) == []
 
 
 class TestCorpusKeywordGate:

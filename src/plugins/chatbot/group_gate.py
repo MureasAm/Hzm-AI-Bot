@@ -53,6 +53,21 @@ def gate_enabled() -> bool:
     return os.environ.get("GROUP_GATE", "1") != "0"
 
 
+# 她自称/被叫的名字。消息里出现这些 → **一定是在跟她说话**，不用判。
+_SELF_NAMES = ("灰泽满", "hzm", "小满", "满姐", "满宝", "满哥")
+
+
+def _addressed_to_her(batch_text: str) -> bool:
+    """这批消息里有没有直接点她的名——**确定性信号，不该交给 LLM 判**。
+
+    踩坑（2026-09-25）：群里 @了她、还写了名字，却被门判成"不用接"。
+    判据本身没问题（提示词第一条就是"被点名必须接"），但**能确定的事不该调 LLM**——
+    多一次调用就多一次判错的机会，而这个信号是白纸黑字的。
+    """
+    t = batch_text or ""
+    return any(n in t for n in _SELF_NAMES)
+
+
 async def should_reply_in_group(deepseek_client, history_text: str, batch_text: str) -> bool:
     """群里这一批，灰泽满要开口吗？
 
@@ -63,6 +78,10 @@ async def should_reply_in_group(deepseek_client, history_text: str, batch_text: 
         return True
     if not (batch_text or "").strip():
         return False
+    # 点名了她 → 直接接，不调 LLM（确定性信号优先）
+    if _addressed_to_her(batch_text):
+        print("[群聊接话] 接（点名了她——确定性放行，不判定）")
+        return True
 
     prompt = GROUP_GATE_PROMPT.format(
         history=(history_text or "").strip()[-1500:] or "（这是群里最早的一批）",

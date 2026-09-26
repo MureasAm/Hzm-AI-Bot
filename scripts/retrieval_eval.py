@@ -14,7 +14,10 @@
     "behavior"/"voice_sample" 等 → {"should_not_hit": true}    期望不命中（负例）
     "corpus" → {"contains": [关键词]}                          期望 top-k 文本含关键词
 
-不读线上记忆、不调对话模型，只调智谱 embedding（与线上同款），只读向量缓存。只读不改。
+不读线上记忆、只读向量缓存、不写任何数据文件。调两类模型：
+  · 智谱 embedding（与线上同款）
+  · deepseek（behavior 的 L3 意图分类、corpus 的语义判——**与线上同一条路**，
+    评测必须镜像线上，否则测的不是真正跑的东西）
 """
 import argparse
 import asyncio
@@ -39,6 +42,7 @@ from src.plugins.chatbot.constants import ZHIPU_BASE_URL, DEEPSEEK_BASE_URL  # n
 from src.plugins.chatbot.persona import load_persona_rules  # noqa: E402
 from src.plugins.chatbot.retrieval import select_behavior_item  # noqa: E402
 from src.plugins.chatbot.core import classify_behavior  # noqa: E402  (L3：LLM 判行为意图)
+from src.plugins.chatbot.corpus_judge import judge_corpus  # noqa: E402  (corpus 语义判)
 
 CASES_FILE = PROJECT_ROOT / "scripts" / "retrieval_eval_cases.json"
 ENV_FILE = PROJECT_ROOT / ".env.prod"
@@ -97,6 +101,19 @@ def check_case(case: dict, got: dict) -> dict:
     return {"id": case["id"], "query": case["query"], "passed": passed, "checks": checks}
 
 
+async def corpus_items(query: str, qv, ds_client) -> list:
+    """corpus 两段式（**必须与 core.handle_chat 保持一致**，否则评测测的不是线上的东西）：
+    ① 关键词门放行的直通 ② 门没放行的取 top-N 交 LLM 判。
+    没有 deepseek client 时退回只用①（等于旧行为，用于纯 embedding 环境）。
+    """
+    items = retrieval.retrieve_corpus(query, qv)
+    if not ds_client:
+        return items
+    seen = {it.item_id for it in items}
+    cands = [c for c in retrieval.retrieve_corpus_candidates(query, qv) if c.item_id not in seen]
+    return items + await judge_corpus(ds_client, query, cands)
+
+
 def _summarize_got(got: dict, top: int = 3) -> dict:
     """压缩各 source 命中项（id + 分数），供 --verbose 打印。"""
     out = {}
@@ -133,7 +150,7 @@ async def run(cases, verbose: bool, only_id: str = None):
             print(f"[SKIP] {case['id']}  {query}  （embedding 失败）")
             continue
         got = {
-            "corpus": retrieval.retrieve_corpus(query, qv),
+            "corpus": await corpus_items(query, qv, ds_client),
             "voice_sample": retrieval.retrieve_voice_samples(query, qv),
             "phrase": retrieval.retrieve_phrases(query, qv),
             "preference": retrieval.retrieve_preferences(query, qv),
