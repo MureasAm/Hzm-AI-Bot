@@ -30,7 +30,8 @@ from .memory import (
 )
 from .rag import embed_query
 from .retrieval import (
-    retrieve_corpus, retrieve_corpus_candidates, retrieve_voice_samples, retrieve_phrases,
+    retrieve_corpus, retrieve_corpus_candidates, retrieve_voice_samples,
+    load_phrase_groups, select_phrase_groups,
     retrieve_preferences, retrieve_core_stories, fuse_and_truncate, select_behavior_item,
 )
 from .corpus_judge import judge_corpus
@@ -42,14 +43,14 @@ from .constants import (
 from . import context_probe
 from . import group_memory
 from .routing import (
-    LEGENDARY_REPLIES, LEGENDARY_CONFIRMS, legendary_confirmed, classify_behavior,
+    LEGENDARY_REPLIES, LEGENDARY_CONFIRMS, legendary_confirmed, legendary_hit, classify_l3,
 )
 from .reply_style import (
     split_reply, split_delay, clean_reply, is_echo_reply, is_emotion_only_query,
     _trim_text,
 )
 from .session_memory import (
-    probe_session, build_session_context, is_emoji_msg,
+    probe_session, build_session_context, is_emoji_msg, previous_session_note,
 )
 
 
@@ -307,7 +308,8 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
                        batch_summary: str = "", preference_items: list = None,
                        core_stories: list = None, session_context: str = "",
                        query_hint: str = "", denied_terms: set | None = None,
-                       group_context: str = "", history_gap_note: str = "") -> list:
+                       group_context: str = "", history_gap_note: str = "",
+                       prev_session_note: str = "") -> list:
     """按优先级组装发送给模型的消息列表。
 
     fused_items 为三路融合后的 RetrievalItem 列表，按源分组注入。
@@ -384,6 +386,12 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
             "role": "system",
             "content": f"【当前会话】{session_context}\n（这是你们这一场对话的调性和发生过的事，回应时要自然地顺着这个语境，不要生硬提及）",
         })
+
+    # 上一场会话（已过期，带"隔了多久"）：**不能并进上面那块**——
+    # 那句写的是"你们这一场对话"，把几天前的东西塞进去她会当成现在。
+    # 单独一条、且自己带着时间定性（见 session_memory.previous_session_note）。
+    if prev_session_note:
+        messages.append({"role": "system", "content": prev_session_note})
 
     # 感知源①：当前时间/农历/天气（始终注入，占预算极少；天气按该用户所在城市）
     now_context = context_probe.get_now_context(city=weather_city)
@@ -694,6 +702,9 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     # 距上一轮多久（此刻还没 append 本轮，最后一条就是上一轮）。同一场对话内为空串
     _gap_sec = get_last_turn_gap_seconds(user_id)
     history_gap_note = humanize_gap(_gap_sec) if _gap_sec is not None else ""
+    # 上一场会话（已过期）→「上次聊过」提示。**必须在 probe_session 之前取**——
+    # probe 会把 last_active 改写成"现在"，之后再问就永远判成"没过期"。
+    _prev_session_note = previous_session_note(user_id)
     retrieval_query = query_text
     if query_text:
         retrieval_query = await probe_session(user_id, query_text, history_text, deepseek_client)
@@ -716,8 +727,11 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
 
     # --- 🃏 经典梗硬匹配（双路由：关键词粗筛 + LLM 语境确认，防误触发） ---
     _confirm_history = ""
-    for trigger, replies in LEGENDARY_REPLIES.items():
-        if trigger in user_msg:
+    for trigger, entry in LEGENDARY_REPLIES.items():
+        if legendary_hit(trigger, user_msg):
+            replies = entry.get("replies") or []
+            if not replies:
+                continue
             confirm_tpl = LEGENDARY_CONFIRMS.get(trigger)
             if confirm_tpl:
                 if not _confirm_history:
@@ -750,19 +764,21 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
             preference_items = []
             core_stories = []
         else:
-            # L3：行为归属用 LLM 判意图（不再用 embedding 猜——embedding 按句式聚团，
+            # L3：归属用 LLM 判意图（不再用 embedding 猜——embedding 按句式聚团，
             # 会把'灰泽满你唱歌好听'（夸）和'灰泽满你怎么又迟到'（质问）挤在一起误判）。
-            # 判别词（敷衍/骗/鸽/迟到/黄桃/擦边…）命中则直接命中（可靠且省一次 LLM 调用）；
-            # 否则 LLM 判意图，判别词在 LLM 拿不准时兜底。
-            kw_item = select_behavior_item(query_text, "", behaviors)
-            if kw_item:
-                behavior_items = [kw_item]
-            else:
-                behavior_intent = await classify_behavior(deepseek_client, query_text, history_text, behaviors)
-                if behavior_intent:
-                    print(f"[行为] LLM 判定: {behavior_intent}")
-                behavior_item = select_behavior_item(query_text, behavior_intent, behaviors)
-                behavior_items = [behavior_item] if behavior_item else []
+            # **一次调用同时判"行为"（该怎么做）和"措辞"（该用哪些词）**——两者是同一个问题的两半。
+            # 判别词（敷衍/骗/鸽/迟到/黄桃/擦边…）退**兜底**位：L3 判不出来时才用
+            # （这才是它 docstring 里写的定位；以前被当成"省一次调用"的短路，
+            #   但实测 138 条真实消息里它 0 次命中，而短路会顺手跳过措辞分类）。
+            phrase_groups = load_phrase_groups()
+            l3 = await classify_l3(deepseek_client, query_text, history_text, behaviors, phrase_groups)
+            if l3["behavior"]:
+                print(f"[行为] LLM 判定: {l3['behavior']}")
+            if l3["phrases"]:
+                print(f"[措辞] LLM 判定: {'、'.join(l3['phrases'])}")
+            behavior_item = select_behavior_item(query_text, l3["behavior"], behaviors)
+            behavior_items = [behavior_item] if behavior_item else []
+            phrase_items = select_phrase_groups(l3["phrases"], phrase_groups)
             query_vector = await embed_query(zhipu_client, retrieval_query or query_text)
             # corpus 两段式：① 关键词门放行的照旧直通（高置信、零成本、行为不变）
             #              ② 门没放行的取 top-N 交 LLM 判「用户是不是在问她这段」（填平"口语问句 vs
@@ -774,9 +790,8 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
                           if c.item_id not in seen_ids]
             corpus_items += await judge_corpus(deepseek_client, query_text, candidates)
             sample_items = retrieve_voice_samples(retrieval_query or query_text, query_vector)
-            phrase_items = retrieve_phrases(retrieval_query or query_text, query_vector)
             fused_items = fuse_and_truncate(corpus_items, sample_items, behavior_items, phrase_items)
-            preference_items = retrieve_preferences(retrieval_query or query_text, query_vector)  # 第 5 路：偏好
+            preference_items = retrieve_preferences(retrieval_query or query_text)  # 第 5 路：偏好（关键词命中）
             core_stories = retrieve_core_stories(retrieval_query or query_text, query_vector)     # 核心记忆（结晶）
     else:
         fused_items = []
@@ -818,7 +833,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         preference_items=preference_items, core_stories=core_stories,
         session_context=session_context, query_hint=query_hint,
         denied_terms=denied_terms, group_context=group_context,
-        history_gap_note=history_gap_note,
+        history_gap_note=history_gap_note, prev_session_note=_prev_session_note,
     )
 
     # --- 🤖 调用大模型 ---

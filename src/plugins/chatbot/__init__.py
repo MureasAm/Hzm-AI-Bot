@@ -23,7 +23,7 @@ from nonebot.adapters.onebot.v11 import (
     Bot, Event, FriendRequestEvent, RequestEvent, NoticeEvent,
 )
 
-from .constants import AUTO_ACCEPT_FRIEND, PROJECT_ROOT
+from .constants import AUTO_ACCEPT_FRIEND, PROJECT_ROOT, AT_SELF_MARK
 from .qq_faces import face_name
 from . import bili_bridge  # noqa: F401  导入即注册启动时的后台监听任务
 from . import weibo_bridge  # noqa: F401  导入即注册启动时的微博后台监听任务
@@ -140,6 +140,24 @@ def _extract_image_source(msg) -> tuple[str, str]:
             file_ = seg.data.get("file") or ""
             return url, file_
     return "", ""
+
+
+def _extract_at_self(msg, event) -> bool:
+    """这条消息有没有 @ 她本人。
+
+    **@ 是一个独立消息段**（at），`extract_plain_text()` 只收 text 段——所以
+    「@灰泽满 在吗」走到后面就只剩"在吗"，群里"被点名必接"的确定性判据命中不了。
+    踩坑（2026-09-26）：用户报"@了她还是不接话"，根因就在这。
+
+    "@全体成员"（qq=all）不算——那是 @ 所有人，不是点她。
+    """
+    self_id = str(getattr(event, "self_id", "") or "")
+    if not self_id:
+        return False
+    for seg in msg:
+        if seg.type == "at" and str(seg.data.get("qq") or "").strip() == self_id:
+            return True
+    return False
 
 
 def _extract_face_text(msg) -> str:
@@ -349,6 +367,12 @@ async def _handle_chat(bot: Bot, event: Event):
     if face_text:
         face_msg = f"[表情：{face_text}]"
         user_msg = f"{user_msg} {face_msg}".strip() if user_msg else face_msg
+
+    # @ 她本人：放进文本最前面（同上，是这条消息的语境）。
+    # 两个作用：① 群里"点名必接"能命中 ② **只 @ 不带字**的消息不再被当空消息丢掉。
+    at_self = _extract_at_self(msg, event)
+    if at_self:
+        user_msg = f"{AT_SELF_MARK} {user_msg}".strip() if user_msg else AT_SELF_MARK
 
     if not user_msg and not image_url and not image_file:
         return  # 真正空消息（无文字无图片无表情），不回复

@@ -277,8 +277,17 @@ def _load_corpus(input_path) -> list:
     if isinstance(data, list):
         return data
     if isinstance(data, dict) and isinstance(data.get("statements"), list):
-        # 兼容 generate-statements 的 {"statements": ["..."]} 输出格式
-        return [{"statement": s} for s in data["statements"] if s]
+        # 兼容两种 {"statements": [...]}：
+        #   ① 纯字符串（generate-statements 的旧输出）
+        #   ② {"statement": "..."} 字典（statement_final.json 现在的形状——
+        #      包了 _readme 说明后从"裸 list"变成 dict，见 注入设计原理.md 第 1 节）
+        out = []
+        for s in data["statements"]:
+            if isinstance(s, str) and s:
+                out.append({"statement": s})
+            elif isinstance(s, dict) and s.get("statement"):
+                out.append(s)
+        return out
     raise ValueError(f"无法识别的场景化陈述结构: {input_path}")
 
 

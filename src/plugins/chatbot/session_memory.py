@@ -6,6 +6,9 @@
 - 每轮对话后，用 LLM 判断这轮聊了什么话题、是否转话题、有无关键事件
 - 同一话题持续累积事件；检测到转话题时更替当前话题
 - 下一轮注入【当前会话】给模型，让它接得住会话调性
+- **隔太久（>SESSION_STALE_SECONDS）的上一场**：不再当【当前会话】，
+  但也不丢——降级成 `previous_session_note()` 的「上次聊过（3天前）…」，
+  并明说"这不是现在的话题"。时间戳在这里真正参与提示，而不是当一道静默的闸。
 - 短 query（≤4字）先在会话语境里扩充成完整句，再做 embedding+检索，
   避免短向量"糊"导致误命中不相关样本
 
@@ -18,6 +21,8 @@ from datetime import datetime
 
 from .constants import PROJECT_ROOT, THINKING_DISABLED
 from .config import _get_model_name, extract_chat_content
+# 时长措辞（"3天"/"2小时"）与长期/短期记忆共用一份，别各写一套（memory re-export 自根模块）
+from .memory import humanize_gap
 
 SESSION_MEMORY_FILE = PROJECT_ROOT / "user_memory" / "session.json"
 
@@ -27,6 +32,8 @@ SHORT_QUERY_MAX_CHARS = 4
 MAX_EVENTS_PER_SESSION = 6
 # 话题无活动多久视为冷场（秒），跨天对话重新起话题
 SESSION_STALE_SECONDS = 12 * 3600
+# 「上次聊过」最多带几条当时的事件（整场搬进来会挤上下文，只要够唤起记忆就行）
+PREV_SESSION_EVENTS_MAX = 2
 
 _lock = threading.Lock()
 
@@ -47,22 +54,74 @@ def _save(data: dict) -> None:
     SESSION_MEMORY_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def get_session(user_id: str) -> dict:
-    """读取某用户的会话状态。没有或已冷场时返回空会话。"""
+def _raw_session(user_id: str) -> dict:
+    """读**原始**记录——不做过期过滤。过期判定和「上次聊过」都要用它自己算。"""
     data = _load()
-    sess = data.get(user_id)
+    sess = data.get(user_id) if isinstance(data, dict) else None
+    return sess if isinstance(sess, dict) else {}
+
+
+def session_gap_seconds(user_id: str) -> float | None:
+    """距这个会话上次活动过了多少秒；没有记录 / 时间戳缺失或坏掉 → None。"""
+    last = str(_raw_session(user_id).get("last_active") or "")
+    if not last:
+        return None
+    try:
+        return (datetime.now() - datetime.fromisoformat(last)).total_seconds()
+    except (ValueError, TypeError):
+        return None
+
+
+def get_session(user_id: str) -> dict:
+    """读取某用户的会话状态。没有、或已冷场时返回空会话。
+
+    冷场判定：太久没聊（SESSION_STALE_SECONDS，默认 12 小时）→ 旧话题不适用，
+    返回空会话重新起。
+
+    ⚠️ **拿不到时间戳的一律按冷场处理**（老记录/手改记录没有 last_active）。
+    旧写法是 `if last:` 才做判定——缺字段的记录**直接跳过检查、永久免疫**，
+    永远被当【当前会话】注入。2026-09-27 查过线上 106 条都有该字段，所以还没炸；
+    但那是运气不是设计，随手动改数据随时会踩。
+    """
+    sess = _raw_session(user_id)
     if not sess:
         return {"topic": "", "events": [], "last_active": ""}
-    # 冷场判定：太久没聊（如隔天），旧话题不适用，返回空会话重新起
-    last = sess.get("last_active", "")
-    if last:
-        try:
-            dt = datetime.fromisoformat(last)
-            if (datetime.now() - dt).total_seconds() > SESSION_STALE_SECONDS:
-                return {"topic": "", "events": [], "last_active": ""}
-        except ValueError:
-            pass
+    gap = session_gap_seconds(user_id)
+    if gap is None or gap > SESSION_STALE_SECONDS:
+        return {"topic": "", "events": [], "last_active": ""}
     return sess
+
+
+def previous_session_note(user_id: str) -> str:
+    """上一场会话**已经过期**时，给一条带时间的「上次聊过」提示；否则空串。
+
+    ⚠️ **必须在 probe_session 之前调用**：probe 会把这条记录的 last_active
+    改写成"现在"，之后再问就永远得到"没过期"。
+
+    为什么需要它：过期会话原来是**静默丢掉**的（get_session 直接返回空）——
+    时间戳只决定了"丢不丢"，没决定"怎么定性"，于是她连"上次你不是说要加粉丝群吗"
+    都说不出来。这里补上后半句：**不丢，但把时间说出来**，让她知道那是隔了多久的旧事。
+    """
+    sess = _raw_session(user_id)
+    topic = str(sess.get("topic") or "").strip()
+    events = [e.strip() for e in (sess.get("events") or [])
+              if isinstance(e, str) and e.strip()][-PREV_SESSION_EVENTS_MAX:]
+    if not topic and not events:
+        return ""
+    gap = session_gap_seconds(user_id)
+    if gap is not None and gap <= SESSION_STALE_SECONDS:
+        return ""   # 还在有效期内 → 走正常的【当前会话】注入，别重复说一遍
+    when = f"{humanize_gap(gap)}前" if gap is not None else ""
+    body = []
+    if topic:
+        body.append(f"聊到「{topic}」")
+    if events:
+        body.append("当时：" + "；".join(events))
+    return (
+        f"【上次聊过】{when}你们" + "，".join(body) + "。"
+        f"（隔了这么久，**这不是现在正在聊的话题**：想提可以自然提一句「上次…」，"
+        f"但别当成刚发生的事往下接，也别拿它当当前语境的上下文。）"
+    )
 
 
 # ==================== 提示词 ====================

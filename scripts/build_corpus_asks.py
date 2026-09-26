@@ -93,7 +93,9 @@ async def main():
     model = _key("OPENAI_MODEL") or "deepseek-flash"
 
     sf = json.loads((ROOT / "persona/world/statement_final.json").read_text(encoding="utf-8"))
-    texts = [x["statement"] for x in sf]
+    # statement_final.json 现在是 {"_readme":..., "statements":[{"statement":...}]}（2026-09-27 起）
+    items = sf["statements"] if isinstance(sf, dict) else sf
+    texts = [x["statement"] for x in items]
     if args.limit:
         texts = texts[: args.limit]
     db = load_vector_db()          # 与 texts 同序

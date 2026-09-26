@@ -6,6 +6,7 @@ import pytest
 from src.plugins.chatbot.retrieval import (
     RetrievalItem,
     retrieve_corpus, retrieve_corpus_candidates,
+    select_phrase_groups,
     retrieve_voice_samples,
     select_behavior_item,
     rrf_fuse,
@@ -185,6 +186,57 @@ class TestCorpusKeywordGate:
         assert retrieve_corpus("", [1, 0, 0, 0]) == []
 
 
+class TestSelectPhraseGroups:
+    """措辞组：**按 L3 判出的 id 取**，不再向量检索（trigger 是类别标签，余弦分不开 →
+    实测 100% 开火）。见 retrieval.py 顶部说明。"""
+
+    def _groups(self):
+        return [
+            {"id": "brag_deny", "meaning": "被夸时的否认", "trigger": "被夸奖时",
+             "phrases": ["也没有啦", "一般般吧"], "usage": "被夸时先用这些否认"},
+            {"id": "busy_excuse", "meaning": "摆烂借口", "trigger": "被问为什么没播",
+             "phrases": ["老套的原因"], "usage": ""},
+        ]
+
+    def test_picks_by_id(self):
+        items = select_phrase_groups(["busy_excuse"], self._groups())
+        assert [i.item_id for i in items] == ["busy_excuse"]
+        assert items[0].source == "phrase"
+        assert items[0].extra["phrases"] == ["老套的原因"]
+
+    def test_empty_ids_returns_empty(self):
+        assert select_phrase_groups([], self._groups()) == []
+        assert select_phrase_groups(None, self._groups()) == []
+
+    def test_fabricated_id_dropped(self):
+        # L3 编出来的组 id（数据里没有）→ 静默丢弃，别让下游炸
+        assert select_phrase_groups(["不存在的组"], self._groups()) == []
+
+    def test_top_n_caps(self):
+        assert len(select_phrase_groups(["brag_deny", "busy_excuse"], self._groups(), top_n=1)) == 1
+
+
+class TestLoadPhraseGroups:
+    def test_env_switch_disables(self, monkeypatch):
+        import src.plugins.chatbot.retrieval as rt
+        with monkeypatch.context() as m:
+            m.setenv("PHRASES", "0")
+            monkeypatch.setattr(rt, "_phrase_groups_cache", None)
+            assert rt.load_phrase_groups() == []
+
+    def test_reads_source_file(self, monkeypatch, tmp_path):
+        import json
+        import src.plugins.chatbot.retrieval as rt
+        f = tmp_path / "phrases.json"
+        f.write_text(json.dumps({"phrase_groups": [
+            {"id": "a", "phrases": ["x"]},
+            {"id": "b"},                      # 没有 phrases → 丢掉
+        ]}, ensure_ascii=False), encoding="utf-8")
+        monkeypatch.setattr(rt, "PHRASES_FILE", f)
+        monkeypatch.setattr(rt, "_phrase_groups_cache", None)
+        assert [g["id"] for g in rt.load_phrase_groups()] == ["a"]
+
+
 class TestRetrieveVoiceSamples:
     def _fake_samples(self):
         return [
@@ -192,9 +244,24 @@ class TestRetrieveVoiceSamples:
             {"id": "b", "user": "问B", "reply": "答B", "type": "emotion", "vector": [0, 1, 0, 0]},
         ]
 
-    def test_no_vector_returns_empty(self, monkeypatch):
+    def test_no_samples_returns_empty(self, monkeypatch):
         monkeypatch.setattr("src.plugins.chatbot.retrieval.load_voice_sample_vectors", lambda: [])
         assert retrieve_voice_samples("q", _vec()) == []
+
+    def test_no_query_vector_returns_empty_without_raising(self, monkeypatch):
+        """embedding 挂掉（vector=None）时必须**返回空，不许抛异常**。
+
+        实测踩坑（2026-09-27）：智谱 embedding key 过期 → `rag.embed_query` 返回 None →
+        保底注入那条路算全体最高分时 `cosine_similarity(None, …)` 里 `zip(None, …)`
+        抛 TypeError；而 `core.handle_chat` 那一段**没有 try 兜底** →
+        整条回复任务死掉，**她一个字都不回**（不只主动发言那条路）。
+
+        ⚠️ 这条用例以前是"把样本库 patch 成空"来测的——那走的是另一个分支，
+        样本存在 + vector=None 这个真实组合一直没人测，所以 bug 一直没被发现。
+        """
+        monkeypatch.setattr("src.plugins.chatbot.retrieval.load_voice_sample_vectors",
+                            self._fake_samples)
+        assert retrieve_voice_samples("q", None) == []
 
     def test_keepalive_skips_when_all_below_threshold(self, monkeypatch):
         monkeypatch.setattr("src.plugins.chatbot.retrieval.load_voice_sample_vectors",

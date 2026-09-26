@@ -7,6 +7,7 @@
 - 判太严 / 判定失败就闭嘴 → **她变成哑巴**，而且这种故障很难被发现
 所以"失败一律按接处理"这条必须有测试兜着。
 """
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -85,6 +86,7 @@ class TestAddressedToHer:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("text", [
         "@灰泽满 你今天怎么没播", "灰泽满在吗", "hzm出来", "小满帮我看看", "满姐晚安",
+        "灰灰在干嘛", "小灰理我一下", "满区出来挨打",
     ])
     async def test_named_always_replies_without_llm(self, text):
         calls = []
@@ -97,10 +99,66 @@ class TestAddressedToHer:
         assert calls == []
 
     @pytest.mark.asyncio
+    async def test_at_self_mark_always_replies_without_llm(self):
+        """@ 是独立消息段，正文里**没有名字**——靠 __init__ 插的标记放行。
+
+        踩坑（2026-09-26）：用户报"@了她还是不接话"。at 段在 extract_plain_text
+        里是看不见的，于是"@她 + 正文"进来后名字表命中不了，落到 LLM 判据那里判成不接。
+        """
+        from src.plugins.chatbot.constants import AT_SELF_MARK
+
+        class _Boom(_StubClient):
+            async def create(self, **kw):
+                raise AssertionError("被 @ 了不该调 LLM")
+        assert await should_reply_in_group(_Boom(), "历史", f"{AT_SELF_MARK} 今天怎么没播") is True
+
+    @pytest.mark.asyncio
     async def test_others_still_go_through_gate(self):
         # 没点名 → 照常走判定（这条是反例，防止把"谁都放行"当修好）
         client = _StubClient(content='{"reply": false}')
         assert await should_reply_in_group(client, "历史", "你们吃了吗") is False
+
+
+class TestPureEvent:
+    """纯事件档：**掷骰子决定**，不由 LLM 定。
+
+    用户 2026-09-26：纯事件原来落到"事务"→ 一律不接，群里太安静。
+    真人是"大多数时候不接、偶尔插一句"——那是个概率，不是一个是非。
+    """
+
+    @pytest.mark.asyncio
+    async def test_event_can_reply_even_if_llm_says_no(self, monkeypatch):
+        monkeypatch.setattr(group_gate.random, "random", lambda: 0.0)  # 骰子必中
+        client = _StubClient(content='{"reply": false, "kind": "事件", "why": "陈述天气"}')
+        assert await should_reply_in_group(client, "历史", "明天要下雨") is True
+
+    @pytest.mark.asyncio
+    async def test_event_stays_silent_when_dice_misses(self, monkeypatch):
+        monkeypatch.setattr(group_gate.random, "random", lambda: 0.999)  # 骰子必不中
+        client = _StubClient(content='{"reply": false, "kind": "事件"}')
+        assert await should_reply_in_group(client, "历史", "明天要下雨") is False
+
+    @pytest.mark.asyncio
+    async def test_event_llm_yes_is_not_silenced_by_dice(self, monkeypatch):
+        # 掷骰子只**加**不**减**：LLM 说了接就不能被骰子吞掉
+        monkeypatch.setattr(group_gate.random, "random", lambda: 0.999)
+        client = _StubClient(content='{"reply": true, "kind": "事件"}')
+        assert await should_reply_in_group(client, "历史", "明天要下雨") is True
+
+    @pytest.mark.parametrize("kind,reply,expected", [
+        ("情绪", True, True),
+        ("事务", False, False),
+        ("经历", True, True),
+        ("点名", True, True),
+        ("", False, False),        # 没给 kind → 照旧听 LLM 的
+    ])
+    @pytest.mark.asyncio
+    async def test_other_kinds_still_follow_the_llm(self, monkeypatch, kind, reply, expected):
+        # 只有"事件"那一档改成掷骰子，别的档位行为不许变
+        monkeypatch.setattr(group_gate.random, "random", lambda: 0.0)
+        client = _StubClient(content=json.dumps(
+            {"reply": reply, "kind": kind, "why": "x"}))
+        assert await should_reply_in_group(client, "历史", "随便说点什么") is expected
 
 
 class TestFailOpen:
@@ -138,6 +196,8 @@ class TestPromptContent:
         assert "纯情绪也算" in p        # ② 情绪（纯情绪也算）
         assert "分享自己的经历" in p     # ③ 经历 → 偶尔
         assert "纯事务" in p           # ④ 事务/附和/收尾 → 不接
+        assert "kind" in p             # ⑤ 要它报档位（事件档靠它分流到概率）
+        assert "跟自己无关的事" in p     # ⑤ 纯事件
 
     def test_batch_not_single_message(self):
         # 判定粒度必须是"批"——逐条判会蹭余温（实测 0%→74%→7% 乱跳）

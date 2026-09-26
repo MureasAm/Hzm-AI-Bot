@@ -7,6 +7,7 @@
 使用者填 JSON 即可，不用改代码。改后重启生效。
 """
 import json
+import re
 from pathlib import Path
 
 from .constants import THINKING_DISABLED, PROJECT_ROOT
@@ -27,8 +28,22 @@ def load_legendary() -> dict:
         return _legendary_cache
     try:
         data = json.loads(LEGENDARY_FILE.read_text(encoding="utf-8"))
+        raw = data.get("replies", {}) or {}
+        # 两种写法都接受：
+        #   "关键词": ["应答", …]                        （纯子串触发）
+        #   "关键词": {"replies": [...], "pattern": "…"} （子串 **或** 正则触发）
+        # ⚠️ 为什么要 pattern：`trigger in user_msg` 是**精确子串**，它假设用户会说出那个固定词。
+        #    实测（scripts/entry_audit.py）legendary 只有 5/20 能被「用户可能会怎么说」勾出来——
+        #    问年龄的 5 条触发词（你是谁/你多大/几岁啦/多少岁）**一条都没匹配上**用户实际说的
+        #    「你到底几岁啊」。照抄 terms.json 的 pattern 机制来治。
+        replies = {}
+        for k, v in raw.items():
+            if isinstance(v, list):
+                replies[k] = {"replies": v, "pattern": None}
+            elif isinstance(v, dict) and isinstance(v.get("replies"), list):
+                replies[k] = {"replies": v["replies"], "pattern": v.get("pattern")}
         _legendary_cache = {
-            "replies": data.get("replies", {}) or {},
+            "replies": replies,
             "confirms": data.get("confirms", {}) or {},
         }
     except (json.JSONDecodeError, OSError):
@@ -39,6 +54,20 @@ def load_legendary() -> dict:
 # ==================== 💬 经典梗硬匹配库（数据化） ====================
 LEGENDARY_REPLIES = load_legendary()["replies"]
 LEGENDARY_CONFIRMS = load_legendary()["confirms"]
+
+
+def legendary_hit(trigger: str, msg: str) -> bool:
+    """这条梗是否被消息命中：**子串 或 pattern 正则**。"""
+    entry = LEGENDARY_REPLIES.get(trigger) or {}
+    if trigger in (msg or ""):
+        return True
+    pat = entry.get("pattern")
+    if not pat:
+        return False
+    try:
+        return re.search(pat, msg or "") is not None
+    except re.error:
+        return False
 
 
 async def legendary_confirmed(user_msg: str, prompt_template: str, history: str = "") -> bool:
@@ -68,16 +97,23 @@ async def legendary_confirmed(user_msg: str, prompt_template: str, history: str 
         return True
 
 
-# ==================== 🎭 行为意图分类（L3：LLM 判意图，不再用 embedding 猜） ====================
+# ==================== 🎭 L3 意图分类（LLM 判意图，不再用 embedding 猜） ====================
 # 背景：embedding 聚的是"句式"不是"意图"——'灰泽满你唱歌好听'（夸）和
 # '灰泽满你怎么又迟到了'（质问）句式相同，在向量空间挤成一团，余弦匹配会把
-# 夸奖误判成质疑。治本：行为归属交给 LLM 理解，判别性词汇仍作关键词兜底。
-BEHAVIOR_CLASSIFY_PROMPT = """你是{role_name}的行为意图分类器。判断用户刚发的这条消息是否明确落入某个"行为触发场景"。只有明确匹配才选，拿不准一律 null（宁可不触发，不误触发）。
+# 夸奖误判成质疑。治本：归属交给 LLM 理解，判别性词汇仍作关键词兜底。
+#
+# 2026-09-26 扩展：**行为 + 措辞共用这一次调用**。
+# 原因：两者是同一个问题的两半——"这条消息落在哪个已知情境"。
+#   · behavior 回答"该怎么做"（11 条）
+#   · phrases  回答"该用哪些词"（11 组）
+# 而措辞原本走向量检索，实测 100% 开火（trigger 是 6~13 字的**类别标签**，不是句子，
+# 余弦根本分不开）——用检索工具干分类的活。并进来 = 零额外调用 + 判据统一。
+BEHAVIOR_CLASSIFY_PROMPT = """你是{role_name}的意图分类器。判断用户刚发的这条消息落入哪些"已知情境"。只有明确匹配才选，拿不准一律不放（宁可不触发，不误触发）。
 
-可选行为（name：触发情境）：
+【行为】用户这条消息触发哪个行为场景？**最多选一个**（它决定{role_name}该怎么做）：
 {behavior_defs}
 
-判定要点：
+行为判定要点：
 - 只看用户这条消息本身的内容和语气，结合最近对话判断语境。
 - "被夸"：消息确实在夸{role_name}（声音/外貌/才能/表现/生日祝福/唱歌好听等）。
 - "被质疑/失约被催"：用户在质问、戳穿或催问{role_name}（骗人/敷衍/迟到/没播/鸽）。
@@ -86,36 +122,61 @@ BEHAVIOR_CLASSIFY_PROMPT = """你是{role_name}的行为意图分类器。判断
 - "立Flag/感性流露/主动抛梗"：消息必须明显对应那个情境。
 - 普通闲聊、提问、寒暄、表情、玩梗 → null。
 - 拿不准 → null。
-
+{phrase_section}
 最近对话：
 {history}
 
 用户消息：{user_msg}
 
-只输出 JSON：{{"behavior": "<可选行为name>" 或 null}}"""
+只输出 JSON：{{"behavior": "<行为name>" 或 null, "phrases": ["<措辞组id>", …]}}"""
+
+# 措辞那一节（没有措辞组数据时整节不出现，免得给模型一个空列表）
+PHRASE_SECTION = """
+【措辞】用户这句话会让{role_name}用上哪些措辞组？**可以多选，也可以全不选**：
+{phrase_defs}
+
+措辞判定要点：
+- 判的是"用户**冲着她**说了这类话"，不是"提到了同一个词"。
+- 例：用户说"你唱歌真好听"→ 是夸她 → 选；用户说"今天股市怎么样"→ 跟她无关 → 不选。
+- 例：用户说"你昨晚为什么没播"→ 在问责 → 选；用户说"感冒吃什么药"→ 在问药 → 不选。
+- **多数消息一个都不选**（日常闲聊占大多数）。拿不准 → 不选。
+"""
 
 
-async def classify_behavior(deepseek_client, user_msg: str, history_text: str, behaviors: list) -> str:
-    """LLM 判定用户消息落入哪个行为场景；拿不准或失败返回空串（不触发任何行为）。
+async def classify_l3(deepseek_client, user_msg: str, history_text: str,
+                      behaviors: list, phrase_groups: list = None) -> dict:
+    """一次调用判出：行为名（0/1 个）+ 措辞组 id（0~N 个）。
 
-    返回的行为名必须是 behaviors 里的真实 name（防模型编造）。
+    返回 {"behavior": str, "phrases": [str]}；**失败/拿不准返回空**（不触发任何东西）。
+    返回的名字/id 都必须是数据里的真值（防模型编造）。
+
+    ⚠️ 判据措辞是本模块最要紧的东西（改词=改行为，实测过判据稍动结果就从 0% 跳到 74%）。
     """
-    if not behaviors or not user_msg:
-        return ""
-    # 行为定义带真实粉丝话样例：领域黑话光靠 trigger 描述 LLM 认不出，
-    # 给真实样例当参照（素材驱动），分类更准。
+    phrase_groups = phrase_groups or []
+    if not user_msg:
+        return {"behavior": "", "phrases": []}
+
     defs = []
-    for b in behaviors:
+    for b in behaviors or []:
         if not b.get("name"):
             continue
         line = f"- {b['name']}：{b.get('trigger', '')}"
+        # 行为定义带真实粉丝话样例：领域黑话光靠 trigger 描述 LLM 认不出，
+        # 给真实样例当参照（素材驱动），分类更准。
         for s in b.get("samples", [])[:2]:
             u = (s.get("user") or "").strip()
             if u:
                 line += f"\n    例：{u}"
         defs.append(line)
+
+    phrase_defs = "\n".join(
+        f"- {g.get('id')}：{g.get('trigger', '')}（{g.get('meaning', '')}）"
+        for g in phrase_groups if g.get("id")
+    )
     prompt = BEHAVIOR_CLASSIFY_PROMPT.format(
-        behavior_defs="\n".join(defs), history=history_text or "（无）", user_msg=user_msg,
+        behavior_defs="\n".join(defs) or "（无）",
+        phrase_section=PHRASE_SECTION.format(phrase_defs=phrase_defs, role_name="灰泽满") if phrase_defs else "",
+        history=history_text or "（无）", user_msg=user_msg,
         role_name="灰泽满",
     )
     try:
@@ -123,7 +184,7 @@ async def classify_behavior(deepseek_client, user_msg: str, history_text: str, b
             model=_get_model_name(),
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
-            max_tokens=20,
+            max_tokens=40,
             **THINKING_DISABLED,
         )
         content = extract_chat_content(resp)
@@ -132,9 +193,22 @@ async def classify_behavior(deepseek_client, user_msg: str, history_text: str, b
         elif "```" in content:
             content = content.split("```")[1].split("```")[0].strip()
         parsed = json.loads(content)
+        names = {b.get("name") for b in (behaviors or [])}
         behavior = str(parsed.get("behavior") or "").strip()
-        names = {b.get("name") for b in behaviors}
-        return behavior if behavior in names else ""
+        ids = {g.get("id") for g in phrase_groups}
+        raw = parsed.get("phrases")
+        kept, seen = [], set()
+        for gid in (raw if isinstance(raw, list) else []):
+            gid = str(gid).strip()
+            if gid in ids and gid not in seen:      # 拦住模型编的 id
+                seen.add(gid)
+                kept.append(gid)
+        return {"behavior": behavior if behavior in names else "", "phrases": kept}
     except Exception as e:
-        print(f"⚠️ 行为意图分类失败（降级不触发）: {e}")
-        return ""
+        print(f"⚠️ L3 意图分类失败（降级不触发）: {e}")
+        return {"behavior": "", "phrases": []}
+
+
+async def classify_behavior(deepseek_client, user_msg: str, history_text: str, behaviors: list) -> str:
+    """只取行为名（薄包装，评测/旧调用方用）。拿不准或失败返回空串。"""
+    return (await classify_l3(deepseek_client, user_msg, history_text, behaviors))["behavior"]

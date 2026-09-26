@@ -52,6 +52,18 @@ def load_schedule():
     return _schedule_cache
 
 
+def _persona_items(data, key: str) -> list:
+    """兼容两种文件形状：裸 list，或 {"_readme": …, "<key>": [...]}。
+
+    **为什么要带 _readme**：这些文件的"角色"（该进什么/不该进什么）必须**贴着数据放**——
+    改数据的人在改的那一刻不会去翻文档。corpus 那 49% 引语就是这么漂移进去的
+    （见 注入设计原理.md 第 1 节）。_readme 运行时**不读**，只给人和工具看。
+    """
+    if isinstance(data, dict) and isinstance(data.get(key), list):
+        return data[key]
+    return data if isinstance(data, list) else []
+
+
 def load_persona_rules():
     """读取人格规则三件套：traits / styles / behaviors。"""
     traits_text = []
@@ -61,8 +73,7 @@ def load_persona_rules():
     if TRAITS_FILE.exists():
         try:
             with open(TRAITS_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                for item in data:
+                for item in _persona_items(json.load(f), "traits"):
                     name = item.get("name", "")
                     desc = item.get("description", "")
                     if name or desc:
@@ -73,8 +84,7 @@ def load_persona_rules():
     if STYLES_FILE.exists():
         try:
             with open(STYLES_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                for item in data:
+                for item in _persona_items(json.load(f), "styles"):
                     name = item.get("name", "")
                     desc = item.get("description", "")
                     if name or desc:
@@ -86,10 +96,8 @@ def load_persona_rules():
         try:
             with open(BEHAVIORS_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                if isinstance(data, list):
-                    behaviors = data
-                elif isinstance(data, dict):
-                    behaviors = [data]
+                items = _persona_items(data, "behaviors")
+                behaviors = items if items else ([data] if isinstance(data, dict) else [])
         except Exception as e:
             print(f"⚠️ 读取 behaviors 失败: {e}")
 

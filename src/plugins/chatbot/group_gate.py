@@ -10,18 +10,20 @@
 真人也是看一群人聊了一阵、等安静下来，再决定要不要插一句。
 （逐条判会"蹭余温"——情绪一出现，后面每条都靠它的余温被判成该接。实测过。）
 
-**判据**（用户 2026-09-25 标定）：
+**判据**（用户 2026-09-25 标定，2026-09-26 补第 ⑤ 档）：
   ① 有人明确问她 / 点她名 / 引用她的话 → **必接**
   ② 本批有情绪表达（"我服了""好惨"，**纯情绪也算，不需要有具体事件**）→ 可以接
   ③ 本批有人分享自己的经历或状态 → 偶尔接
   ④ 纯事务（发文件/要不要转/在不在）、纯附和（"哈哈哈""对""。。。"）、收尾语 → 不接
+  ⑤ 纯事件（陈述一件跟她无关的事，如"明天要下雨"）→ **按概率接**（见 constants.GROUP_EVENT_REPLY_PROB）
 
 ⚠️ **只在群聊用**。私聊被人直接找来必回，不过这个门（见 chat_window._flush）。
 """
 import json
 import os
+import random
 
-from .constants import THINKING_DISABLED
+from .constants import THINKING_DISABLED, AT_SELF_MARK, GROUP_EVENT_REPLY_PROB
 from .config import _get_model_name, extract_chat_content
 
 GROUP_GATE_PROMPT = """灰泽满是一个 QQ 群里的虚拟主播，正混在这个群里。她本人不在下面这些发言者里。
@@ -39,13 +41,16 @@ GROUP_GATE_PROMPT = """灰泽满是一个 QQ 群里的虚拟主播，正混在�
 ⚠️ 只看**这批本身**，不要因为前面几批有人感慨过，就觉得这批也该接。
 ⚠️ 情绪在群里很常见，真人只在"这批里确实有我想接的东西"时才开口。
 
-判据：
-1. 有人明确问她、点她名、引用她的话 → **必须接**
-2. 这批里有**情绪表达**（"我服了""好惨""笑死了"，纯情绪也算，不需要有具体事件）→ **可以接**
-3. 这批里有人在**分享自己的经历或状态** → **偶尔**接一句
-4. 纯事务（发文件、要不要转、在不在）、纯附和（"哈哈哈""对""。。。"）、收尾语 → **不接**
+判据（并给出这批判成了哪一档 kind）：
+1. 有人明确问她、点她名、引用她的话 → **必须接**（kind=点名）
+2. 这批里有**情绪表达**（"我服了""好惨""笑死了"，纯情绪也算，不需要有具体事件）→ **可以接**（kind=情绪）
+3. 这批里有人在**分享自己的经历或状态** → **偶尔**接一句（kind=经历）
+4. 这批里只是在**陈述一件跟自己无关的事**（天气、新闻、某个东西坏了/更新了）→ 少接（kind=事件）
+5. 纯事务（发文件、要不要转、在不在）、纯附和（"哈哈哈""对""。。。"）、收尾语 → **不接**（kind=事务）
 
-只输出 JSON：{{"reply": true 或 false, "why": "不超过25字"}}"""
+kind 填最贴近的那**一档**（一档就好，别自己造新词）。
+
+只输出 JSON：{{"reply": true 或 false, "kind": "点名|情绪|经历|事件|事务", "why": "不超过25字"}}"""
 
 
 def gate_enabled() -> bool:
@@ -54,18 +59,25 @@ def gate_enabled() -> bool:
 
 
 # 她自称/被叫的名字。消息里出现这些 → **一定是在跟她说话**，不用判。
-_SELF_NAMES = ("灰泽满", "hzm", "小满", "满姐", "满宝", "满哥")
+# 别名表是**兜底**：@ 本身由 AT_SELF_MARK 覆盖（at 段在纯文本里看不见），
+# 这里是"群友手打她名字"那条路。别往里塞太泛的字（"满"单独出现多半不是叫她）。
+_SELF_NAMES = ("灰泽满", "hzm", "小满", "满姐", "满宝", "满哥",
+               "灰灰", "小灰", "满区")
 
 
 def _addressed_to_her(batch_text: str) -> bool:
-    """这批消息里有没有直接点她的名——**确定性信号，不该交给 LLM 判**。
+    """这批消息里有没有直接点她的名 / @ 她——**确定性信号，不该交给 LLM 判**。
 
     踩坑（2026-09-25）：群里 @了她、还写了名字，却被门判成"不用接"。
     判据本身没问题（提示词第一条就是"被点名必须接"），但**能确定的事不该调 LLM**——
     多一次调用就多一次判错的机会，而这个信号是白纸黑字的。
+
+    坑二（2026-09-26）：光有名字表不够——**@ 是独立消息段**，
+    `extract_plain_text()` 看不见，「@她 + 正文」进来时正文里根本没有名字。
+    现在由 `__init__._extract_at_self` 在消息前插 `AT_SELF_MARK`，这里连着一起认。
     """
     t = batch_text or ""
-    return any(n in t for n in _SELF_NAMES)
+    return AT_SELF_MARK in t or any(n in t for n in _SELF_NAMES)
 
 
 async def should_reply_in_group(deepseek_client, history_text: str, batch_text: str) -> bool:
@@ -107,8 +119,19 @@ async def should_reply_in_group(deepseek_client, history_text: str, batch_text: 
             content = content[4:].strip()
         data = json.loads(content)
         take = bool(data.get("reply"))
+        kind = str(data.get("kind") or "").strip()
         why = str(data.get("why") or "")[:30]
-        print(f"[群聊接话] {'接' if take else '不接'}{'（' + why + '）' if why else ''}")
+        # 纯事件档：**判据自己定不了**——真人是"大多数时候不接、偶尔插一句"，
+        # 那是个概率不是一个是非。所以 LLM 说"不接"时改成掷骰子。
+        # ⚠️ 只**加**不**减**：LLM 明确说"接"就照接（和别档一样），
+        # 不能让骰子把她已经判成该说的话又吞掉——"该说时不说"是这个门最怕的故障。
+        if kind in ("事件", "event") and not take:
+            take = random.random() < GROUP_EVENT_REPLY_PROB
+            print(f"[群聊接话] {'接' if take else '不接'}（纯事件，"
+                  f"{int(GROUP_EVENT_REPLY_PROB * 100)}% 概率放行）")
+            return take
+        print(f"[群聊接话] {'接' if take else '不接'}"
+              f"{'（' + kind + '）' if kind else ''}{'（' + why + '）' if why else ''}")
         return take
     except Exception as e:
         print(f"⚠️ 群聊接话判定失败（放行=接）: {e}")

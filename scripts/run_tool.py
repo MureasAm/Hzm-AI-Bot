@@ -171,7 +171,14 @@ def _run_generate_vectors(args):
     import asyncio
     import generate_vectors
     out = Path(args.output) if args.output else _common.VECTOR_FILE
+    before = out.stat().st_mtime if out.exists() else None
     asyncio.run(generate_vectors.run(input_path=args.input, output_file=str(out)))
+    # ⚠️ 别无条件报"已保存"：generate_vectors 失败（如 embedding 余额不足）时**直接 return 不写文件**，
+    # 旧版本这里照样打印"✅ 输出已保存"，会让人以为跑成功了。用 mtime 判到底写没写。
+    after = out.stat().st_mtime if out.exists() else None
+    if after is None or after == before:
+        print(f"\n❌ 没有写出文件（很可能上游失败，见上面的报错）——{out} 保持原样，线上未受影响")
+        return
     _common.report_saved(out)
     if not args.output:
         _common.warn_fixed_path(out)

@@ -33,12 +33,10 @@ from openai import AsyncOpenAI  # noqa: E402
 nonebot.init()
 from src.plugins.chatbot.rag import embed_query  # noqa: E402
 from src.plugins.chatbot.retrieval import (  # noqa: E402
-    load_vector_db, load_voice_sample_vectors, load_phrase_vectors,
-    load_preference_vectors, load_core_story_vectors, cosine_similarity,
+    load_vector_db, load_voice_sample_vectors, load_core_story_vectors, cosine_similarity,
 )
 from src.plugins.chatbot.constants import (  # noqa: E402
-    ZHIPU_BASE_URL, RAG_THRESHOLD, VOICE_SAMPLE_THRESHOLD, PHRASE_THRESHOLD,
-    PREFERENCE_THRESHOLD, CORE_STORY_THRESHOLD,
+    ZHIPU_BASE_URL, RAG_THRESHOLD, VOICE_SAMPLE_THRESHOLD, CORE_STORY_THRESHOLD,
 )
 
 ENV_FILE = Path(__file__).resolve().parent.parent / ".env.prod"
@@ -63,12 +61,16 @@ def _key(name: str) -> str:
 
 
 def _loaders():
-    """每路：名字 → (取向量列表的函数, 现用阈值)。"""
+    """每路：名字 → (取向量列表的函数, 现用阈值)。
+
+    ⚠️ **phrase / preference 已不在这儿了**（2026-09-26）：这两路不再是"阈值 + 余弦"，
+    phrase 改成 L3 的 LLM 分类、preference 改成 keywords 子串命中——没有阈值可量。
+    （它们原来正是**量出来失效**的两路：phrase 地板 0.575 / 正例 0.573；preference 地板
+      0.565 插在正例 0.501/0.552/0.590 正中间。这也说明"量地板 → 发现分不开 → 换判据"这条路是对的。）
+    """
     return [
         ("corpus", load_vector_db, RAG_THRESHOLD),
         ("voice_sample", load_voice_sample_vectors, VOICE_SAMPLE_THRESHOLD),
-        ("phrase", load_phrase_vectors, PHRASE_THRESHOLD),
-        ("preference", load_preference_vectors, PREFERENCE_THRESHOLD),
         ("core_story", load_core_story_vectors, CORE_STORY_THRESHOLD),
     ]
 

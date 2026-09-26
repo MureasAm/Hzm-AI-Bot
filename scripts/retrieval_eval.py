@@ -41,7 +41,7 @@ from src.plugins.chatbot.rag import embed_query  # noqa: E402
 from src.plugins.chatbot.constants import ZHIPU_BASE_URL, DEEPSEEK_BASE_URL  # noqa: E402
 from src.plugins.chatbot.persona import load_persona_rules  # noqa: E402
 from src.plugins.chatbot.retrieval import select_behavior_item  # noqa: E402
-from src.plugins.chatbot.core import classify_behavior  # noqa: E402  (L3：LLM 判行为意图)
+from src.plugins.chatbot.routing import classify_l3  # noqa: E402  (L3：一次判行为 + 措辞)
 from src.plugins.chatbot.corpus_judge import judge_corpus  # noqa: E402  (corpus 语义判)
 
 CASES_FILE = PROJECT_ROOT / "scripts" / "retrieval_eval_cases.json"
@@ -149,20 +149,22 @@ async def run(cases, verbose: bool, only_id: str = None):
         if not qv:
             print(f"[SKIP] {case['id']}  {query}  （embedding 失败）")
             continue
+        # L3：一次调用同时判行为 + 措辞（**与 core.handle_chat 同一条路**）
+        phrase_groups = retrieval.load_phrase_groups()
+        l3 = (await classify_l3(ds_client, query, "", behaviors, phrase_groups)
+              if ds_client else {"behavior": "", "phrases": []})
         got = {
             "corpus": await corpus_items(query, qv, ds_client),
             "voice_sample": retrieval.retrieve_voice_samples(query, qv),
-            "phrase": retrieval.retrieve_phrases(query, qv),
-            "preference": retrieval.retrieve_preferences(query, qv),
+            "phrase": retrieval.select_phrase_groups(l3["phrases"], phrase_groups),
+            "preference": retrieval.retrieve_preferences(query),
             "core_story": retrieval.retrieve_core_stories(query, qv),
             "behavior": [],
         }
-        # L3：行为走 LLM 判意图 → 关键词兜底（不再有 embedding 基线）
-        behavior_intent = ""
-        if "behavior" in case.get("expect", {}):
-            behavior_intent = await classify_behavior(ds_client, query, "", behaviors) if ds_client else ""
-            item = select_behavior_item(query, behavior_intent, behaviors)
-            got["behavior"] = [item] if item else []
+        # 行为：LLM 判意图 → 判别词兜底（不再有 embedding 基线）
+        item = select_behavior_item(query, l3["behavior"], behaviors)
+        got["behavior"] = [item] if item else []
+        behavior_intent = l3["behavior"]
 
         verdict = check_case(case, got)
         results.append(verdict)

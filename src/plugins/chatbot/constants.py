@@ -22,6 +22,18 @@ GROUP_MEMORY_FILE = PROJECT_ROOT / "user_memory" / "groups.json"              # 
 GROUP_EVENT_COOLDOWN = 300
 GROUP_EVENT_MAX = 20
 
+# ==================== 群聊：@ 她的信号 ====================
+# 群里 @ 她是一个**独立消息段**（at），`extract_plain_text()` 里看不见——
+# 所以"@她 + 正文"进来时正文里没有名字，接话门"点名必接"的确定性判据命中不了。
+# 检测到就在消息文本前插这个标记，让 ① 接话门确定性放行、② LLM 判据也看见"这@的是她"。
+# 标记本身带"灰泽满"三字，`_addressed_to_her` 的名字表是**兜底**，别只靠它。
+AT_SELF_MARK = "[有人@了灰泽满]"
+
+# 群里"纯事件"（陈述一件跟她无关的事，如"明天要下雨""服务器又炸了"）的接话概率。
+# 原来的判据只有 点名/情绪/经历/事务 四档，纯事件落到"事务"→ 一律不接，太安静。
+# 真人在群里是这样的：**大多数时候不接，但偶尔会插一句**，所以给一个概率而不是开关。
+GROUP_EVENT_REPLY_PROB = 0.3
+
 # ==================== 表情包 ====================
 # 距上次发过表情包至少隔几轮才再考虑发一张。真人不会每轮都甩表情包
 # （qq-bridge 那边的经验值也是"普通闲聊每 3~5 轮一张"）。
@@ -43,7 +55,10 @@ SCHEDULE_FILE = PROJECT_ROOT / "persona" / "world" / "schedule.json"          # 
 # **别再把它加回来**：真正该做的是保持样本库/corpus 与直播内容同步，而不是再设一个会烂的字段。
 VECTOR_FILE = PROJECT_ROOT / "persona" / "world" / "corpus_vectors.json"         # 直播记忆向量库（灰泽满的人物记忆，归 world/）
 VOICE_SAMPLE_VECTOR_FILE = PROJECT_ROOT / "persona" / "speech" / "voice_sample_vectors.json"  # 声音样本向量缓存（跟 voice_samples.json）
-PHRASE_VECTOR_FILE = PROJECT_ROOT / "persona" / "speech" / "phrase_vectors.json"   # 措辞指纹向量缓存（跟 phrases.json）
+# 措辞指纹 / 偏好：**已不用向量**（2026-09-26 改判据，见 retrieval.py 顶部）。
+# 现在读源文件；`phrase_vectors.json` / `preference_vectors.json` 与对应的 precompute 已停用（留着以防回退）。
+PHRASES_FILE = PROJECT_ROOT / "persona" / "speech" / "phrases.json"
+PREFERENCES_FILE = PROJECT_ROOT / "persona" / "world" / "preferences.json"
 
 # ==================== API ====================
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
@@ -101,15 +116,13 @@ VOICE_SAMPLE_KEEPALIVE_MIN_SIM = 0.66  # 保底注入的最低相关度：与主
 VOICE_SAMPLE_MIN_K = 1        # 保底注入条数
 VOICE_SAMPLE_PREFER_SHORT = True  # 注入时优先 short 档样本（控制回复长度）
 
-# ==================== V3 措辞指纹检索 ====================
-PHRASE_TOP_N = 2              # 措辞组每路取 top
-# ⚠️ 这里是**已知失效但暂时回滚**的：措辞组的 trigger 只有六到十个字（"日常高频使用"），
-# 短文本嵌入挤在向量空间中心 —— 15 条明确无关的输入能打出 0.575（中位 0.461），
-# 而**正例**（"你唱得真好听！"→brag_deny）只有 **0.573**。**两者完全重叠，余弦分不开。**
-# 试过提到 0.63：噪声挡住了，但正例一起被误杀（eval 27/29 → 25/29）。
-# **结论：这一路该换判据（关键词/LLM 分类，像 behaviors 那样），不是调阈值。**
-PHRASE_THRESHOLD = 0.40
+# ==================== V3 措辞指纹 ====================
+PHRASE_TOP_N = 2              # 一轮最多注入几组措辞（组由 L3 分类给出，不再有相似度阈值）
 PHRASE_PHASES_MAX = 3         # 每个措辞组注入的短语条数上限
+# 已删除 PHRASE_THRESHOLD：措辞组的 trigger 是 6~13 字的**类别标签**（"被夸奖、被称赞时"），
+# 拿它算余弦 = 用检索工具干分类的活。实测噪声地板 0.575 / 正例 0.573、中位 0.461 都过阈值
+# → **100% 开火，等于没有判据**（真实对话 138 条里 100% 命中）。试过提到 0.63：噪声挡住了正例一起被杀。
+# 现在改由 L3 的 LLM 分类给组 id（同 behaviors）。
 
 # ==================== V3 RRF 融合 ====================
 RRF_K = 60                    # RRF 平滑常数
@@ -170,11 +183,9 @@ VOICE_MAX_LEN = 120   # 纯保险上限（~30s 音频，仍在 QQ 语音 ~60s �
 # 好友申请自动通过（否则新加的绿冻是单向好友，推送发不到，见 NapCat issue #72）
 AUTO_ACCEPT_FRIEND = True
 
-# 偏好档案（第 5 路语义检索）
-PREFERENCE_VECTOR_FILE = PROJECT_ROOT / "persona" / "world" / "preference_vectors.json"
-# ⚠️ 同上：噪声地板 0.565 插在正例（0.501/0.552/0.590）**正中间** —— 余弦分不开。
-# 试过 0.62：三个正例全被误杀。**该换判据，不是调阈值。**
-PREFERENCE_THRESHOLD = 0.55
+# 偏好档案（第 5 路）：**按 keywords 子串命中**，不走向量（路径见文件头 PREFERENCES_FILE）
+# 已删除 PREFERENCE_THRESHOLD：噪声地板 0.565 插在正例（0.501/0.552/0.590）**正中间**，余弦分不开；
+# 试过 0.62：三个正例全被误杀。偏好本来就是"类别 + 用户能直接说出的词"，跟 terms 同构 → 改子串命中。
 PREFERENCE_TOP_N = 2              # 最多注入几条偏好条目
 
 # 核心记忆（印象最深的结晶，独立于 corpus 单独检索，低阈值高浮现）

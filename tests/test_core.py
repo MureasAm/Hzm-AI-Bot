@@ -4,6 +4,7 @@ import asyncio
 from src.plugins.chatbot import core
 from src.plugins.chatbot import rag
 from src.plugins.chatbot import reply_style
+from src.plugins.chatbot import routing
 
 
 class TestSplitReply:
@@ -426,10 +427,10 @@ class TestGroupEventAge:
 
         monkeypatch.setattr(core, "probe_session", fake_probe)
 
-        async def _no_intent(*a, **k):   # classify_behavior 是 await 的
-            return ""
+        async def _no_intent(*a, **k):   # classify_l3 是 await 的
+            return {"behavior": "", "phrases": []}
 
-        monkeypatch.setattr(core, "classify_behavior", _no_intent)
+        monkeypatch.setattr(core, "classify_l3", _no_intent)
 
         captured = {}
 
@@ -468,17 +469,78 @@ class TestPreferences:
         assert not any("灰泽满的偏好" in m["content"] for m in msgs)
 
 
+class TestPrevSessionNote:
+    """上一场会话（已过期）**单独一条**注入，不能并进【当前会话】。
+
+    并进去就坏了：【当前会话】那句写的是"你们这一场对话的调性"，
+    几天前的旧事塞进那个标签下会被当成现在正在聊的。
+    """
+
+    def test_injects_when_present(self, monkeypatch):
+        monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
+        msgs = core.build_message_list("在吗", "p", [], "", [],
+                                       prev_session_note="【上次聊过】3天前你们聊到「香水」。")
+        hits = [m["content"] for m in msgs if "【上次聊过】" in m["content"]]
+        assert hits and "3天前" in hits[0]
+
+    def test_absent_by_default(self, monkeypatch):
+        monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
+        msgs = core.build_message_list("在吗", "p", [], "", [])
+        assert not any("【上次聊过】" in m["content"] for m in msgs)
+
+
 class TestRetrievePreferences:
-    def test_retrieves_only_above_threshold(self, monkeypatch):
+    """偏好已从"向量语义检索"改成"keywords 子串命中"（2026-09-26）。
+
+    原因：噪声地板 0.565 插在正例（0.501/0.552/0.590）**正中间**，余弦分不开；
+    而偏好本来就是"类别 + 用户能直接说出的词"，跟 terms 同构 → 确定性子串命中。
+    """
+
+    def test_hit_by_keyword(self, monkeypatch):
         from src.plugins.chatbot import retrieval as rt
         entries = [
-            {"id": "food", "category": "食物", "text": "爱吃椰子鸡", "vector": [1.0, 0.0]},
-            {"id": "color", "category": "颜色", "text": "颜色蓝色", "vector": [0.0, 1.0]},
+            {"id": "food", "category": "食物", "text": "爱吃椰子鸡", "keywords": ["爱吃", "火锅"]},
+            {"id": "color", "category": "颜色", "text": "喜欢蓝色", "keywords": ["颜色", "蓝色"]},
         ]
-        monkeypatch.setattr(rt, "load_preference_vectors", lambda: entries)
-        items = rt.retrieve_preferences("你爱吃什么", [1.0, 0.0], threshold=0.5, top_n=2)
-        assert [i["id"] for i in items] == ["food"]
-        assert items[0]["score"] >= 0.5
+        monkeypatch.setattr(rt, "load_preferences", lambda: entries)
+        assert [i["id"] for i in rt.retrieve_preferences("你爱吃什么呀")] == ["food"]
+        assert [i["id"] for i in rt.retrieve_preferences("你喜欢什么颜色")] == ["color"]
+
+    def test_no_keyword_no_hit(self, monkeypatch):
+        from src.plugins.chatbot import retrieval as rt
+        entries = [{"id": "food", "category": "食物", "text": "爱吃椰子鸡", "keywords": ["爱吃"]}]
+        monkeypatch.setattr(rt, "load_preferences", lambda: entries)
+        assert rt.retrieve_preferences("明天几点开会") == []
+
+    def test_english_keyword_is_case_insensitive(self, monkeypatch):
+        from src.plugins.chatbot import retrieval as rt
+        entries = [{"id": "games", "category": "游戏", "text": "喜欢 Switch", "keywords": ["switch"]}]
+        monkeypatch.setattr(rt, "load_preferences", lambda: entries)
+        assert [i["id"] for i in rt.retrieve_preferences("你 Switch 玩得多吗")] == ["games"]
+
+    def test_pattern_hit(self, monkeypatch):
+        # pattern（正则）命中——与 terms 同一套机制，治"子串做不到"的场景
+        from src.plugins.chatbot import retrieval as rt
+        entries = [{"id": "food", "category": "食物", "text": "爱吃椰子鸡",
+                    "keywords": ["爱吃"], "pattern": r"吃(?![^，。！？]{0,2}(药|瓜))"}]
+        monkeypatch.setattr(rt, "load_preferences", lambda: entries)
+        assert [i["id"] for i in rt.retrieve_preferences("你吃月饼了吗")] == ["food"]
+        assert rt.retrieve_preferences("感冒吃什么药") == []      # 子串没中、pattern 排除
+        assert rt.retrieve_preferences("我要吃药了") == []
+
+    def test_broken_pattern_does_not_crash(self, monkeypatch):
+        # 写坏的正则不该炸掉整条路（只当没配 pattern）
+        from src.plugins.chatbot import retrieval as rt
+        entries = [{"id": "x", "category": "x", "text": "t",
+                    "keywords": ["命中"], "pattern": "([unclosed"}]
+        monkeypatch.setattr(rt, "load_preferences", lambda: entries)
+        assert [i["id"] for i in rt.retrieve_preferences("这个词命中")] == ["x"]
+
+    def test_top_n_caps(self, monkeypatch):
+        from src.plugins.chatbot import retrieval as rt
+        entries = [{"id": f"e{i}", "category": "x", "text": "t", "keywords": ["吃"]} for i in range(5)]
+        monkeypatch.setattr(rt, "load_preferences", lambda: entries)
+        assert len(rt.retrieve_preferences("吃什么", top_n=2)) == 2
 
 
 class TestLegendaryMemory:
@@ -538,12 +600,22 @@ class TestMemoryStoresCleanedReply:
 
 
 class TestClassifyBehavior:
-    """L3：LLM 判定行为意图（embedding 猜意图不可靠，改 LLM 理解）。"""
+    """L3：LLM 判定行为意图 + 措辞组（embedding 猜意图不可靠，改 LLM 理解）。
+
+    2026-09-26：**行为与措辞共用这一次调用**（同一个问题的两半：该怎么做 / 该用哪些词）。
+    `classify_behavior` 保留为只取行为名的薄包装，逻辑在 routing.classify_l3。
+    """
 
     def _behaviors(self):
         return [
             {"name": "被夸时嘴硬否认", "trigger": "收到夸奖时", "response": "否认"},
             {"name": "被质疑时心虚辩解", "trigger": "被质问时", "response": "辩解"},
+        ]
+
+    def _phrases(self):
+        return [
+            {"id": "brag_deny", "trigger": "被夸奖、被称赞时", "meaning": "被夸时的否认", "phrases": ["也没有啦"]},
+            {"id": "caught_deny", "trigger": "被指出问题、被戳穿时", "meaning": "被戳穿时的否认", "phrases": ["不是不是"]},
         ]
 
     def _fake(self, content):
@@ -554,35 +626,92 @@ class TestClassifyBehavior:
         return type("C", (), {"chat": type("Chat", (), {"completions": _FakeCompletions()})()})
 
     async def test_returns_valid_behavior_name(self):
-        out = await core.classify_behavior(self._fake('{"behavior": "被夸时嘴硬否认"}'),
-                                           "你唱歌好好听", "", self._behaviors())
+        out = await routing.classify_behavior(self._fake('{"behavior": "被夸时嘴硬否认"}'),
+                                              "你唱歌好好听", "", self._behaviors())
         assert out == "被夸时嘴硬否认"
 
     async def test_null_returns_empty(self):
-        out = await core.classify_behavior(self._fake('{"behavior": null}'),
-                                           "今天天气不错", "", self._behaviors())
+        out = await routing.classify_behavior(self._fake('{"behavior": null}'),
+                                              "今天天气不错", "", self._behaviors())
         assert out == ""
 
     async def test_fabricated_name_rejected(self):
-        out = await core.classify_behavior(self._fake('{"behavior": "不存在的行为"}'),
-                                           "随便", "", self._behaviors())
+        out = await routing.classify_behavior(self._fake('{"behavior": "不存在的行为"}'),
+                                              "随便", "", self._behaviors())
         assert out == ""
 
     async def test_markdown_wrapped_json_parsed(self):
-        out = await core.classify_behavior(self._fake('```json\n{"behavior": "被质疑时心虚辩解"}\n```'),
-                                           "你又在骗人", "", self._behaviors())
+        out = await routing.classify_behavior(self._fake('```json\n{"behavior": "被质疑时心虚辩解"}\n```'),
+                                              "你又在骗人", "", self._behaviors())
         assert out == "被质疑时心虚辩解"
 
     async def test_failure_returns_empty(self):
         def _raise(*a, **k):
             raise RuntimeError("api down")
         fake = type("C", (), {"chat": type("Chat", (), {"completions": type("C2", (), {"create": _raise})()})()})
-        out = await core.classify_behavior(fake, "你好", "", self._behaviors())
+        out = await routing.classify_behavior(fake, "你好", "", self._behaviors())
         assert out == ""
 
     async def test_no_behaviors_returns_empty(self):
-        out = await core.classify_behavior(self._fake('{"behavior": "x"}'), "你好", "", [])
+        out = await routing.classify_behavior(self._fake('{"behavior": "x"}'), "你好", "", [])
         assert out == ""
+
+
+class TestClassifyL3Phrases:
+    """同一次调用里的措辞组判定。"""
+
+    def _phrases(self):
+        return TestClassifyBehavior()._phrases()
+
+    def _behaviors(self):
+        return TestClassifyBehavior()._behaviors()
+
+    def _fake(self, content):
+        return TestClassifyBehavior()._fake(content)
+
+    async def test_phrase_ids_returned(self):
+        out = await routing.classify_l3(self._fake('{"behavior": null, "phrases": ["brag_deny"]}'),
+                                        "你唱歌好好听", "", self._behaviors(), self._phrases())
+        assert out == {"behavior": "", "phrases": ["brag_deny"]}
+
+    async def test_behavior_and_phrases_together(self):
+        out = await routing.classify_l3(
+            self._fake('{"behavior": "被夸时嘴硬否认", "phrases": ["brag_deny"]}'),
+            "你唱歌好好听", "", self._behaviors(), self._phrases())
+        assert out["behavior"] == "被夸时嘴硬否认"
+        assert out["phrases"] == ["brag_deny"]
+
+    async def test_fabricated_phrase_id_dropped(self):
+        out = await routing.classify_l3(self._fake('{"behavior": null, "phrases": ["不存在的组"]}'),
+                                        "你好", "", self._behaviors(), self._phrases())
+        assert out["phrases"] == []
+
+    async def test_phrases_missing_key_ok(self):
+        out = await routing.classify_l3(self._fake('{"behavior": "被夸时嘴硬否认"}'),
+                                        "你唱歌好好听", "", self._behaviors(), self._phrases())
+        assert out["behavior"] == "被夸时嘴硬否认"
+        assert out["phrases"] == []
+
+    async def test_duplicate_phrase_ids_deduped(self):
+        out = await routing.classify_l3(self._fake('{"behavior": null, "phrases": ["brag_deny", "brag_deny"]}'),
+                                        "你好", "", self._behaviors(), self._phrases())
+        assert out["phrases"] == ["brag_deny"]
+
+    async def test_no_phrase_groups_keeps_behavior(self):
+        out = await routing.classify_l3(self._fake('{"behavior": "被夸时嘴硬否认", "phrases": ["x"]}'),
+                                        "你唱歌好好听", "", self._behaviors(), [])
+        assert out == {"behavior": "被夸时嘴硬否认", "phrases": []}
+
+    async def test_failure_returns_empty_both(self):
+        def _raise(*a, **k):
+            raise RuntimeError("api down")
+        fake = type("C", (), {"chat": type("Chat", (), {"completions": type("C2", (), {"create": _raise})()})()})
+        assert await routing.classify_l3(fake, "你好", "", self._behaviors(), self._phrases()) == {
+            "behavior": "", "phrases": []}
+
+    async def test_empty_msg_short_circuits(self):
+        assert await routing.classify_l3(self._fake('{"behavior": "x"}'), "", "", self._behaviors()) == {
+            "behavior": "", "phrases": []}
 
 
 class TestRepairLlmJson:
@@ -760,8 +889,8 @@ class TestHandleChatEmotionOnly:
         monkeypatch.setattr(core, "embed_query", _fail)
         monkeypatch.setattr(core, "retrieve_corpus", _fail)
         monkeypatch.setattr(core, "retrieve_voice_samples", _fail)
-        monkeypatch.setattr(core, "retrieve_phrases", _fail)
-        monkeypatch.setattr(core, "classify_behavior", _fail)
+        monkeypatch.setattr(core, "select_phrase_groups", _fail)
+        monkeypatch.setattr(core, "classify_l3", _fail)
 
         captured = {}
 
@@ -797,8 +926,8 @@ class TestHandleChatImageOnly:
         monkeypatch.setattr(core, "embed_query", fake_embed)
         monkeypatch.setattr(core, "retrieve_corpus", _fail)
         monkeypatch.setattr(core, "retrieve_voice_samples", _fail)
-        monkeypatch.setattr(core, "classify_behavior", _fail)  # L3：图片-only 也不做行为意图分类
-        monkeypatch.setattr(core, "retrieve_phrases", _fail)
+        monkeypatch.setattr(core, "classify_l3", _fail)  # L3：图片-only 也不做行为/措辞分类
+        monkeypatch.setattr(core, "select_phrase_groups", _fail)
         monkeypatch.setattr(core, "fuse_and_truncate", _fail)
 
         captured = {}

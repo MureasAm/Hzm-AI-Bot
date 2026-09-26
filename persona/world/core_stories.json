@@ -1,5 +1,5 @@
 {
-  "_readme": "灰泽满的核心记忆——直播以来印象最深的结晶，粉丝最常提及的故事。独立于 corpus（普通背景）：单独语义检索、阈值更低更容易浮现，注入【她的核心记忆】。id 唯一；text 留空则不参与。改完跑 run_tool precompute core-stories。",
+  "_readme": "【她的核心记忆】印象最深的结晶\n该进这里：直播以来印象最深、粉丝最常提及的故事（独立于 corpus：单独检索、阈值更低更容易浮现）。\n不该进这里：普通背景经历（→ corpus）、词义（→ terms）。\n改完**必须重算向量**：python scripts/run_tool.py precompute core-stories",
   "stories": [
     {
       "id": "good_student_38",

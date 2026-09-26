@@ -4,9 +4,13 @@
 - corpus        背景记忆（persona/world/corpus_vectors.json）        → 走 RRF
 - voice_sample  风格样本（persona/speech/voice_sample_vectors.json） → 走 RRF
 - behavior      行为触发（L3 LLM 意图分类 + behavior_keywords 判别词兜底，不走 embedding）→ 走 RRF
-- phrase        措辞指纹（persona/speech/phrase_vectors.json）       → 走 RRF
-- preference    偏好事实（persona/world/preference_vectors.json）    → 命中才带，不走 RRF
+- phrase        措辞指纹（**按 L3 判出的组 id 取**，不再向量检索）    → 走 RRF
+- preference    偏好事实（**按 keywords 子串命中**，不再向量检索）    → 命中才带，不走 RRF
 - core_story    核心记忆（persona/world/core_story_vectors.json）    → 命中才带，不走 RRF
+
+**判据怎么选**（2026-09-26 定，别再搞混）：说法千变万化、要从 N 条里挑 → 向量 + LLM 判（corpus）；
+类别少、任务其实是"给这句话归类" → 分类（behavior/phrase）；类别名能被用户直接说出来 → 子串命中（preference/terms）。
+**phrase 和 preference 原本都用向量，都是"用检索工具干分类/关键词的活"**，已改掉（两路的地板都压在正例上）。
 
 corpus/voice_sample/behavior/phrase 四路走加权 RRF 融合（score = w/(k+rank)），
 再条数截断 + 字符预算截断，只注入本轮真正相关的信息；
@@ -14,17 +18,19 @@ preference/core_story 是身份事实层，命中才带、不占检索预算。
 """
 import os
 import json
+import re
 from dataclasses import dataclass, field
 
 from .constants import (
     PROJECT_ROOT,
-    VOICE_SAMPLE_VECTOR_FILE, PHRASE_VECTOR_FILE, PREFERENCE_VECTOR_FILE, CORE_STORY_VECTOR_FILE,
+    VOICE_SAMPLE_VECTOR_FILE, CORE_STORY_VECTOR_FILE,
+    PHRASES_FILE, PREFERENCES_FILE,
     RAG_THRESHOLD, CORPUS_TOP_N, CORPUS_CANDIDATE_N,
     CORPUS_KEYWORD_FLOOR, CORPUS_STRONG_KEYWORD,
     VOICE_SAMPLE_THRESHOLD, VOICE_SAMPLE_TOP_N, VOICE_SAMPLE_KEEPALIVE, VOICE_SAMPLE_MIN_K,
     VOICE_SAMPLE_KEEPALIVE_MIN_SIM,
-    PHRASE_THRESHOLD, PHRASE_TOP_N, PHRASE_PHASES_MAX,
-    PREFERENCE_THRESHOLD, PREFERENCE_TOP_N,
+    PHRASE_TOP_N, PHRASE_PHASES_MAX,
+    PREFERENCE_TOP_N,
     CORE_STORY_THRESHOLD, CORE_STORY_TOP_N,
     RRF_K, SOURCE_WEIGHTS, RETRIEVAL_TOPK,
     RETRIEVAL_BUDGET_CHARS, MAX_RETRIEVAL_ITEM_CHARS,
@@ -198,9 +204,20 @@ def _ensure_min_samples(items: list, samples: list, query_vector) -> list:
 def retrieve_voice_samples(user_query: str, query_vector,
                            threshold: float = VOICE_SAMPLE_THRESHOLD,
                            top_n: int = VOICE_SAMPLE_TOP_N) -> list:
-    """风格样本检索。extra 含 user/reply，供 few-shot 注入。"""
+    """风格样本检索。extra 含 user/reply，供 few-shot 注入。
+
+    ⚠️ `not query_vector` 这个早退**不能省**：embedding 服务挂掉时
+    `rag.embed_query` 会返回 None（它自己吞异常），而保底注入那条路
+    （`_ensure_min_samples` 算全体最高分）没判 None —— `cosine_similarity(None, …)`
+    里的 `zip(None, …)` 直接抛 TypeError。
+    实测踩坑（2026-09-27）：用户智谱 embedding key 过期 → 每次带文字的消息
+    都在这里抛异常，而 core.handle_chat 那一段**没有 try 兜底** → 整条回复任务死掉，
+    **她一个字都不回**（不只主动发言）。
+    另外两路（retrieve_corpus / retrieve_core_stories）开头都有同样的判断，
+    就这路漏了——这里的写法是为了跟它们对齐：拿不到向量就当作"没检索到"，不是崩。
+    """
     samples = load_voice_sample_vectors()
-    if not samples:
+    if not samples or not query_vector:
         return []
     entries = [{"vector": s["vector"], "id": s["id"], "text": "",
                 "extra": {"user": s["user"], "reply": s["reply"], "type": s.get("type", ""), "length": s.get("length", "short")}}
@@ -262,92 +279,117 @@ def select_behavior_item(user_msg: str, behavior_intent: str, behaviors: list) -
     return None
 
 
-# 措辞指纹向量缓存（模块级，一次性加载）
-_phrase_vectors = None
+# ==================== 措辞指纹（按 id 取组，不再向量检索） ====================
+# 为什么去掉了向量：措辞组的 trigger 是 **6~13 字的类别标签**（"被夸奖、被称赞时"），
+# 不是自然语言句子——拿它跟用户消息算余弦是**用检索工具干分类的活**。实测：
+# 噪声地板 0.575 / 正例 0.573，中位数 0.461 都过阈值 → **100% 开火，等于没有判据**。
+# 现在改由 L3 的 LLM 分类给出组 id（和 behaviors 同一套：类别少、说法固定就该分类不该检索），
+# 这里只负责按 id 把组取出来。
+
+_phrase_groups_cache = None
 
 
-def load_phrase_vectors() -> list:
-    """读 persona/speech/phrase_vectors.json（缓存）。环境变量 PHRASES=0 时返回 []。"""
-    global _phrase_vectors
-    if _phrase_vectors is not None:
-        return _phrase_vectors
-    if os.environ.get("PHRASES", "1") == "0" or not PHRASE_VECTOR_FILE.exists():
-        _phrase_vectors = []
-        return _phrase_vectors
+def load_phrase_groups() -> list:
+    """读 persona/speech/phrases.json（源文件，缓存）。环境变量 PHRASES=0 时返回 []。
+
+    注意读的是**源文件**（phrases.json），不是 precompute 出来的向量缓存——
+    这一路不再用向量，`phrase_vectors.json` 已停用（见 交接文档/注入链路）。
+    """
+    global _phrase_groups_cache
+    if _phrase_groups_cache is not None:
+        return _phrase_groups_cache
+    if os.environ.get("PHRASES", "1") == "0" or not PHRASES_FILE.exists():
+        _phrase_groups_cache = []
+        return _phrase_groups_cache
     try:
-        with open(PHRASE_VECTOR_FILE, "r", encoding="utf-8") as f:
+        with open(PHRASES_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
         groups = data.get("phrase_groups", []) if isinstance(data, dict) else []
-        _phrase_vectors = [g for g in groups if isinstance(g, dict) and g.get("vector") and g.get("phrases")]
+        _phrase_groups_cache = [g for g in groups if isinstance(g, dict) and g.get("id") and g.get("phrases")]
     except (json.JSONDecodeError, OSError):
-        _phrase_vectors = []
-    return _phrase_vectors
+        _phrase_groups_cache = []
+    return _phrase_groups_cache
 
 
-def retrieve_phrases(user_query: str, query_vector,
-                     threshold: float = PHRASE_THRESHOLD,
-                     top_n: int = PHRASE_TOP_N) -> list:
-    """措辞指纹检索。extra 含 phrases/usage，供注入。"""
-    groups = load_phrase_vectors()
-    if not groups:
+def select_phrase_groups(group_ids, groups: list = None, top_n: int = PHRASE_TOP_N) -> list:
+    """把 L3 判出来的措辞组 id 转成注入项（不再有阈值/相似度）。
+
+    extra 含 meaning/phrases/usage，供【她的固定说法】注入。
+    """
+    if not group_ids:
         return []
-    entries = [{"vector": g["vector"], "id": g["id"], "text": "",
-                "extra": {"meaning": g.get("meaning", ""), "phrases": g.get("phrases", []),
-                          "usage": g.get("usage", "")}}
-               for g in groups]
-    return _score_candidates(query_vector, entries, threshold, top_n,
-                             "phrase", lambda e: e["id"], lambda e: e["text"],
-                             lambda e: e["extra"])
+    groups = load_phrase_groups() if groups is None else groups
+    by_id = {g.get("id"): g for g in groups}
+    out = []
+    for gid in group_ids:
+        g = by_id.get(gid)
+        if not g:
+            continue                      # 模型编的 id 直接丢
+        out.append(RetrievalItem(source="phrase", item_id=gid, score=1.0, text="",
+                                 extra={"meaning": g.get("meaning", ""),
+                                        "phrases": g.get("phrases", []),
+                                        "usage": g.get("usage", "")}))
+        if len(out) >= top_n:
+            break
+    return out
 
 
 # ==================== 偏好检索（第 5 路） ====================
 
-# 偏好向量缓存（模块级，一次性加载）
-_pref_vectors = None
+# 偏好缓存（模块级，一次性加载）
+_preferences_cache = None
 
 
-def load_preference_vectors() -> list:
-    """读 persona/world/preference_vectors.json（缓存）。"""
-    global _pref_vectors
-    if _pref_vectors is not None:
-        return _pref_vectors
-    if not PREFERENCE_VECTOR_FILE.exists():
-        _pref_vectors = []
-        return _pref_vectors
+def load_preferences() -> list:
+    """读 persona/world/preferences.json（源文件，缓存）。"""
+    global _preferences_cache
+    if _preferences_cache is not None:
+        return _preferences_cache
+    if not PREFERENCES_FILE.exists():
+        _preferences_cache = []
+        return _preferences_cache
     try:
-        with open(PREFERENCE_VECTOR_FILE, "r", encoding="utf-8") as f:
+        with open(PREFERENCES_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
         entries = data.get("entries", []) if isinstance(data, dict) else []
-        _pref_vectors = [e for e in entries if e.get("vector") and e.get("text")]
+        _preferences_cache = [e for e in entries if e.get("text") and e.get("keywords")]
     except (json.JSONDecodeError, OSError):
-        _pref_vectors = []
-    return _pref_vectors
+        _preferences_cache = []
+    return _preferences_cache
 
 
-def retrieve_preferences(user_query: str, query_vector,
-                         threshold: float = PREFERENCE_THRESHOLD,
-                         top_n: int = PREFERENCE_TOP_N) -> list:
-    """偏好语义检索（第 5 路）：命中与当前消息相关的偏好条目。
+def retrieve_preferences(user_query: str, top_n: int = PREFERENCE_TOP_N) -> list:
+    """偏好命中（第 5 路）：**keyword 子串 或 pattern 正则**命中，就带该条。
 
     返回 [{id, category, text, score}]，供【灰泽满的偏好】注入。
     不进 RRF 融合、不占检索预算——偏好是身份事实层，命中才带，避免与风格样本抢预算。
+
+    **为什么不用向量了**：偏好是"类别 + 一串用户能直接说出的词"（食物 / 水果 / 猫狗…），
+    跟 terms 同构。而实测余弦的噪声地板 0.565 **插在正例正中间**（正例 0.501/0.552/0.590），
+    任何阈值都分不开（试过提到 0.63，噪声挡住了正例一起被杀）。改用确定性命中：
+    零成本、可解释、可人工审、能写测试。
+
+    **pattern（可选）**：正则命中，和 terms.json 同一套（见 core.py 的名词库匹配）。
+    子串做不到的场景——如"吃"会撞"吃什么药/吃瓜"，用负向断言排除。**子串法的天花板就在这**：
+    只能靠挑更多具体词逼近，不可能根治；真要好得换分类器。
     """
-    entries = load_preference_vectors()
-    if not entries or not query_vector:
+    if not user_query:
         return []
-    scored = []
-    for e in entries:
-        sim = cosine_similarity(query_vector, e["vector"])
-        if sim < threshold:
-            continue
-        scored.append((sim, e))
-    scored.sort(key=lambda x: x[0], reverse=True)
-    return [{
-        "id": e.get("id", ""),
-        "category": e.get("category", ""),
-        "text": e.get("text", ""),
-        "score": round(sim, 3),
-    } for sim, e in scored[:top_n]]
+    q = user_query.lower()
+    hits = []
+    for e in load_preferences():
+        kw_hit = any(str(k).lower() in q for k in e.get("keywords", []))
+        pat = e.get("pattern")
+        try:
+            pat_hit = bool(pat) and re.search(pat, user_query, re.IGNORECASE) is not None
+        except re.error:
+            pat_hit = False          # 写坏的正则不该炸掉整路
+        if kw_hit or pat_hit:
+            hits.append({"id": e.get("id", ""), "category": e.get("category", ""),
+                         "text": e.get("text", ""), "score": 1.0})
+        if len(hits) >= top_n:
+            break
+    return hits
 
 
 # ==================== 核心记忆检索（印象最深的结晶） ====================

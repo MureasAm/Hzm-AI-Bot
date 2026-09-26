@@ -7,8 +7,11 @@
 2026-09-25 首次跑的结果（167 条真实用户发言）：
     六路全空只有 1 条 = 1%  → **"完全没素材"几乎不存在**
     但各路命中率悬殊：phrase 99% / voice_sample 32% / core_story 31% / corpus 26% / preference 20%
-    phrase 99% 是**假信号**（见 constants.py 里 PHRASE_THRESHOLD 的注释：短文本余弦分不开）。
+    phrase 99% 是**假信号**（短文本余弦分不开）。
     **结论：痛点不是"读不到"，是"读到了不该读的"。**
+
+2026-09-26 更新：phrase / preference 已换判据（phrase → L3 分类、preference → keywords 子串）。
+    真实聊天回放：phrase **99% → 20%**、preference **20% → 5%**——"读到了不该读的"这条治了。
 
 回答的问题不是"排序好不好"，是**"该有的有没有"**——
 用户说的"很多读不到 / 需要时没有"多半是这个（覆盖问题），而它不该靠改排序解决。
@@ -35,10 +38,13 @@ nonebot.init()
 from openai import AsyncOpenAI  # noqa: E402
 from src.plugins.chatbot.rag import embed_query  # noqa: E402
 from src.plugins.chatbot.retrieval import (  # noqa: E402
-    retrieve_corpus, retrieve_voice_samples, retrieve_phrases,
+    retrieve_corpus, retrieve_voice_samples,
     retrieve_preferences, retrieve_core_stories,
+    load_phrase_groups, select_phrase_groups,
 )
-from src.plugins.chatbot.constants import ZHIPU_BASE_URL  # noqa: E402
+from src.plugins.chatbot.routing import classify_l3  # noqa: E402
+from src.plugins.chatbot.persona import load_persona_rules  # noqa: E402
+from src.plugins.chatbot.constants import ZHIPU_BASE_URL, DEEPSEEK_BASE_URL  # noqa: E402
 
 SHORT_TERM = ROOT / "user_memory" / "short_term.json"
 
@@ -68,6 +74,9 @@ def user_messages() -> list:
 
 async def main():
     zhipu = AsyncOpenAI(api_key=_key("ZHIPU_API_KEY"), base_url=ZHIPU_BASE_URL)
+    deepseek = AsyncOpenAI(api_key=_key("OPENAI_API_KEY"), base_url=DEEPSEEK_BASE_URL)
+    _, _, behaviors = load_persona_rules()
+    phrase_groups = load_phrase_groups()
     msgs = user_messages()
     print(f"真实用户发言 {len(msgs)} 条\n")
 
@@ -75,11 +84,13 @@ async def main():
     tally = Counter()
     for i, m in enumerate(msgs, 1):
         qv = await embed_query(zhipu, m)
+        # phrase 走 L3 分类（不再是向量）——所以这一路要 LLM
+        l3 = await classify_l3(deepseek, m, "", behaviors, phrase_groups)
         hits = {
             "corpus": retrieve_corpus(m, qv),
             "voice_sample": retrieve_voice_samples(m, qv),
-            "phrase": retrieve_phrases(m, qv),
-            "preference": retrieve_preferences(m, qv),
+            "phrase": select_phrase_groups(l3["phrases"], phrase_groups),
+            "preference": retrieve_preferences(m),
             "core_story": retrieve_core_stories(m, qv),
         }
         got = [k for k, v in hits.items() if v]

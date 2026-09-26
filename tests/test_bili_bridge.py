@@ -191,7 +191,11 @@ class TestLiveMessage:
 
 
 class TestProactiveDynamic:
-    """动态优先转成"她会主动说的那句话"；转不了就退回结构化通知。"""
+    """动态推**两条**：先原文通知，再"她会主动说的那句话"。
+
+    锁的是"原文不许被主动发言顶掉"——曾经写的是 `said or notice` 二选一，
+    主动发言一成功，**原文就整条消失**（粉丝只剩一条没头没尾的私聊）。
+    """
 
     def _setup(self, monkeypatch, said):
         m = _make_monitor(uid="1", sessdata="sess", state={"last_dynamic_id": "old"})
@@ -214,16 +218,41 @@ class TestProactiveDynamic:
         monkeypatch.setattr(bb, "compose_proactive", _compose)
         return m, pushed
 
-    async def test_uses_her_sentence_when_convertible(self, monkeypatch):
+    async def test_notice_first_then_her_sentence(self, monkeypatch):
+        # 两条都要有，且**原文在前**（先"转发给你"，再补一句）
         m, pushed = self._setup(monkeypatch, "灰泽满今天收拾到半夜，累死了。")
         await m._check_dynamic(FakeBot())
-        assert pushed == ["灰泽满今天收拾到半夜，累死了。"]
+        assert pushed == ["通知:正文", "灰泽满今天收拾到半夜，累死了。"]
 
     async def test_falls_back_to_notice_when_not_suitable(self, monkeypatch):
-        # 不适合主动说（纯转发/抽奖）→ 回退通知，**信息不能丢**
+        # 不适合主动说（纯转发/抽奖）→ 只发原文通知，**信息不能丢**
         m, pushed = self._setup(monkeypatch, None)
         await m._check_dynamic(FakeBot())
         assert pushed == ["通知:正文"]
+
+    async def test_images_go_with_the_notice_not_her_sentence(self, monkeypatch):
+        """配图只跟着原文那条走——她那句是纯文字，否则同一批图会发两遍。"""
+        m, _ = self._setup(monkeypatch, "明天来玩啊")
+        calls = []
+
+        async def fake_push(bot, content, image_paths=None):
+            calls.append((content, image_paths))
+
+        async def fake_download(url):
+            from pathlib import Path
+            return Path("fake_pic.jpg")
+
+        async def _dyn():
+            return {"id": "new", "text": "正文", "image_urls": ["https://x.com/a.jpg"]}
+
+        monkeypatch.setattr(m, "_push", fake_push)
+        monkeypatch.setattr(bb, "_download_image", fake_download)
+        monkeypatch.setattr(m, "_fetch_latest_dynamic", _dyn)
+
+        await m._check_dynamic(FakeBot())
+        assert len(calls) == 2
+        assert calls[0][0] == "通知:正文" and calls[0][1]        # 原文那条带图
+        assert calls[1][0] == "明天来玩啊" and not calls[1][1]    # 她那句不带图
 
 
 class TestDynamic:

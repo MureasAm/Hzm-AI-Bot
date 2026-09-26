@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""离线预计算 persona/world/preferences.json 的偏好向量（第 5 路检索）。
+"""⚠️ **已停用**（2026-09-26）——偏好不再走向量检索，本脚本不会被运行时消费。
 
-输出 persona/world/preference_vectors.json（entries 数组：id/category/text/vector）。
-运行时 retrieval.py 读缓存，按当前消息语义检索命中的偏好条目，注入【灰泽满的偏好】。
+为什么停：噪声地板 0.565 插在正例（0.501/0.552/0.590）**正中间**，余弦分不开（试过 0.62，
+正例全被误杀）。而偏好本来就是"类别 + 用户能直接说出的词"（食物/水果/猫狗…），跟 terms 同构
+→ 改成确定性的 **keywords 子串命中**（见 retrieval.retrieve_preferences），零成本、可人工审。
 
-用法：
-    python scripts/precompute_preference_vectors.py
-    python scripts/run_tool.py precompute preferences
+脚本与产出的 preference_vectors.json 先留着（以防回退），但**改了 preferences.json 不需要再跑它**
+（现在要维护的是每条 entry 的 `keywords` 字段）。
 
-注意：改过 persona/world/preferences.json 后需重跑本脚本。
+原说明：离线预计算 persona/world/preferences.json 的偏好向量，运行时按语义检索命中的条目。
 """
 import asyncio
 import json

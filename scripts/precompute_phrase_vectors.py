@@ -1,12 +1,14 @@
-"""离线预计算 persona/speech/phrases.json 中每个措辞组的 trigger 向量。
+"""⚠️ **已停用**（2026-09-26）——措辞不再走向量检索，本脚本不会被运行时消费。
 
-输出 persona/speech/phrase_vectors.json（自包含：连同 phrases 一起存），
-运行时 retrieval.py 按当前用户消息情境检索相关措辞组。
+为什么停：措辞组的 trigger 是 6~13 字的**类别标签**（"被夸奖、被称赞时"），不是句子，
+拿它算余弦 = 用检索工具干分类的活。实测噪声地板 0.575 / 正例 0.573，**中位数 0.461 都过阈值
+→ 100% 开火，等于没有判据**。现在改由 L3 的 LLM 分类给组 id（见 routing.classify_l3），
+运行时读源文件 persona/speech/phrases.json（`retrieval.load_phrase_groups`）。
 
-用法：
-    python scripts/precompute_phrase_vectors.py
+脚本与产出的 phrase_vectors.json 先留着（以防回退），但**改了 phrases.json 不需要再跑它**。
 
-注意：改过 persona/speech/phrases.json 后需重跑本脚本。
+原说明：离线预计算 persona/speech/phrases.json 中每个措辞组的 trigger 向量，
+输出 persona/speech/phrase_vectors.json，运行时按用户消息情境检索相关措辞组。
 """
 import json
 import asyncio

@@ -2,7 +2,8 @@
 
 启动时注册后台任务，周期性轮询灰泽满本人的 B站账号：
 - 开播：状态翻转（未播→直播）才推送一次，带上直播间标题
-- 动态：出现新动态 ID 才推送，结构化通知（真实内容 + 个人空间链接），含配图时连图一起发
+- 动态：出现新动态 ID 才推送，**两条**——先原文（结构化通知：真实内容 + 个人空间链接，
+  含配图时连图一起发），再"她会主动说的那句话"（proactive，转不出来就只有原文那条）
 推送目标：灰泽满 QQ 号的所有好友（私聊），NOTIFY_FRIENDS_WHITELIST 可收窄为白名单。
 去重状态（last_live_status / last_dynamic_id / 好友缓存）持久化到 data/bili_state.json，
 重启不重复推送。所有外部调用失败都降级为日志，绝不让监听任务崩溃。
@@ -390,12 +391,17 @@ class BiliMonitor:
             if image_paths:
                 print(f"[B站] 纯表情动态：表情 {len(image_paths)} 张（已压到 ≤{_EMOJI_MAX_SIDE}px）")
 
-        # 优先转成"她会主动说的那句话"；转不了（纯转发/抽奖等）或生成失败时，
-        # 退回原来的结构化通知——**信息不丢，行为和以前一致**。
+        # **原文通知 + 她会说的那句，两条都发**（与微博 weibo_bridge._check_posts 一致）。
+        # 原来写的是 `said or notice` 二选一：主动发言一旦成了，**原文就整条不见了**——
+        # 而她转写质量不稳（会漏细节、会跑偏），粉丝就只剩一条没头没尾的私聊。
+        # 顺序不能反：先原文（带配图），再她那句（纯文字），像"转发给你 + 补一句"。
+        notice = self._format_dynamic_push(dyn["text"])
         said = await compose_proactive(dyn["text"], "B站")
-        content = said or self._format_dynamic_push(dyn["text"])
-        print(f"[B站] 检测到新动态 ({'主动发言' if said else '通知模板'}) -> {content}")
-        await self._push(bot, content, image_paths=image_paths)
+        print(f"[B站] 检测到新动态 -> 原文通知"
+              f"{(' + 主动发言：' + said) if said else '（主动发言未生成，只发原文）'}")
+        await self._push(bot, notice, image_paths=image_paths)
+        if said:
+            await self._push(bot, said)
         self.state["last_dynamic_id"] = dyn["id"]
         _save_state(self.state)
 

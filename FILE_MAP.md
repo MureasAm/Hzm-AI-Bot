@@ -2,7 +2,8 @@
 
 > 给使用者/接手的开发者看。按"入口 → 运行时 → 人格数据 → 工具 → 测试 → 产物"组织。
 > 版本史见 `ROADMAP.md`；**还没做的问题**见 `待办清单.md`（从 2026-09 全项目通读蒸馏）。
-> **想看"素材怎么被注进去"的全貌**（每层注入什么、多少字符、阈值多少、为什么这么设计）见 `注入链路.md`。
+> **想看"素材怎么被注进去"的全貌**（每层注入什么、多少字符、阈值多少）见 `注入链路.md`；
+> **想知道"判据怎么选、素材该长什么形式、改了什么会变好/变坏"**（带实验数据）见 `注入设计原理.md`。
 
 ## 一、入口（怎么跑起来）
 
@@ -21,19 +22,19 @@
 | `__init__.py` | 事件入口 | 收消息→进读秒窗口；心跳/在线信号(data/heartbeat\|qq_alive\|qq_offline)；自动通过好友 |
 | `core.py` | 主循环 | 十层提示注入、六路检索融合、生成、记忆提取、防复读、梗/行为路由落地 |
 | `chat_window.py` | 读秒攒批窗口 | 群=整群一窗；回复前读图+归纳；**群聊先过接话门**（私聊不过）；语音优先；`split_reply` 分批发（打字感） |
-| `group_gate.py` | **群聊接话门** | 攒批安静下来时判"这批要不要开口"（判据=用户标定：情绪/经历/点名才接，纯事务附和收尾不接）。失败按"接"放行。`GROUP_GATE=0` 可关 |
+| `group_gate.py` | **群聊接话门** | 攒批安静下来时判"这批要不要开口"（判据=用户标定：点名/情绪/经历才接，纯事务附和收尾不接，**纯事件按概率**）。**点名（手打名字 / @她）确定性放行、不调 LLM**。失败按"接"放行。`GROUP_GATE=0` 可关 |
 | `corpus_judge.py` | **corpus 语义判** | 判"这段直播经历和用户刚说的话是不是一回事"（填平"口语问句 vs 第三人称陈述"的鸿沟——「你多高啊」靠余弦只有 0.443，永远进不来）。门放行的直通，门没放行的取 top-N 交它判。失败**不带经历**（与接话门相反：宁可漏不可错）。`CORPUS_JUDGE=0` 可关 |
-| `proactive.py` | **主动发言** | 抓到动态/微博 → 转成「她会主动说的那句话」（走人设 + 按内容检索的风格样本）；转不了/失败返回 None，桥上退回原通知模板。`PROACTIVE=0` 可关 |
+| `proactive.py` | **主动发言** | 抓到动态/微博 → 转成「她会主动说的那句话」（走人设 + 按内容检索的风格样本）。**原文通知照发**，这里返回 None 只是少她那句（两个桥都是「原文 + 她那句」两条）。`PROACTIVE=0` 可关 |
 | `chatlog.py` | **聊天落盘** | 每轮追加 JSONL（`data/chat_log/`，**gitignore**）供事后分析——短时记忆只有 10 条滚动窗口，超出就没了。`CHATLOG=0` 可关 |
 | `stickers.py` | **表情包** | 判「她这句话配哪张表情」，十分对应才发（失败**不发**，与接话门相反）。标注在 `persona/media/stickers.json`，图在 `assets/stickers/`。`STICKER=0` 可关 |
 | `reply_style.py` | 纯函数后处理 | 拆句/分批延迟/`clean_reply`（换行归一、去括号、省略号纪律、自指兜底）/防复读检测 |
-| `retrieval.py` | 检索融合 | corpus/voice/phrase 向量 + behavior(L3) 走 RRF；preference/core_story 命中才带；关键词门/预算 |
+| `retrieval.py` | 检索融合 | corpus/voice 走向量，behavior+phrase 走 L3 分类，preference 走 keywords 子串；四路 RRF 融合；core_story 命中才带；关键词门/预算。**判据怎么选见文件头**（三种任务三种工具，别再给 phrase/preference 上向量） |
 | `routing.py` | 硬路由 | legendary 梗库（含 LLM 语境确认）+ 行为意图分类 L3 |
 | `persona.py` | 人格加载 | traits/styles/behaviors、terms、schedule 的读取与拼装 |
 | `rag.py` | 向量工具 | embedding 客户端封装（`embed_query` 等），检索层的底座 |
 | `qq_faces.py` | QQ 表情表 | face id → 中文名（248 条）。NapCat 拿不到 `faceText` 时兜底，免得消息变成"QQ表情6"。**别手改**，来源与提取规则见文件头 |
 | `memory.py` | 短期记忆 | short_term.json 带锁读写；并加载根 memory_manager 供长期 |
-| `session_memory.py` | 会话记忆 | session.json（话题/事件/指代补全） |
+| `session_memory.py` | 会话记忆 | session.json（话题/事件/指代补全）。**隔 >12h 的上一场不当"当前会话"**，降级成「上次聊过（3天前）…」单独注入——`previous_session_note()` **必须在 probe 之前调**（probe 会重写 last_active） |
 | `group_memory.py` | 群记忆 | groups.json：成员 id→昵称 + 群近况 events |
 | `context_probe.py` | 感知 | 时间/农历/天气/直播状态 →【当前时间】（天气异步预热，不卡主循环） |
 | `vision.py` | 看图 | glm-4.6v 把图片描述成文字注入 |
@@ -69,15 +70,24 @@
 
 - **蒸馏**：transcribe → clean-transcript → analyze-pace → convert-to-chat
 - **生成**：extract-persona（→behaviors 人工审批）、mine-phrases、mine-theme；`generate-statements` 已冷落
-- **向量**：`generate-vectors -i persona/world/statement_final.json`；`precompute voice-samples|phrases|preferences|core-stories`
+- **向量**：`generate-vectors -i persona/world/statement_final.json`；`precompute voice-samples|core-stories`
+  （⚠️ `precompute phrases|preferences` 与产出的 `*_vectors.json` **已停用**——2026-09-26 这两路改判据，不再走向量）
 - **评测**：regression / persona-eval / retrieval-eval
 - **工具**：bili-check / bili-login / vision-test
 - **独立运行（不在 run_tool）**：`watchdog.py`（假死自愈进程）、`notifier.py`（SMTP，被 watchdog 用）、`update_schedule.py`（周表识图；日常用根目录 `更新周表.bat` 拖图，也可丢 `data/schedule_inbox/` 后无参跑）、`label_stickers.py`（给 `assets/stickers/` 打标，**加了新表情就重跑它**，幂等）
+- **★ 三个实验/诊断工具**（都在 `scripts/` 根下，直接 `python scripts/<名字>.py`）：
+  - **`trace_chain.py`** —— **链路追踪**：对一条消息打印整条链的每个决策（谁开火、注入了什么、最终回复）。
+    `--reply` 连回复一起生成，`--json x.json` 存下来供**改动前后 diff**。**包装真函数、不重新实现**，
+    所以追踪的就是线上跑的东西。（改检索/注入先跑它）
+  - **`form_experiment.py`** —— **形式对照实验**：同一个事实写成 system 陈述 / 偏好条目 / 词表 / 指令 /
+    assistant 问答对，各生成 N 次，量"采用率"与"逐字复读率"——结论见 `注入设计原理.md` 第三节
+  - **`judge_experiment.py`** —— **判据横向对比**：同一份手工标注集上比 子串/余弦/BM25/LLM/HyDE/并集
+    哪个更好用——结论见 `注入设计原理.md` 2.3 节。标注集导出在 `outputs/judge_labels.md`（可改）
 - **判据回归集**：`scripts/regression_cases.json`（真实翻车固化成确定性判据）→ `run_tool.py regression --check`
 
 > ⚠️ `generate-persona` 会覆盖人格三件套，需 `--danger`；`generate-vectors` 缺省指向 statement_final，别靠内置 RAW_CORPUS。
 
-## 五、测试（`tests/`，528 个）
+## 五、测试（`tests/`，589 个）
 `conftest.py` 初始化 NoneBot 并加载插件。核心逻辑（reply_style/retrieval/session/voice/chat_window/bili/group_memory/weibo/short_memory 纯函数）覆盖较全；weibo 推送、config、`__init__` 心跳、watchdog/notifier 覆盖少。
 
 ## 六、运行产物/状态（不入库）
