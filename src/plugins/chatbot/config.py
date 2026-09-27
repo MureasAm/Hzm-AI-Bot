@@ -5,6 +5,8 @@
 API 客户端工厂（_get_clients / _get_model_name）也在此，core / routing 共用，
 避免 core ↔ routing 循环依赖。
 """
+import json
+
 from nonebot import get_driver
 from openai import AsyncOpenAI
 
@@ -50,6 +52,24 @@ def _get_clients():
         AsyncOpenAI(api_key=zhipu_api_key, base_url=ZHIPU_BASE_URL),
     )
     return _clients_cache
+
+
+def parse_json_block(content: str):
+    """把 LLM 返回的 JSON 正文解析成对象（自动剥 ``` 围栏 + json 语言标签）。
+
+    踩坑：模型常返回 ```json\\n{...}\\n```，只取 ``` 之间那段的话，
+    剩下的 `json\\n{...}` 会让 json.loads 直接失败——**语言标签要一起剥**。
+
+    解析不了就抛 json.JSONDecodeError（各判官的调用方本来就都有 try/except 兜底）。
+    """
+    text = (content or "").strip()
+    if "```" in text:
+        parts = text.split("```")
+        if len(parts) >= 2:
+            text = parts[1].strip()
+    if text[:4].lower() == "json":
+        text = text[4:].strip()
+    return json.loads(text)
 
 
 def extract_chat_content(resp) -> str:

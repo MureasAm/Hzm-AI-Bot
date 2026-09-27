@@ -396,7 +396,11 @@ class BiliMonitor:
         # 而她转写质量不稳（会漏细节、会跑偏），粉丝就只剩一条没头没尾的私聊。
         # 顺序不能反：先原文（带配图），再她那句（纯文字），像"转发给你 + 补一句"。
         notice = self._format_dynamic_push(dyn["text"])
-        said = await compose_proactive(dyn["text"], "B站")
+        # 配图传给她看：内容里的"⬇️/这个/图片里那个"指的就是它。
+        # **只传真配图**（photos）——纯表情动态那一堆 emoji 图不是"配图"，
+        # 传过去只会让视觉模型描述一个小表情，反而误导。
+        said = await compose_proactive(dyn["text"], "B站",
+                                       image_paths=image_paths if photos else None)
         print(f"[B站] 检测到新动态 -> 原文通知"
               f"{(' + 主动发言：' + said) if said else '（主动发言未生成，只发原文）'}")
         await self._push(bot, notice, image_paths=image_paths)

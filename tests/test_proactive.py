@@ -35,6 +35,7 @@ class _StubClient:
 @pytest.fixture(autouse=True)
 def _isolate(monkeypatch):
     monkeypatch.delenv("PROACTIVE", raising=False)
+    monkeypatch.delenv("PROACTIVE_JUDGE", raising=False)
 
     # 不打网络：客户端打桩，检索直接返回空（风格样本那条路本来就允许失败）
     monkeypatch.setattr(proactive, "_get_clients",
@@ -134,3 +135,207 @@ class TestPromptContent:
         assert "别像播报" in p          # 核心诉求：不是发公告
         assert "NULL" in p              # 不适合要能说出来
         assert "灰泽满" in p             # 自称习惯
+
+
+class _TwoStepClient:
+    """一次 compose 要调**两次** LLM：先判"说不说得清"，再生成。
+
+    按 prompt 内容分派（判官问句里有"够不够撑起"），不靠调用顺序——
+    以后中间再加一步也不会把用例测歪。
+    """
+
+    def __init__(self, judge='{"enough": true}', gen="明天来玩啊", judge_exc=None):
+        self.judge, self.gen, self.judge_exc = judge, gen, judge_exc
+        self.chat = self
+        self.completions = self
+
+    async def create(self, **kwargs):
+        prompt = kwargs["messages"][-1]["content"]
+        is_judge = "够不够撑起" in prompt
+        if is_judge and self.judge_exc:
+            raise self.judge_exc
+        content = self.judge if is_judge else self.gen
+        return SimpleNamespace(choices=[
+            SimpleNamespace(message=SimpleNamespace(content=content), finish_reason="stop")
+        ])
+
+
+class TestContentJudge:
+    """开口前的第一道闸：内容**说不说得清**。
+
+    用户 2026-09-27 报：她微博写"写不完了"，直播里说的其实是"作业写不完了"——
+    单独看连"写什么"都不知道，硬说一句只会说歪或说空，不如不说。
+    """
+
+    def _with(self, monkeypatch, judge, gen="明天来玩啊"):
+        monkeypatch.setattr(proactive, "_get_clients",
+                            lambda: (_TwoStepClient(judge=judge, gen=gen), object()))
+
+    async def test_unclear_content_skips_generation(self, monkeypatch):
+        self._with(monkeypatch, judge='{"enough": false, "why": "缺了写什么"}')
+        assert await compose_proactive("写不完了", "微博") is None
+
+    async def test_clear_content_still_generates(self, monkeypatch):
+        # 短但完整（"今天好累"）不该被这条判据误杀
+        self._with(monkeypatch, judge='{"enough": true}')
+        assert await compose_proactive("今天好累", "微博") == "明天来玩啊"
+
+    async def test_fenced_json_tolerated(self, monkeypatch):
+        self._with(monkeypatch, judge='```json\n{"enough": false}\n```')
+        assert await compose_proactive("写不完了") is None
+
+    async def test_judge_failure_fails_open(self, monkeypatch):
+        # 判官挂了 → 放行照常生成（"该说时不说"比"多说一句"难发现）
+        monkeypatch.setattr(proactive, "_get_clients",
+                            lambda: (_TwoStepClient(judge_exc=RuntimeError("boom")), object()))
+        assert await compose_proactive("写不完了") == "明天来玩啊"
+
+    async def test_judge_garbage_fails_open(self, monkeypatch):
+        self._with(monkeypatch, judge="我看不出来")
+        assert await compose_proactive("写不完了") == "明天来玩啊"
+
+    def test_enabled_by_default(self):
+        assert proactive.judge_enabled() is True
+
+    async def test_can_be_disabled(self, monkeypatch):
+        monkeypatch.setenv("PROACTIVE_JUDGE", "0")
+        self._with(monkeypatch, judge='{"enough": false}')
+        assert await compose_proactive("写不完了") == "明天来玩啊"
+
+    async def test_pure_punctuation_skipped_without_llm(self, monkeypatch):
+        """纯符号内容**确定性拦掉**，不该调 LLM 判——能确定的事别多一次判错的机会。
+
+        实测（2026-09-27）：交给判官时 "..." 会被判成"够"。
+        """
+        calls = []
+
+        class _Boom(_TwoStepClient):
+            async def create(self, **kwargs):
+                calls.append(1)
+                raise AssertionError("纯符号不该调 LLM")
+
+        monkeypatch.setattr(proactive, "_get_clients", lambda: (_Boom(), object()))
+        for text in ("...", "。。。", "？？", "😭"):
+            assert await compose_proactive(text) is None
+        assert calls == []
+
+    def test_prompt_separates_short_from_incomplete(self):
+        p = proactive.PROACTIVE_JUDGE_PROMPT
+        assert "短但完整" in p    # 短 ≠ 缺：别把"晚安，明天见"也拦了
+        assert "放行" in p        # 拿不准放行——全拦等于这个功能没了
+
+
+class TestDescribeFirstImage:
+    """配图描述：给"⬇️/这个/图片里那个"当指代目标。"""
+
+    async def test_no_image_returns_empty(self):
+        assert await proactive._describe_first_image(object(), None) == ""
+        assert await proactive._describe_first_image(object(), []) == ""
+
+    async def test_describes_first_image(self, tmp_path, monkeypatch):
+        p = tmp_path / "a.jpg"
+        p.write_bytes(b"fake-image")
+        seen = {}
+
+        async def fake_desc(client, data):
+            seen["data"] = data
+            return "一张深色游戏图标"
+        monkeypatch.setattr(proactive, "describe_image_bytes", fake_desc)
+        assert await proactive._describe_first_image(object(), [p]) == "一张深色游戏图标"
+        assert seen["data"] == b"fake-image"
+
+    async def test_failure_returns_empty_not_raises(self, tmp_path, monkeypatch):
+        # 与判官并行跑，抛异常会连累整条生成 → 必须自己吞掉
+        async def boom(client, data):
+            raise RuntimeError("视觉服务抖了")
+        monkeypatch.setattr(proactive, "describe_image_bytes", boom)
+        assert await proactive._describe_first_image(object(), [tmp_path / "nope.jpg"]) == ""
+
+
+class TestImageBlock:
+    """配图要真的进提示词——这次翻车就是因为它没进去。"""
+
+    def _client(self, captured, gen="晚上来打游戏回回血"):
+        class _Client:
+            def __init__(self):
+                self.chat = self
+                self.completions = self
+
+            async def create(self, **kwargs):
+                prompt = kwargs["messages"][-1]["content"]
+                captured.append(prompt)
+                content = ('{"enough": true}' if "够不够撑起" in prompt else gen)
+                return SimpleNamespace(choices=[SimpleNamespace(
+                    message=SimpleNamespace(content=content), finish_reason="stop")])
+        return _Client()
+
+    def _patch_desc(self, monkeypatch, desc):
+        async def fake_desc(client, paths):
+            return desc
+        monkeypatch.setattr(proactive, "_describe_first_image", fake_desc)
+
+    async def test_image_description_reaches_the_prompt(self, monkeypatch):
+        captured = []
+        monkeypatch.setattr(proactive, "_get_clients", lambda: (self._client(captured), object()))
+        self._patch_desc(monkeypatch, "一个深色游戏图标，上面有白色文字")
+        await compose_proactive("到这个⬇️里面鲨会儿人", "B站", image_paths=["x.jpg"])
+        gen_prompt = captured[-1]
+        assert "【这条的配图】" in gen_prompt
+        assert "深色游戏图标" in gen_prompt
+        assert "⬇️" in gen_prompt and "指的就是这张图" in gen_prompt
+
+    async def test_no_image_no_block(self, monkeypatch):
+        captured = []
+        monkeypatch.setattr(proactive, "_get_clients", lambda: (self._client(captured), object()))
+        self._patch_desc(monkeypatch, "不该出现")
+        await compose_proactive("晚安，明天见", "B站")
+        assert "【这条的配图】" not in captured[-1]
+
+    async def test_no_image_read_when_content_does_not_point_at_it(self, monkeypatch):
+        """内容没指配图 → **不读图、不注入**（避免往上下文里塞无关图的噪声）。"""
+        calls = []
+
+        async def spy(client, paths):
+            calls.append(paths)
+            return "一张图"
+        monkeypatch.setattr(proactive, "_describe_first_image", spy)
+        captured = []
+        monkeypatch.setattr(proactive, "_get_clients", lambda: (self._client(captured), object()))
+
+        await compose_proactive("今天下雨，出门记得带伞", "B站", image_paths=["x.jpg"])
+        assert calls == []                       # 没读图
+        assert "【这条的配图】" not in captured[-1]
+
+    @pytest.mark.parametrize("text", [
+        "到这个⬇️里面鲨会儿人", "图里那个是什么", "看这个配图", "👇的链接",
+    ])
+    async def test_image_read_when_content_points_at_it(self, monkeypatch, text):
+        calls = []
+
+        async def spy(client, paths):
+            calls.append(paths)
+            return "一张图"
+        monkeypatch.setattr(proactive, "_describe_first_image", spy)
+        captured = []
+        monkeypatch.setattr(proactive, "_get_clients", lambda: (self._client(captured), object()))
+
+        await compose_proactive(text, "B站", image_paths=["x.jpg"])
+        assert calls == [["x.jpg"]]
+        assert "【这条的配图】" in captured[-1]
+
+    async def test_image_description_failure_still_generates(self, monkeypatch):
+        captured = []
+        monkeypatch.setattr(proactive, "_get_clients", lambda: (self._client(captured), object()))
+
+        async def boom(client, paths):
+            return ""          # _describe_first_image 失败时就是这个行为
+        monkeypatch.setattr(proactive, "_describe_first_image", boom)
+        out = await compose_proactive("写完了…终于写完了…", "B站", image_paths=["x.jpg"])
+        assert out == "晚上来打游戏回回血"
+        assert "【这条的配图】" not in captured[-1]
+
+    def test_prompt_forbids_inventing_missing_info(self):
+        p = proactive.PROACTIVE_PROMPT
+        assert "一个字也别补" in p        # 不许编内容里没有的对象（"写稿"那次）
+        assert "指的就是这张图" in p or "指的是配图" in p
+        assert "只挑一件说" in p          # 两件事揉不清就只说一件

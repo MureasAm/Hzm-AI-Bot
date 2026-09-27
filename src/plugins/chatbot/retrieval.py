@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from .constants import (
     PROJECT_ROOT,
     VOICE_SAMPLE_VECTOR_FILE, CORE_STORY_VECTOR_FILE,
-    PHRASES_FILE, PREFERENCES_FILE,
+    PHRASES_FILE, PREFERENCES_FILE, CORPUS_KEYWORDS_FILE,
     RAG_THRESHOLD, CORPUS_TOP_N, CORPUS_CANDIDATE_N,
     CORPUS_KEYWORD_FLOOR, CORPUS_STRONG_KEYWORD,
     VOICE_SAMPLE_THRESHOLD, VOICE_SAMPLE_TOP_N, VOICE_SAMPLE_KEEPALIVE, VOICE_SAMPLE_MIN_K,
@@ -111,8 +111,37 @@ def _corpus_keyword_overlap(query: str, statement: str) -> float:
     return len(qb & tb) / len(qb)
 
 
+# corpus 的「钩子」：用户提到这些具体词时直通放行（确定性命中，不靠语义相似）
+# 为什么需要：实测 322 条里有一大批**没有任何召回入口**——用户不可能说出一句话恰好把它们
+# 勾出来，于是永远不会被注入。语义检索解决不了这个：那是"像不像"，这里缺的是"**提没提到**"。
+# 数据：persona/world/corpus_keywords.json（键是 statement_final 的序号，由 build_corpus_keywords.py 生成）。
+_corpus_keywords_cache = None
+
+
+def load_corpus_keywords() -> dict:
+    global _corpus_keywords_cache
+    if _corpus_keywords_cache is not None:
+        return _corpus_keywords_cache
+    if not CORPUS_KEYWORDS_FILE.exists():
+        _corpus_keywords_cache = {}
+        return _corpus_keywords_cache
+    try:
+        with open(CORPUS_KEYWORDS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        raw = data.get("keywords", {}) if isinstance(data, dict) else {}
+        _corpus_keywords_cache = {str(k): v for k, v in raw.items() if isinstance(v, list) and v}
+    except (json.JSONDecodeError, OSError):
+        _corpus_keywords_cache = {}
+    return _corpus_keywords_cache
+
+
 def _corpus_gate_pass(query: str, statement: str, sim: float) -> bool:
-    """corpus 放行判定：强关键词直接过；否则语义达标 + 有区分性词重叠才过。"""
+    """corpus 放行判定：强关键词直接过；否则语义达标 + 有区分性词重叠才过。
+
+    ⚠️ **钩子不在这里**（曾经放这儿，是错误的）：钩子是子串匹配，**只能证明"提到了这个词"，
+    不能证明"在聊这件事"**——实测钩子词「感冒」撞上了反例「感冒吃什么药」。
+    正确分工：**钩子负责"进候选池"**（解决"没有入口"），**LLM 判负责"该不该带"**（解决"撞词"）。
+    """
     ov = _corpus_keyword_overlap(query, statement)
     if ov >= CORPUS_STRONG_KEYWORD:
         return True
@@ -154,7 +183,18 @@ def retrieve_corpus_candidates(user_query: str, query_vector,
                             text=it["text"])
               for i, it in enumerate(db)]
     scored.sort(key=lambda x: x.score, reverse=True)
-    return scored[:top_n]
+    top = scored[:top_n]
+    # **钩子命中的也塞进候选**——它们语义分低（正是"没有入口"那批），
+    # 但用户确实提到了里面的词，值得让 LLM 判一次"是不是在聊这件事"。
+    keywords_map = load_corpus_keywords()
+    got = {it.item_id for it in top}
+    for i, it in enumerate(db):
+        kws = keywords_map.get(str(i))
+        if kws and any(k in user_query for k in kws) and str(i) not in got:
+            top.append(RetrievalItem(source="corpus", item_id=str(i),
+                                     score=cosine_similarity(query_vector, it["vector"]),
+                                     text=it["text"]))
+    return top
 
 
 # 声音样本向量缓存（模块级，一次性加载）

@@ -56,8 +56,18 @@ def load_persona(anonymous=False):
         if not f.exists():
             continue
         data = json.loads(f.read_text(encoding="utf-8"))
+        # ⚠️ 兼容两种形状：裸 list，或 {"_readme": ..., "traits"/"styles": [...]}（2026-09-27 起）。
+        # 直接 `for item in data` 在顶层是 dict 时会迭代**键名**，于是报
+        # `'str' object has no attribute 'get'`（踩过）。
+        key = "traits" if fname.endswith("traits.json") else "styles"
+        if isinstance(data, dict) and isinstance(data.get(key), list):
+            data = data[key]
+        elif not isinstance(data, list):
+            data = []
         lines = []
         for item in data:
+            if not isinstance(item, dict):   # 万一有人手写了个裸字符串，跳过而不是整层崩掉
+                continue
             name = item.get("name", "")
             desc = item.get("description", "")
             if name and desc:

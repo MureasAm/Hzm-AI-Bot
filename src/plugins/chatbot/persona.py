@@ -74,6 +74,8 @@ def load_persona_rules():
         try:
             with open(TRAITS_FILE, "r", encoding="utf-8") as f:
                 for item in _persona_items(json.load(f), "traits"):
+                    if not isinstance(item, dict):   # 防手写裸字符串把整层打挂
+                        continue
                     name = item.get("name", "")
                     desc = item.get("description", "")
                     if name or desc:
@@ -85,6 +87,8 @@ def load_persona_rules():
         try:
             with open(STYLES_FILE, "r", encoding="utf-8") as f:
                 for item in _persona_items(json.load(f), "styles"):
+                    if not isinstance(item, dict):   # 防手写裸字符串把整层打挂
+                        continue
                     name = item.get("name", "")
                     desc = item.get("description", "")
                     if name or desc:

@@ -59,6 +59,7 @@ VOICE_SAMPLE_VECTOR_FILE = PROJECT_ROOT / "persona" / "speech" / "voice_sample_v
 # 现在读源文件；`phrase_vectors.json` / `preference_vectors.json` 与对应的 precompute 已停用（留着以防回退）。
 PHRASES_FILE = PROJECT_ROOT / "persona" / "speech" / "phrases.json"
 PREFERENCES_FILE = PROJECT_ROOT / "persona" / "world" / "preferences.json"
+CORPUS_KEYWORDS_FILE = PROJECT_ROOT / "persona" / "world" / "corpus_keywords.json"  # corpus 的「钩子」
 
 # ==================== API ====================
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"

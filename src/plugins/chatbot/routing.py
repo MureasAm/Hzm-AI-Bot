@@ -57,17 +57,21 @@ LEGENDARY_CONFIRMS = load_legendary()["confirms"]
 
 
 def legendary_hit(trigger: str, msg: str) -> bool:
-    """这条梗是否被消息命中：**子串 或 pattern 正则**。"""
+    """这条梗是否被消息命中。
+
+    **配了 pattern 就以 pattern 为准；没配才回落到子串。**
+    为什么不是"子串或正则"：那样 pattern 只能**放宽**（加更多说法），没法**收紧**——
+    而裸触发词（如「没感觉」）会先被子串命中（"这歌我没感觉"），pattern 写的再细也没用。
+    改成"pattern 优先"后，一个词既能放宽也能收窄，由数据说了算。
+    """
     entry = LEGENDARY_REPLIES.get(trigger) or {}
-    if trigger in (msg or ""):
-        return True
     pat = entry.get("pattern")
-    if not pat:
-        return False
-    try:
-        return re.search(pat, msg or "") is not None
-    except re.error:
-        return False
+    if pat:
+        try:
+            return re.search(pat, msg or "") is not None
+        except re.error:
+            return False
+    return trigger in (msg or "")
 
 
 async def legendary_confirmed(user_msg: str, prompt_template: str, history: str = "") -> bool:
