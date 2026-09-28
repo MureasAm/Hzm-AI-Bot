@@ -1,3 +1,20 @@
+"""把场景化陈述向量化，产出机器人运行时读的 corpus 向量库。
+
+输入 `persona/world/statement_final.json`（322 条她的直播经历），
+输出 `persona/world/corpus_vectors.json`（[{text, vector}]，裸 list）。
+
+⚠️ **必须显式传 `-i`**：内置的 RAW_CORPUS 是 2026-08 的过期副本，
+不带 -i 会用它覆盖线上 322 条（`_load_corpus` 里 `raise SystemExit` 拦着）。
+
+⚠️ **改了 statement_final 必须重跑**，否则线上一个字都不会变——运行时只读
+corpus_vectors.json（里面有 text 原文副本），**从不读源文件**。
+（踩过：改写完 corpus 忘了重算，以为改了其实没生效。）
+
+⚠️ 上游失败（如 embedding 余额不足）时本脚本**直接 return 不写文件**；
+`run_tool` 那边会用 mtime 判断到底写没写，别再无条件报"已保存"。
+
+用法：python scripts/run_tool.py generate-vectors -i persona/world/statement_final.json
+"""
 import json
 import asyncio
 from pathlib import Path

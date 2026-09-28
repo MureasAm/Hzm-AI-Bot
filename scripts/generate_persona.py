@@ -1,3 +1,11 @@
+"""⚠️ 会**覆盖人工维护的人格三件套**（traits / styles / behaviors）→ 必须加 `--danger` 才跑。
+
+从蒸馏语料里反推人格规则。**输出是候选，不是成品**——历史上它生成过措辞过细的
+`response`（"用'呃…'起头"这类），被模型 10/10 照说，后来人工全部重写过。
+所以生成后**必须人工审**，别直接落进 persona/。
+
+用法：python scripts/run_tool.py generate-persona --danger
+"""
 import json
 import asyncio
 import sys

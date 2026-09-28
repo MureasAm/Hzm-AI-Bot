@@ -8,7 +8,7 @@ NoneBot2 + OneBot v11(NapCat) 的"灰泽满"人格聊天机器人。核心是**�
 
 ## 黄金律（违反=返工）
 1. **样本 > 规则；素材层解决，别用提示词打补丁**。台词/例句放数据层（behaviors/phrases/legendary/terms），不写进 system_prompt。
-   - **但"样本"要本土化，不是照搬原话**：素材来自**直播弹幕**语境，这里是**私聊**——语境变了，同义改写是适配不是失真，**别把改写当"素材掺假"回退掉**（详见 `待办清单.md` 的「本土化」条）。
+   - **但"样本"要本土化，不是照搬原话**：素材来自**直播弹幕**语境，这里是**私聊**——语境变了，同义改写是适配不是失真，**别把改写当"素材掺假"回退掉**（详见 `docs/待办清单.md` 的「本土化」条）。
    - 判据：样本携带的情境**越具体越危险**——"某一回发生的事"（明天要搬家/现在感冒）会被模型当**现在**复用；应改写成"她一贯如何"。详见下条。
 2. **行为 > 标签**：写"什么情境怎么反应"，别贴性格标签。
 3. **确定性后处理只兜底**（clean_reply/防复读/换行归一），能数据解决就别加代码规则。**别让它伤到人设**——曾有个"防措辞固化"因为 75% 的触发都在拦她自己的自称"灰泽满"而被删掉。
@@ -26,25 +26,26 @@ NoneBot2 + OneBot v11(NapCat) 的"灰泽满"人格聊天机器人。核心是**�
 - `outputs/`、`data/`、`.env.prod` 不入库；`data/weibo_cookies.json` 是敏感会话。
 - 语音参考音频必须"无尾静音"（否则合成退化成"几个字+长空尾"）。
 
-## 文件地图（详见 FILE_MAP.md）
+## 文件地图（详见 docs/FILE_MAP.md）
 - **一条消息的链路**（改之前先认路，跳过这步最容易改错地方）：
-  `__init__._handle_chat` → `chat_window.enqueue` → 读秒窗口 → `_flush`(读图+归纳) → `core.handle_chat` → `build_message_list`(十层注入) → `generate_reply` → `clean_reply` → `split_reply` → `_send`
+  `__init__._handle_chat` → `chat_window.enqueue` → 读秒窗口 → `_flush`(读图+归纳) → `core.handle_chat` → `build_message_list`(18 段注入) → `generate_reply` → `clean_reply` → `split_reply` → `_send`
   （语音优先：`clean_reply` 后先 `should_voice`→`send_voice`，成功就不走文字分段）
-- 运行时核心：`src/plugins/chatbot/`（core 主循环 / chat_window 读秒窗口 / retrieval 六路RRF / reply_style 纯函数 / routing 梗库+行为分类 / persona 加载 / memory|session_memory|group_memory 记忆 / voice 语音 / bili_bridge|weibo_bridge 联动 / context_probe 感知 / vision 看图 / rag 向量 / config 客户端 / constants 常量★）
+- 运行时核心：`src/plugins/chatbot/`（core 主循环 / chat_window 读秒窗口 / retrieval 六路检索+RRF / reply_style 纯函数 / routing 梗库+行为分类 / persona 加载 / memory|session_memory|group_memory 记忆 / voice 语音 / bili_bridge|weibo_bridge 联动 / context_probe 感知 / vision 看图 / rag 向量 / config 客户端 / constants 常量★）
 - 人格数据：`persona/`（core/behavior/speech/world，源文件+向量）
 - 长期记忆：根 `memory_manager.py`
-- 离线工具：`scripts/run_tool.py <工具>`（见 FILE_MAP 分组）
+- 离线工具：`scripts/run_tool.py <工具>`；**38 个脚本各干什么见 `docs/脚本清单.md`**
 
 ## 文档指针（按需懒读，别开头全灌）
-- `交接文档.md` —— **下个会话先读这份**（当前状态 + 下一步 + 卡住的提交）
-- `FILE_MAP.md` —— 每个文件干什么（给使用者）★ 想知道"该改哪"先看这个
-- `注入链路.md` —— **素材层 + 注入层的完整解剖**（她有哪些素材、一条消息怎么被注进去、
-  每层实测多少字符、各路阈值与兜底方向）。想知道**现在是什么样**看这份。
-- `注入设计原理.md` —— **判据怎么选、素材该长什么形式、每改一次是变好还是变坏**，
-  每个结论都挂实验数据（含 `scripts/form_experiment.py` 的形式对照实验）。想**改**这块先看这份。
-- `待办清单.md` —— 从 2026-09 全项目通读蒸馏的**未完成**问题（已做掉的不在里面）
-- `ROADMAP.md` —— 版本史/踩坑/链路剖析（部分停在 2026-08）
+- **`docs/` —— 全部说明文档都在这里面，索引是 `docs/README.md`**（按"你现在要干什么"找）
+- `docs/交接文档.md` —— **下个会话先读这份**（当前状态 + 下一步 + 卡住的东西）
+- `docs/FILE_MAP.md` —— 每个文件干什么 ★ 想知道"该改哪"先看这个
+- `docs/注入链路.md` —— 素材层 + 注入层的完整解剖（**现在是什么样**）
+- `docs/注入设计原理.md` —— 判据怎么选、素材该长什么形式、每改一次是变好还是变坏（**带实验数据**）
+- `docs/脚本清单.md` —— 38 个脚本各干什么；**改链路先看"实验/诊断工具"那节**
+- `docs/待办清单.md` —— 还没做的问题 + "已判定不是问题、别再改回去"的登记
+- `docs/版本史.md` —— V1.0→V7.8 每个版本改了什么、为什么、踩过哪些坑
+- `docs/抽查清单.md` —— 抽查她回复时看什么（**推荐用 `scripts/spot_check.py` 自动挑**）
 
 ## 当前状态 / 下一步（更新时改这里）
-- 已完成：群聊整场+群记忆、GPT-SoVITS 语音、记忆清理、corpus 清洗、P3 提示词下沉、P4 重构(E5天气异步/E6记忆归位/E7桥公共件)、同期双行为、输出**换行归一**(clean_reply)、记忆**时间戳**(长期注入 last_seen 间隔 + 短期每轮存时间、生成前注入一行"距上一轮多久" + **会话级联动**：隔 >12h 的上一场降级成「上次聊过（N天前）」单独注入，不再静默丢)、**素材本土化**(voice_samples 去时效锚点，见 `待办清单.md`)、**群聊接话门**(不再"有话就接")、**QQ 引用解析**(`event.reply`)、**周表拖拽更新**(`更新周表.bat`)、**判据回归集**(`run_tool.py regression --check`)、**corpus 语义判**(`corpus_judge.py`：门放行的直通，门没放行的取 top-N 交 LLM 判"是不是在问她")、**判据换对工具**(phrase 改 LLM 分类、preference 改 keywords 子串，两路原先把噪声地板压在正例上)。
-- 下一步：① **素材库 + 工具链翻新**（转写→清洗→落进各人格文件，用户想做的大工程）；② 群聊还想要的能力（读合并转发评价/发表情包/主动发消息，见 `待办清单.md` 第一节）；③ 往期 cohort 词表（方案见 `待办清单.md`）。
+- **当前状态/下一步不在本文件维护**（会跟仓库脱节）——看 `docs/交接文档.md`（下个会话先读那份）。
+- 本文件只放**说错会踩坑的稳定真理**：黄金律、怎么跑测、危险清单、文档在哪。

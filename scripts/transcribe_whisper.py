@@ -1,3 +1,10 @@
+"""把直播音频转成文字（Whisper），是素材流水线的第一步。
+
+流程位置：**transcribe → clean-transcript → analyze-pace → convert-to-chat**
+（转写 → 清洗口语垃圾 → 分析节奏 → 转成她口吻的对话样本）。
+
+产物进 `outputs/`，人工看过再落进 persona/ 的各文件。
+"""
 from faster_whisper import WhisperModel
 from faster_whisper.audio import decode_audio
 import os
