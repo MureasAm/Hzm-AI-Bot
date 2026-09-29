@@ -4,6 +4,7 @@
 调用 DeepSeek 生成回复，并异步更新长期记忆。
 """
 import json
+import os
 import random
 import asyncio
 import re
@@ -65,6 +66,52 @@ else:
 # ==================== 🛠️ API 客户端（惰性初始化） ====================
 # 挪到了 config.py（基础设施层）。core 从这里 import，routing 也从 config 取，避免循环依赖。
 from .config import _get_clients, _get_model_name, extract_chat_content  # noqa: E402
+
+
+def _detach_behavior_from_rrf() -> bool:
+    """**行为/措辞不进 RRF** —— `DETACH_BEHAVIOR=1` 打开。**缺省关 = 现状**（见文末"为什么没开"）。
+
+    ## 这个开关改什么（用户 2026-09-30 提出）
+
+    > "behaviors 有没有必要进入检索呢？被 LLM 判断中难道不是就可以直接读取文件内容？"
+
+    对，那两路**已经不是检索了**：`select_behavior_item` / `select_phrase_groups` 干的是
+    「按 L3 判出的名字**查一条**」——没有相似度、没有排名、分数写死 1.0。
+    而 RRF 是给「检索」造的（把几路的**排名**融合成一份有序列表，再取 top-6 / 卡 1200 字预算）。
+
+    把查表结果丢进排行榜的后果：**它占 top-6 名额**。实测挤掉率 0%，但那是靠
+    `behavior` 权重 1.5 最高 + 名额够用这两个巧合撑着的；哪天名额紧或四路全命中，
+    "该做的动作"会**静默**消失。
+
+    ```
+    关（现状）：fuse_and_truncate(corpus, sample, behavior, phrase)   ← 四路抢 6 个名额
+    开        ：fuse_and_truncate(corpus, sample, [], []) + behavior + phrase   ← 截断后追加
+    ```
+
+    ## A/B 的结论（2026-09-30，`scripts/detach_behavior_ab.py`）
+
+    - **不删任何东西**：行为/措辞两版都照注入，变的只是"6 个名额归谁"
+    - 代价：注入量平均 **+6 字**（−10~+24，≈免费）
+    - **15 轮真实 A/B（靶子情境），用户判"都差不多"** → 感知上无损失
+    - 评测不变：retrieval-eval **47/48**、regression --check 跑通过 **8/8**
+
+    ## ⚠️ 那为什么没开（缺省关）
+
+    有个**指向"可能有害"的信号没查清**：
+
+    ```
+    整套 regression --check：新版 5 次里挂 2 次 ｜ 旧版 3 次里挂 0 次   （p≈0.5，不显著）
+    单跑那条用例（no_fixed_opener_when_deflecting）：**两版都 5/5 过** → 复现不了
+    ```
+
+    可疑机制：新版让 **voice_samples 多进 1~2 条**（名额不再被行为/措辞占），
+    样本多了模型**可能更容易盯住某一条的开头** → 反而更同质。而那条用例判的正是
+    "反复求交往时不能每轮同一个词开头"。
+
+    **收益不足以冒这个险**：它**不修任何已知故障**，只是结构更正确（现状实测零代价）。
+    → 按"信号未清就不动"处理。**查清了再开**（见 `待办清单.md` §0.9）。
+    """
+    return os.environ.get("DETACH_BEHAVIOR", "0") == "1"
 
 
 async def summarize_batch(msgs: list) -> str:
@@ -793,7 +840,21 @@ async def _fill_retrieval(result: dict, query_text: str, retrieval_query: str, h
             retrieval_query or query_text, query_vector,
             threshold=PROACTIVE_SAMPLE_KEEP_ALL, top_n=PROACTIVE_SAMPLE_TOP_N)
 
-    result["fused_items"] = fuse_and_truncate(corpus_items, sample_items, behavior_items, phrase_items)
+    if _detach_behavior_from_rrf():
+        # 行为/措辞**不进 RRF**：它们是 L3 判出类别后**按名字查表**的结果（没有相似度、
+        # 分数写死 1.0），不是"从一堆里挑最像的"那种检索。RRF 是给检索造的（融合多路排名），
+        # 把查表结果丢进去，它会**占 top-6 名额和 1200 字预算**。
+        # → 截断**之后**再追加，永不参与名额竞争；名额全还给 corpus + voice_sample。
+        # 注入位置由 `_split_fused` 按段类型决定，**不受这里顺序影响**（见 build_message_list）。
+        # ⚠️ `fuse_and_truncate` 的签名是 (corpus, sample, behavior, phrase)，
+        # 四个都是位置参数（`behavior_items` 没有默认值）——所以要显式传空表，
+        # 不能只传前两个（踩过：少传参数会让**整层检索抛异常**，
+        # 然后被 gather_retrieval 的兜底"按没检索到继续"吞掉，A/B 结果全废）。
+        result["fused_items"] = (fuse_and_truncate(corpus_items, sample_items, [], [])
+                                 + behavior_items + phrase_items)
+    else:
+        result["fused_items"] = fuse_and_truncate(corpus_items, sample_items,
+                                                  behavior_items, phrase_items)
     # 第 5 路：偏好（关键词命中）／核心记忆（结晶）
     result["preference_items"] = retrieve_preferences(retrieval_query or query_text)
     result["core_stories"] = retrieve_core_stories(retrieval_query or query_text, query_vector)
