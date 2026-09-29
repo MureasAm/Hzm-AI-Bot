@@ -31,6 +31,8 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CASES_FILE = PROJECT_ROOT / "scripts" / "regression_cases.json"
+# 她本人的真实私聊回复：判"措辞固化"时要拿它当基线（见 _baseline_openers）
+CHAT_LOG = PROJECT_ROOT / "data" / "chat_log" / "chat.jsonl"
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -127,6 +129,53 @@ def _opener(reply: str) -> str:
     return t[:2]
 
 
+_BASELINE_OPENERS = None
+
+
+def _baseline_openers():
+    """她本人真实私聊回复里**出现过的开头**（`_opener` 之后的头两个字）。
+
+    ⚠️ **为什么需要它**（2026-09-30 实测，修一条会抖的判据）：
+
+    光看"同一个开头占比高"**分不开病和正常**：
+    ```
+    正常：同一条消息生成 8 次，最高频开头占比  中位 38% ｜ 最高 62%
+    当初的 bug：8/14 以「呃」开头 = 57%          → 两者重叠
+    阈值 50% 卡在中间 → 同一版本连跑会时挂时过（实测 10 轮挂 1 轮）
+    ```
+    但那个 bug 有个**准特征**：「呃」在她 721 条真实回复里 **0 次**；
+    而正常的高频开头（「啊？」3 次、「天呐」8 次）**她本人都说过**。
+
+    → 所以判据要问的是「**她本人会不会这么开头**」，不是「占比高不高」。
+
+    返回 None 表示算不出来（没有 chat_log / 条数太少）——**这时退回旧行为**
+    （只看占比），并且调用方要**明说**这个降级，别让人以为新判据生效了。
+    """
+    global _BASELINE_OPENERS
+    if _BASELINE_OPENERS is not None:
+        return _BASELINE_OPENERS or None
+    out = set()
+    try:
+        if CHAT_LOG.exists():
+            for line in CHAT_LOG.read_text(encoding="utf-8", errors="replace").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    r = json.loads(line)
+                except Exception:
+                    continue
+                if str(r.get("session", "")).isdigit() and (r.get("reply") or "").strip():
+                    out.add(_opener(r["reply"]))
+    except Exception:
+        out = set()
+    if len(out) < 100:          # 太少 → 不能用（会把"她没说过"当成"她不会说"）
+        _BASELINE_OPENERS = ""
+        return None
+    _BASELINE_OPENERS = out
+    return out
+
+
 def _load_cases(path=None) -> list:
     p = Path(path) if path else CASES_FILE
     data = json.loads(p.read_text(encoding="utf-8"))
@@ -200,9 +249,16 @@ def _judge(case: dict, res: dict) -> list:
 
     cap = case.get("opener_homogeneity_max")
     if cap is not None and res["homogeneity"] > cap:
-        fails.append(f"开头同质 {res['homogeneity']:.0%} > 上限 {cap:.0%}"
-                     f"（{res['homogeneity'] * len(res['replies']):.0f}/{len(res['replies'])} "
-                     f"条以「{res['opener']}」开头）")
+        base = _baseline_openers()
+        if base is None:
+            # 算不出她的开头基线（没 chat_log）→ **退回旧行为**，但要说清是降级了
+            fails.append(f"开头同质 {res['homogeneity']:.0%} > 上限 {cap:.0%}"
+                         f"（{res['opener']}；⚠️ 无 chat_log，只能按占比判——可能误伤）")
+        elif res["opener"] not in base:
+            # ★ 她**本人从来没用过**这个开头，生成里却反复出现 → 这才是"措辞固化"
+            fails.append(f"开头同质 {res['homogeneity']:.0%}（{res['opener']}）"
+                         f"**且「{res['opener']}」她本人从没这么开过头** → 措辞固化")
+        # else：她本人也这么说 → 占比高只是这条消息的正常波动 → 放过（见 _baseline_openers）
 
     vr = case.get("verbatim_repeat_max")
     if vr is not None and res["verbatim"] > vr:
