@@ -1,33 +1,33 @@
 {
-  "_readme": "灰泽满的周表（地面真值，手动维护）。被问\"明天来吗/这周播不播/几点播\"时 bot 以此为准——别拿直播记忆里带\"明天/下周\"的旧话当现在的安排。weekly 是每周固定计划（weekday 制，到周自动对，不会过期）。曾有的「近况」字段已删除：它治不了\"用旧记忆回答当下\"（漏点其实在 voice_samples），而且手动维护必烂，详见 src/plugins/chatbot/constants.py 的说明。",
-  "weekly": [
-    {
-      "day": "周一",
-      "time": "休"
-    },
-    {
-      "day": "周二",
-      "time": "休"
-    },
-    {
-      "day": "周三",
-      "time": "20:00"
-    },
-    {
-      "day": "周四",
-      "time": "14:00"
-    },
-    {
-      "day": "周五",
-      "time": "20:00中秋节～"
-    },
-    {
-      "day": "周六",
-      "time": "联动"
-    },
-    {
-      "day": "周日",
-      "time": "20:00"
-    }
-  ]
+ "_readme": "【角色】**地面真值** —— 她哪天几点播。每轮注入（被问时间以它为准）。\n\n【一条东西该进哪个文件】—— 改数据前先对一眼（单一真值，别在两处维护）\n  这件事「发生过」        → `world/statement_final.json`（corpus）\n  这是她「一贯如此」       → `world/preferences.json`\n  这是她「会怎么开口」     → `speech/voice_samples.json`\n  这是「某情境下的反应」   → `behavior/behaviors.json`\n  这是「一个词的意思」     → `world/terms.json`\n  这是「固定该怎么答」     → `world/legendary.json`\n  ⚠️ 同一件事**只在一个文件维护**（历史上 terms/behaviors/提示词三处打架过）\n\n———\n灰泽满的周表（地面真值，手动维护）。被问\"明天来吗/这周播不播/几点播\"时 bot 以此为准——别拿直播记忆里带\"明天/下周\"的旧话当现在的安排。weekly 是每周固定计划（weekday 制，到周自动对，不会过期）。曾有的「近况」字段已删除：它治不了\"用旧记忆回答当下\"（漏点其实在 voice_samples），而且手动维护必烂，详见 src/plugins/chatbot/constants.py 的说明。",
+ "weekly": [
+  {
+   "day": "周一",
+   "time": "休"
+  },
+  {
+   "day": "周二",
+   "time": "休"
+  },
+  {
+   "day": "周三",
+   "time": "20:00"
+  },
+  {
+   "day": "周四",
+   "time": "14:00"
+  },
+  {
+   "day": "周五",
+   "time": "20:00中秋节～"
+  },
+  {
+   "day": "周六",
+   "time": "联动"
+  },
+  {
+   "day": "周日",
+   "time": "20:00"
+  }
+ ]
 }

@@ -362,7 +362,7 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
         if story_text:
             messages.append({
                 "role": "system",
-                "content": f"【她的核心记忆】{story_text}（这是她过去最深刻的经历，粉丝常拿这些开玩笑。**回应时自然带出，别整段复述**：被问你的书/事迹时，大方承认、可提议念给TA听或说个片段概括，别一口气把原文/全文念出来——除非对方明确说'念一下'）",
+                "content": f"【她的核心记忆】{story_text}（这是她过去最深刻的经历，粉丝常拿这些开玩笑。被问你的书/事迹时，大方承认、可提议念给TA听或说个片段概括，别一口气把原文/全文念出来——除非对方明确说'念一下'）",
             })
 
     # 群聊现场（轻量群记忆注入）：在场成员 + 群内近况。群 = 好几个不同的绿冻在场，
@@ -378,14 +378,18 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
     if terms_note:
         messages.append({
             "role": "system",
-            "content": f"【灰泽满的世界】{terms_note}（这些是她世界的词，遇到时按定义理解并带着对应的态度，别当成普通的词；其中『用词规则』是说话习惯，回复里表达对应概念时主动用她的黑话称呼）",
+            "content": f"【灰泽满的世界】{terms_note}（其中『用词规则』是说话习惯，回复里表达对应概念时主动用她的黑话称呼）",
         })
 
     # 会话级记忆（当前话题 + 本场事件）：让模型接得住会话调性
     if session_context:
         messages.append({
             "role": "system",
-            "content": f"【当前会话】{session_context}\n（这是你们这一场对话的调性和发生过的事，回应时要自然地顺着这个语境，不要生硬提及）",
+            # A 类包装语已删（2026-09-30）：原来尾巴还有「（这是你们这一场对话的调性和发生过的事，
+            # 回应时要自然地顺着这个语境，不要生硬提及）」——§3.5 实测"管怎么用"零作用。
+            # ⚠️ 下面那条 `prev_session_note` 的注释说的"那句写的是'你们这一场对话'"指的就是被删的这句，
+            #    删掉它**不影响**那个设计（它防的是"把几天前的东西塞进当前会话"，与包装语无关）。
+            "content": f"【当前会话】{session_context}",
         })
 
     # 上一场会话（已过期，带"隔了多久"）：**不能并进上面那块**——
@@ -407,7 +411,10 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
         if behavior_text:
             messages.append({
                 "role": "system",
-                "content": f"【当前情境下的行为指令】请严格按此模式回应：\n{behavior_text}"
+                # A 类包装语已删（2026-09-30）：原来是「请严格按此模式回应：」。
+                # ⚠️ 同句式有**已知有害**的先例：它曾把 behaviors 里的 `"'呃…'起头"` 变成 10/10 照抄
+                #    （而 86 条真实素材里 0 条那样开头）。那批措辞规定已经删了，**这句强制语一直留着**。
+                "content": f"【当前情境下的行为指令】\n{behavior_text}"
             })
 
     # 直播记忆（source=corpus）：只当"背景记忆"，不参与风格示范
@@ -417,14 +424,17 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
             messages.append({
                 "role": "system",
                 "content": f"【她经历过的相关背景】以下是她过去直播里经历过的事（背景记忆，都是曾经发生的，不是现在）。"
-                           f"只当'她记得的经历'自然带出（聊到相关话题时'之前那次…'），不整段复述、不模仿里面的叙述口吻。"
+                           # ── A 类包装语已删（2026-09-30，§3.5 实测"管怎么用"零作用）──
+                           # 删掉的是：「只当'她记得的经历'自然带出…不整段复述、不模仿里面的叙述口吻。」
+                           # 留下的是下面这句「别拿背景记忆编当下的因果」——它管的是**事实/时间**，
+                           # 对应真实故障（「搬家」被当现在用，差 80 天），不是"怎么用"。
                            f"**别拿背景记忆编当下的因果**——"
                            f"① 她一贯的毛病（迟到/睡过头/拖延/临时鸽/熬夜）是她的常态：被问'怎么又迟到/又鸽/为什么迟到'这类时，"
                            f"直接认领常态就好，嘴硬自洽地接，"
                            f"不需要也编不出'这一次'的具体原因，别硬解释；"
                            f"② 某次具体的旧记忆（那次和谁连麦、那次赶作业到半夜）只当讲古素材，**绝不能拿来当这次迟到/鸽的理由去编因果**；"
                            f"若确实在说当下且感知没给原因，就大方说不知道/打哈哈，别从旧事现编一个。"
-                           f"说话风格看下面的样本：\n{context}"
+                           f"\n{context}"
             })
 
     # 长期记忆注入
@@ -480,14 +490,23 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
         if phrase_blocks:
             messages.append({
                 "role": "system",
-                "content": "【她的固定说法】以下情景她说这些话。表达同类意思时用这些原话组织，不要自创解释性措辞：\n" + "\n".join(phrase_blocks)
+                # A 类包装语已删（2026-09-30）：原来是「表达同类意思时用这些原话组织，不要自创解释性措辞：」。
+                # 而且 phrases 本来就是**碎片**（实测 0/16 被抄）——这条约束在管一件不会发生的事。
+                "content": "【她的固定说法】以下情景她说这些话：\n" + "\n".join(phrase_blocks)
             })
 
     # 声音样本 few-shot（source=voice_sample）：示范灰泽满"怎么说话"
     if samples:
         messages.append({
             "role": "system",
-            "content": "【灰泽满的说话方式参考】以下是她真实的对话片段。只学其中的语气、断句、自称（灰泽满/hzm）和措辞。内容要针对当前话题，不要复述、也不要套用示例里的具体内容（人物/礼物/衣服/事件等）。日常回复保持短句、简短干脆。"
+            # A 类包装语已删（2026-09-30）：原来还有「只学其中的语气、断句、自称（灰泽满/hzm）和措辞。
+            # 内容要针对当前话题，不要复述」——§3.5 实测这类"管怎么用"的说明零作用（④ vs ⑧ 逐字率一样）。
+            # 还有「日常回复保持短句、简短干脆」——与骨架【说话节奏】重复。
+            # ⚠️ **保留**「不要套用示例里的具体内容（人物/礼物/衣服/事件等）」——它是**防内容泄漏**，
+            #    **§3.5 没测过这一条**（那次测的是"会不会整句搬走"，不是"会不会把礼物/人名搬进新句"）。
+            #    测试 `test_core.py::TestVoiceSampleLabel` 守着它，删这轮**不该顺手动它**。
+            "content": "【灰泽满的说话方式参考】以下是她真实的对话片段。"
+                       "不要套用示例里的具体内容（人物/礼物/衣服/事件等）。"
         })
         # 同一句真人原话可能既作为"行为示范"被注入、又被 RRF 命中当风格样本——
         # 已作为行为示范出现过的就不重复塞，避免同轮同句出现两遍。
@@ -499,11 +518,9 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
                 messages.append({"role": "user", "content": user_part})
                 messages.append({"role": "assistant", "content": _trim_text(reply_part, VOICE_SAMPLE_REPLY_TRIM_CHARS)})
 
-    # 极简节奏提醒：一句一停，不展开（不写死字数——短句由【说话节奏】软引导 + 分段/语音兜底）
-    messages.append({
-        "role": "system",
-        "content": "【回复节奏】日常闲聊一句话说完就停，别硬凑第二、第三句长段。"
-    })
+    # ⛔【回复节奏】已删（2026-09-30）——C 类：与骨架【说话节奏】重复
+    #   （骨架写的是"默认短句，一句一个想法，说清楚就停"），纯浪费预算。
+    #   短句仍由骨架软引导 + `split_reply` 分段 + 语音兜底，**没有丢机制**。
 
     # 感知源②：图片消息——把视觉描述并入用户消息，避免空消息让模型以为"对方没说话"
     final_user = user_msg
@@ -538,7 +555,7 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
         else:
             messages.append({
                 "role": "system",
-                "content": f"【用户这条消息的语境】{query_hint}\n（上面是这条消息在当前语境下的完整意思——短消息或指代性消息（如'能读给我听听吗'）需要结合前文才能理解，按这个理解回复；不要复述这句话）"
+                "content": f"【用户这条消息的语境】{query_hint}\n（上面是这条消息在当前语境下的完整意思——短消息或指代性消息（如'能读给我听听吗'）需要结合前文才能理解，按这个理解回复）"
             })
 
     messages.append({"role": "user", "content": final_user})

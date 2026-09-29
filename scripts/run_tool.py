@@ -7,10 +7,10 @@
     python scripts/run_tool.py --help
     python scripts/run_tool.py <工具> --help
 
-实际 18 个子命令，分五组：蒸馏(transcribe/clean-transcript/convert-to-chat/analyze-pace)
+实际 19 个子命令，分五组：蒸馏(transcribe/clean-transcript/convert-to-chat/analyze-pace)
 / 生成(generate-statements/generate-vectors/generate-persona)
 / 向量(precompute voice-samples|phrases|preferences|core-stories)
-/ 评测(regression/persona-eval/retrieval-eval/problems)
+/ 评测(regression/persona-eval/retrieval-eval/style-annotate/problems)
 / 工具(bili-check/bili-login/vision-test/mine-phrases/mine-theme/extract-persona)。
 generate-statements 已冷落（现直接对 statement_final.json 向量化）；generate-persona 会覆盖人格需 --danger。
 旧脚本仍可直接运行（向后兼容），本入口为推荐用法。
@@ -445,6 +445,54 @@ def _run_retrieval_eval(args):
     asyncio.run(retrieval_eval.run(cases, verbose=args.verbose, only_id=args.case))
 
 
+# ==================== 子命令：style-annotate ====================
+
+def _add_style_annotate(sub):
+    p = sub.add_parser("style-annotate",
+                       help="★风格层标注集：出题 / 回读 / 出消融读数（补『像不像她』这层没有标准的那一格）")
+    p.add_argument("-n", "--batch", type=int, default=20, help="出一批题，默认 20 条")
+    p.add_argument("--ingest", action="store_true", help="回读 风格标注.md 里你勾的")
+    p.add_argument("--report", action="store_true", help="出消融读数（按文件/小节 + p 值）")
+    p.add_argument("--status", action="store_true", help="看进度")
+    p.add_argument("--only", default="", help="只出这一类：pair / single / real / 段名的一部分")
+    p.add_argument("--mix-single", type=int, default=None, help="一批里混几道单条题（默认 1/4）")
+    p.add_argument("--sections-per-batch", type=int, default=3,
+                   help="一批只做几个段（默认 3）。摊开会让每段 n=1，读数全废")
+    p.add_argument("--target", type=int, default=12, help="每段标够多少条算够（默认 12）")
+    p.add_argument("--sets", action="store_true",
+                   help="★出整组题（每组 8 条 × 2 组，你只答一句）")
+    p.add_argument("--validate", action="store_true",
+                   help="★先跑这个：验尺子（她本人 vs 客服腔 / vs 生成），分不出就别用它测文件")
+    p.add_argument("--per-group", type=int, default=8, help="整组题每组几条（默认 8）")
+    p.add_argument("--sets-per-section", type=int, default=3, help="每个段出几组（默认 3）")
+    p.add_argument("--relabel", action="store_true", help="允许覆盖已有标注（默认不覆盖）")
+    p.add_argument("--answers", default=None,
+                   help="★用文字答，不碰文件。每行：`序号 内容/风格/都有/无 [甲/乙/一样]`"
+                        "（单条题：`序号 像/不像/不准`；整组题：`序号 甲组/乙组/分不出`）。传 `-` 从 stdin 读")
+    p.add_argument("--run", default="", help="★现生成某个段的对照（要跑 LLM，慢、花钱）")
+    p.set_defaults(func=_run_style_annotate)
+
+
+def _run_style_annotate(args):
+    import style_annotate
+    argv = []
+    for flag in ("ingest", "report", "status", "relabel", "sets", "validate"):
+        if getattr(args, flag):
+            argv.append("--" + flag)
+    if args.answers is not None:
+        argv += ["--answers", args.answers]
+    if args.run:
+        argv += ["--run", args.run]
+    argv += ["-n", str(args.batch), "--only", args.only,
+             "--sections-per-batch", str(args.sections_per_batch),
+             "--target", str(args.target),
+             "--per-group", str(args.per_group),
+             "--sets-per-section", str(args.sets_per_section)]
+    if args.mix_single is not None:
+        argv += ["--mix-single", str(args.mix_single)]
+    sys.exit(style_annotate.main(argv))
+
+
 # ==================== 子命令：problems ====================
 
 def _add_problems(sub):
@@ -486,7 +534,7 @@ def build_parser() -> argparse.ArgumentParser:
                     "  【蒸馏】transcribe · clean-transcript · convert-to-chat · analyze-pace · mine-phrases\n"
                     "  【生成】generate-statements · generate-vectors · generate-persona · extract-persona\n"
                     "  【向量】precompute\n"
-                    "  【评测】regression · persona-eval · retrieval-eval · problems\n"
+                    "  【评测】regression · persona-eval · retrieval-eval · style-annotate · problems\n"
                     "  【工具】bili-check · bili-login · vision-test · mine-theme",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -508,6 +556,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_extract_persona(sub)
     _add_persona_eval(sub)
     _add_retrieval_eval(sub)
+    _add_style_annotate(sub)
     _add_problems(sub)
     return parser
 

@@ -367,12 +367,80 @@ async def run_skeleton(n: int, from_synthetic: bool, min_chars: int, per_unit: i
     return 0
 
 
+async def run_compress(n: int, short_path: str, from_synthetic: bool) -> int:
+    """**整块压缩对照**：现状（骨架+traits/styles，3758 字） vs 一个更短的等价版本。
+
+    为什么做这个（2026-09-30）：
+    - 逐文件消融测不出东西（23 道题 20 道答"差不多"）——**单文件的边际作用太小**。
+    - 那就换个尺子能看见的问法：**整块值不值这份预算**。
+    - ⚠️ 而且这一问的"分不出"**是可用的结论**：压缩版更便宜，分不出就换短的。
+      （消融里"分不出"是废读数，因为删掉有风险；这里没有风险，只省钱。）
+
+    ⚠️ 压缩的写法有讲究：**规则一条不删，只删解释/例子/重复表述**。
+    否则比的就成了"两种写法"，不是"同一套规则的两种长度"。
+    """
+    short = Path(short_path)
+    if not short.exists():
+        print(f"❌ 找不到压缩版：{short}")
+        return 1
+    short_text = short.read_text(encoding="utf-8").strip()
+
+    core.update_memory_task = lambda *a, **k: asyncio.sleep(0)
+    tmp = tempfile.mkdtemp(prefix="compress_")
+    mem.MEMORY_FILE = Path(tmp) / "short_term.json"
+    global _ORIG_REPLY
+    _ORIG_REPLY = core.generate_reply
+    core.generate_reply = _capture
+
+    msgs_list = _load_messages(n, from_synthetic)
+    print(f"📦 整块压缩对照：{len(msgs_list)} 条消息 × 2 条件\n")
+    rows, skipped, full_chars = [], 0, 0
+    for i, msg in enumerate(msgs_list, 1):
+        _captured.clear()
+        try:
+            await core.handle_chat(f"cmp_{i}", msg)
+        except Exception as e:
+            print(f"  [{i}] 检索失败：{type(e).__name__}")
+            skipped += 1
+            continue
+        msgs = _captured.get("msgs")
+        if not msgs:
+            skipped += 1
+            continue
+        full_chars = len(msgs[0].get("content") or "")
+        with_p = [dict(m) for m in msgs]
+        short_p = [dict(m) for m in msgs]
+        short_p[0]["content"] = short_text          # 只换这一整块，其余一字不动
+        r_full = await _ORIG_REPLY(with_p)
+        r_short = await _ORIG_REPLY(short_p)
+        rows.append({"msg": msg, "with": r_full, "without": r_short,
+                     "with_chars": full_chars, "without_chars": len(short_text)})
+        print(f"  [{i}/{len(msgs_list)}] {msg[:22]}")
+        print(f"       现状（{full_chars}字）：{r_full}")
+        print(f"       压缩（{len(short_text)}字）：{r_short}")
+
+    if not rows:
+        print("\n❌ 一条都没跑成")
+        return 1
+    out = OUT.parent / "compress_ablation.json"
+    out.write_text(json.dumps({
+        "meta": {"full_chars": full_chars, "short_chars": len(short_text),
+                 "short_file": str(short), "n": len(rows), "skipped": skipped},
+        "rows": rows}, ensure_ascii=False, indent=1), encoding="utf-8")
+    print(f"\n✅ 明细已保存: {out}")
+    print(f"   ⚠️ **别在这里下调**——拿它出题给你判（`style-annotate --sets --only 整块`）")
+    return 0
+
+
 async def run_sections(n: int, from_synthetic: bool, min_section_chars: int,
-                       per_section: int = 20) -> int:
+                       per_section: int = 20, only_section: str = None) -> int:
     """**按段消融**：一次检索 → 对每个注入段试"删掉它"，其余全部相同。
 
     ⚠️ 关键性质：这些段**已经在 messages 里**（检索已经跑完），
        所以消融 = **把那段删掉**，**不需要重跑检索** —— 一次检索能试所有段。
+
+    `only_section`：只做名字里含这个子串的段（给"某个段还没测过、单独补一批"用，
+    见 `scripts/style_annotate.py --run`）。不传 = 所有段。
     """
     core.update_memory_task = lambda *a, **k: asyncio.sleep(0)
     tmp = tempfile.mkdtemp(prefix="sectabl_")
@@ -404,6 +472,8 @@ async def run_sections(n: int, from_synthetic: bool, min_section_chars: int,
         for m in msgs:
             if m.get("role") == "system":
                 s = _section_of(m)
+                if only_section and only_section not in s:
+                    continue
                 if s not in sections:
                     sections.append(s)
         base_reply = await _ORIG_REPLY([dict(m) for m in msgs])
@@ -504,18 +574,25 @@ async def main():
                     help="★每一段最多消融几次（预算帽；跑很多消息时控成本）")
     ap.add_argument("--min-section-chars", type=int, default=60,
                     help="只看长于这个字数的段（太短的段测不出字面重合）")
+    ap.add_argument("--only-section", default=None,
+                    help="只消融名字里含这个子串的段（给某个段单独补一批用；不传=所有段）")
+    ap.add_argument("--compress", default=None,
+                    help="★整块压缩对照：把 messages[0] 整块换成这个短版文件（规则不删、只删水分）")
     args = ap.parse_args()
     try:
         sys.stdout.reconfigure(encoding="utf-8")
     except Exception:
         pass
+    if args.compress:
+        return await run_compress(args.n, args.compress, args.from_synthetic)
+
     if args.skeleton:
         return await run_skeleton(args.n, args.from_synthetic, args.min_section_chars,
                                   args.per_section)
 
     if args.sections:
         return await run_sections(args.n, args.from_synthetic, args.min_section_chars,
-                                  per_section=args.per_section)
+                                  per_section=args.per_section, only_section=args.only_section)
 
     # 临时记忆：不污染线上（长期提取关掉，只测回复本身）
     core.update_memory_task = lambda *a, **k: asyncio.sleep(0)
