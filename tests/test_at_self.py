@@ -26,15 +26,46 @@ def _msg(*segs) -> Message:
     return Message(list(segs))
 
 
-def _event(msg, self_id=BOT_ID, user_id="20000"):
+def _event(msg, self_id=BOT_ID, user_id="20000", to_me=False, message_type="group"):
     return SimpleNamespace(
         message=msg,
         self_id=self_id,
-        message_type="group",
+        message_type=message_type,
         group_id=GROUP_ID,
+        to_me=to_me,
         get_message=lambda: msg,
         get_user_id=lambda: user_id,
     )
+
+
+class TestToMeSignal:
+    """适配器把"@在开头/结尾"的 at 段**删掉了**，只能靠 `event.to_me`。
+
+    踩坑（2026-09-27）：只加了段检测，"@她"还是不接话。看适配器源码才知道
+    `_check_at_me` 遇到首/尾的 @ 会 `event.message.pop(0)` 并置 `to_me=True`——
+    `@灰泽满 在吗` 正是最常见的写法，轮到我们处理时 at 段已经不存在了。
+    """
+
+    def test_to_me_counts_in_group(self):
+        # 模拟适配器处理后的样子：at 段没了，只剩正文，但 to_me=True
+        msg = _msg(MessageSegment.text("在吗"))
+        assert _extract_at_self(msg, _event(msg, to_me=True)) is True
+
+    def test_to_me_ignored_in_private(self):
+        # 私聊的 to_me 是适配器**无条件**置的 True（不代表被 @），别在私聊乱放行
+        msg = _msg(MessageSegment.text("在吗"))
+        ev = _event(msg, to_me=True, message_type="private")
+        assert _extract_at_self(msg, ev, is_group=False) is False
+
+    def test_mid_message_at_still_caught_by_segment(self):
+        # @ 在**中间**时适配器不动它 → 段还在，靠段检测
+        msg = _msg(MessageSegment.text("你们看"), MessageSegment.at(BOT_ID),
+                   MessageSegment.text("这个"))
+        assert _extract_at_self(msg, _event(msg)) is True
+
+    def test_plain_group_message_not_addressed(self):
+        msg = _msg(MessageSegment.text("你们吃了吗"))
+        assert _extract_at_self(msg, _event(msg)) is False
 
 
 class TestExtractAtSelf:
@@ -76,8 +107,24 @@ class TestHandleChatMarks:
             pkg.chat_window, "enqueue",
             lambda *a, **k: self.enqueued.append((a, k)) or None)
 
-    async def _run(self, msg):
-        await pkg._handle_chat(bot=SimpleNamespace(), event=_event(msg))
+    async def _run(self, msg, **kw):
+        await pkg._handle_chat(bot=SimpleNamespace(), event=_event(msg, **kw))
+
+    @pytest.mark.asyncio
+    async def test_adapter_stripped_at_still_marks(self):
+        """最要紧的一条：@ 被适配器删掉后，光靠 to_me 也要能标记上。"""
+        await self._run(_msg(MessageSegment.text("今天怎么没播")), to_me=True)
+        assert len(self.enqueued) == 1
+        text = self.enqueued[0][0][2]
+        assert text.startswith(AT_SELF_MARK) and "今天怎么没播" in text
+
+    @pytest.mark.asyncio
+    async def test_private_to_me_does_not_mark(self):
+        # 私聊不该因为 to_me（恒 True）就带上"有人@了你"的标记
+        await self._run(_msg(MessageSegment.text("在吗")), to_me=True,
+                        message_type="private")
+        assert len(self.enqueued) == 1
+        assert AT_SELF_MARK not in self.enqueued[0][0][2]
 
     @pytest.mark.asyncio
     async def test_at_plus_text_gets_mark(self):

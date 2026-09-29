@@ -11,11 +11,9 @@
 
 比较方法的前提是"正确答案"。而正确答案**不能由 LLM 生成**——那是循环论证
 （本仓踩过：`待办清单.md` 里"合成场景自测 = 8/8，但毫无意义"）。
-所以这个脚本里的标注是**手工标注**，来源：
-  · `scripts/retrieval_eval_cases.json`（项目已有的精选回归）
-  · `data/chat_log/chat.jsonl`（真实对话里**有明确依据**的）
-  · `记录.txt`（用户手放的真实翻车）
-**边界案例单独标出来**（`borderline`），它们的标签最该由人来裁决。
+所以这个脚本里的标注是**手工标注**，而且**只在 `scripts/retrieval_eval_cases.json` 一处维护**
+（`want` 由该文件的 `expect` 推导，本文件不存标签——存两份必然打架）。
+**边界案例标了 `borderline`**，它们的标签最该由人来裁决。
 
 ## 指标
 
@@ -63,79 +61,26 @@ def _key(name: str) -> str:
 
 
 # ==================== 标注集 ====================
-# ⚠️ **标注在 `scripts/judge_labels.json`，该文件优先**（人改那份，不用碰代码）。
-# 下面这份是内置兜底（文件不存在时用）。
-# want: True=该命中  False=不该命中。  borderline=True 的标签最该由人裁决。
-LABELS_FILE = ROOT / "scripts" / "judge_labels.json"
+# ⚠️ **标注只在 `scripts/retrieval_eval_cases.json` 一处维护**（2026-09-29 起）。
+#
+# 历史教训：这里原来还有一份 `TASKS_FALLBACK` 内置字典，加上 `scripts/judge_labels.json`，
+# 同一个东西存了三份 —— 于是同一条标注在三个地方有两个值
+# （「小满 给我推荐一首歌」：文件里 true、兜底里 false、导出件写否）。
+# **维护两份必然咬人**，所以现在 want 由评测集**推导**，本文件不再存任何标签。
+CASES_FILE = ROOT / "scripts" / "retrieval_eval_cases.json"
 
-TASKS_FALLBACK = {
-    # ---------- 第 5 路：偏好该不该注入 ----------
-    "preference": {
-        "desc": "用户这句话，该不该注入对应那条偏好",
-        "cases": [
-            # —— 正例（有明确依据）——
-            {"q": "中秋节了，hzm吃月饼了吗", "want": True, "why": "问吃的→食物偏好"},
-            {"q": "好吧，hzm爱吃月饼吗", "want": True, "why": "问爱吃什么→食物偏好"},
-            {"q": "你熬夜一般干啥", "want": True, "why": "直接问作息"},
-            {"q": "你睡了吗", "want": True, "why": "作息话题"},
-            {"q": "你喜欢吃什么呀", "want": True, "why": "评测集 pref1"},
-            {"q": "你怕不怕猫", "want": True, "why": "评测集 pref2"},
-            {"q": "你会玩宝可梦吗", "want": True, "why": "评测集 pref3"},
-            {"q": "真理X：/抓水母", "want": True, "borderline": True, "why": "水母（群聊动作，算不算提话题？）"},
-            {"q": "满神有没有那种说华流是最吊的，十张专辑封面全是欧洲的流行乐歌手推荐", "want": True,
-             "borderline": True, "why": "歌手话题，但问的是'推荐别人'不是'你喜欢谁'"},
-            {"q": "宝宝我明天要早起我先去睡了", "want": True, "borderline": True,
-             "why": "用户在说自己，不是问她——但作息话题确实相关"},
-            # —— 反例 ——
-            {"q": "今天天气不错，出去走走吗", "want": False, "why": "评测集 co4"},
-            {"q": "9点是你那边", "want": False, "why": "评测集 co3"},
-            {"q": "灰泽满是不是很懒", "want": False, "why": "评测集 co5"},
-            {"q": "明天几点开会", "want": False, "why": "评测集 co7"},
-            {"q": "感冒吃什么药", "want": False, "why": "问药，不是问她"},
-            {"q": "我要听你的声音", "want": False, "why": "求语音，与偏好无关"},
-            {"q": "亲一个嘛，亲一个，不亲我就跳了", "want": False, "why": "撒娇/越界"},
-            {"q": "能再发几个表情包吗满神", "want": False, "why": "求表情包"},
-            {"q": "你这个声音是怎么调试的这么真实的啊", "want": False, "why": "问技术"},
-            {"q": "睡不着好难过", "want": False, "why": "在倾诉情绪，不是问作息"},
-            {"q": "小满 给我推荐一首歌", "want": False, "why": "求推荐，不是问她喜欢什么"},
-            {"q": "你笑死我了", "want": False, "why": "纯情绪"},
-        ],
-    },
-    # ---------- corpus：该不该唤起某段经历 ----------
-    "corpus": {
-        "desc": "用户这句话，该不该唤起她某段直播经历",
-        "cases": [
-            # —— 正例 ——
-            {"q": "你不是以前有喜欢的男学霸吗，你直播里说的", "want": True, "why": "明确指向她的经历"},
-            {"q": "你就说过最近直播里", "want": True, "why": "明确指向直播内容"},
-            {"q": "你在哪里直播", "want": True, "why": "她的日常/所在地"},
-            {"q": "什么平台的直播间", "want": True, "borderline": True, "why": "可能与经历相关，也可能是事务"},
-            {"q": "你多高啊", "want": True, "why": "评测集 co6（身高那条）"},
-            {"q": "你和女同学一起上学的事", "want": True, "why": "评测集 co1"},
-            {"q": "你和室友关系怎么样", "want": True, "why": "评测集 co2"},
-            # —— 反例 ——
-            {"q": "今天天气不错，出去走走吗", "want": False, "why": "评测集 co4"},
-            {"q": "9点是你那边", "want": False, "why": "评测集 co3"},
-            {"q": "灰泽满是不是很懒", "want": False, "why": "评测集 co5"},
-            {"q": "明天几点开会", "want": False, "why": "评测集 co7"},
-            {"q": "感冒吃什么药", "want": False, "why": "评测集 co8"},
-            {"q": "我要听你的声音", "want": False, "why": "求语音"},
-            {"q": "亲一个嘛，亲一个，不亲我就跳了", "want": False, "why": "撒娇越界"},
-            {"q": "能再发几个表情包吗满神", "want": False, "why": "求表情包"},
-            {"q": "你这个声音是怎么调试的这么真实的啊", "want": False, "why": "问技术"},
-            {"q": "宝宝我明天要早起我先去睡了", "want": False, "why": "日常告知"},
-            {"q": "我是特别特别想你的意思不是想死", "want": False, "why": "澄清情绪"},
-            {"q": "満神，我感觉你的直播间氛围太好了，就像在恬静的乡下和邻里聊家长里短", "want": False,
-             "why": "夸奖直播间氛围，不是问她的经历"},
-        ],
-    },
+TASK_DESC = {
+    "preference": "用户这句话，该不该注入对应那条偏好",
+    "corpus": "用户这句话，该不该唤起她某段直播经历",
 }
-
 
 # ==================== 判据实现 ====================
 
 def _bigrams(t: str) -> list:
-    t = re.sub(r'[\s，。！？、；：""''（）【】()\[\]]+', '', t)
+    # ⚠️ 原来这里写的是 `r'[...""''...'` —— 中间那对 `''` 把字符串**截断**了，
+    # 后半段成了非 raw 字符串，`\[` 就成了非法转义（每次 import 都刷一条 SyntaxWarning）。
+    # 现在写成单个 raw 字符串，**字符类与原来逐字符相同**（原来那对 `''` 其实被字面量边界吃掉了）。
+    t = re.sub(r'[\s，。！？、；：""（）【】()\[\]]+', '', t)
     return [t[i:i + 2] for i in range(len(t) - 1)] or [t]
 
 
@@ -167,17 +112,36 @@ class BM25:
 
 
 def load_tasks() -> dict:
-    """优先读 judge_labels.json（人改那份）；没有就用内置兜底。"""
-    if LABELS_FILE.exists():
-        try:
-            d = json.loads(LABELS_FILE.read_text(encoding="utf-8"))
-            tasks = d.get("tasks") or {}
-            if tasks:
-                print(f"（标注来自 {LABELS_FILE.name}）")
-                return tasks
-        except Exception as e:
-            print(f"⚠️ {LABELS_FILE.name} 读不出来，用内置兜底：{e}")
-    return TASKS_FALLBACK
+    """从评测集推导每个任务的 (query, want) —— **单一真值**。
+
+    推导规则（看 `expect.<route>` 里写了什么）：
+        should / contains / should_fire  → want=True  （该路该出东西）
+        should_not_hit                   → want=False （该路该是空的）
+    该 route 两边都没写的 query → 不参与这个任务。
+    ⚠️ `contains` 也算"该命中"——它是"命中且 top 文本含关键词"，
+      只把它当 should_not_hit 的反面会**漏掉走 contains 的正例**（踩过：co1/co2/co6 被判成不命中）。
+    `borderline` 原样带过来 —— **边界案例的标签直接决定'哪个判据赢'**，最该由人裁决。
+    """
+    raw = json.loads(CASES_FILE.read_text(encoding="utf-8"))
+    tasks = {}
+    for task, desc in TASK_DESC.items():
+        cases = []
+        for c in raw.get("cases", []):
+            cond = c.get("expect", {}).get(task)
+            if not cond:
+                continue
+            if "should_not_hit" in cond:
+                want = False
+            else:
+                want = bool("should" in cond or "contains" in cond or cond.get("should_fire"))
+            item = {"q": c["query"], "want": want, "why": c.get("why", "")}
+            if c.get("borderline"):
+                item["borderline"] = True
+            cases.append(item)
+        tasks[task] = {"desc": desc, "cases": cases}
+    print(f"（标注来自 {CASES_FILE.name} 推导："
+          + "、".join(f"{k} {len(v['cases'])} 条" for k, v in tasks.items()) + "）")
+    return tasks
 
 
 def _parse_json(c: str):

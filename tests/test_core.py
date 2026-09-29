@@ -887,7 +887,7 @@ class TestHandleChatEmotionOnly:
             raise AssertionError("纯情绪消息不应触发检索/行为分类")
 
         monkeypatch.setattr(core, "embed_query", _fail)
-        monkeypatch.setattr(core, "retrieve_corpus", _fail)
+        monkeypatch.setattr(core, "retrieve_corpus_candidates", _fail)
         monkeypatch.setattr(core, "retrieve_voice_samples", _fail)
         monkeypatch.setattr(core, "select_phrase_groups", _fail)
         monkeypatch.setattr(core, "classify_l3", _fail)
@@ -924,7 +924,7 @@ class TestHandleChatImageOnly:
             raise AssertionError("图片-only 消息不应触发检索")
 
         monkeypatch.setattr(core, "embed_query", fake_embed)
-        monkeypatch.setattr(core, "retrieve_corpus", _fail)
+        monkeypatch.setattr(core, "retrieve_corpus_candidates", _fail)
         monkeypatch.setattr(core, "retrieve_voice_samples", _fail)
         monkeypatch.setattr(core, "classify_l3", _fail)  # L3：图片-only 也不做行为/措辞分类
         monkeypatch.setattr(core, "select_phrase_groups", _fail)

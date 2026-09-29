@@ -15,7 +15,12 @@ from types import SimpleNamespace
 import pytest
 
 from src.plugins.chatbot import proactive
+from src.plugins.chatbot import core
 from src.plugins.chatbot.proactive import compose_proactive, proactive_enabled
+from src.plugins.chatbot.constants import (
+    PROACTIVE_SAMPLE_KEEP_ALL as KEEP_ALL, PROACTIVE_SAMPLE_TOP_N as SAMPLE_TOP_N,
+)
+from src.plugins.chatbot.retrieval import RetrievalItem
 
 
 class _StubClient:
@@ -41,10 +46,11 @@ def _isolate(monkeypatch):
     monkeypatch.setattr(proactive, "_get_clients",
                         lambda: (_StubClient(content='{"unused": 1}'), object()))
 
+    # 检索现在在 core.gather_retrieval 里（主动发言走主链路），所以打桩打在 core 上
     async def _no_embed(*a, **k):
         return [0.0]
-    monkeypatch.setattr(proactive, "embed_query", _no_embed)
-    monkeypatch.setattr(proactive, "retrieve_voice_samples", lambda *a, **k: [])
+    monkeypatch.setattr(core, "embed_query", _no_embed)
+    monkeypatch.setattr(core, "retrieve_voice_samples", lambda *a, **k: [])
 
 
 def _with_llm(monkeypatch, content=None, exc=None):
@@ -124,7 +130,7 @@ class TestFailSafe:
 
         async def _boom(*a, **k):
             raise RuntimeError("embedding 服务抖了")
-        monkeypatch.setattr(proactive, "embed_query", _boom)
+        monkeypatch.setattr(core, "embed_query", _boom)
 
         assert await compose_proactive("深夜发了条动态") == "睡不着，随便说点啥。"
 
@@ -337,5 +343,84 @@ class TestImageBlock:
     def test_prompt_forbids_inventing_missing_info(self):
         p = proactive.PROACTIVE_PROMPT
         assert "一个字也别补" in p        # 不许编内容里没有的对象（"写稿"那次）
-        assert "指的就是这张图" in p or "指的是配图" in p
+        assert "配图" in p               # 指代只指向配图
         assert "只挑一件说" in p          # 两件事揉不清就只说一件
+
+    def test_prompt_does_not_override_self_reference(self):
+        """提示词**不许规定自称**——那是人设文件的事（黄金律：素材层解决）。
+
+        踩坑（2026-09-29）：为了压住"第三人称旁白"，我在这里写过
+        「自称用"我"最自然」——等于把 system_prompt 的【自我称呼】覆盖掉，
+        于是主动发言开始冒"陪我回回血"（正常聊天里她从不用"我"）。
+        实测：把那段整段删掉后，只靠人设骨架 + 风格样本，8 次里 0 次出现"我"。
+        """
+        p = proactive.PROACTIVE_PROMPT
+        assert '自称用"我"最自然' not in p     # 覆盖人设的那句必须没了
+        assert "不要用" not in p               # 也不该反过来立一条硬规矩
+        assert "人设" in p or "自我称呼" in p   # 只留一句"交给谁管"的指路
+
+
+class _RecordingClient:
+    """记录每次调用收到的 messages，便于断言注入了什么。"""
+
+    def __init__(self, gen="陪灰泽满缓缓"):
+        self.calls = []
+        self.chat = self
+        self.completions = self
+        self.gen = gen
+
+    async def create(self, **kwargs):
+        self.calls.append(kwargs["messages"])
+        prompt = kwargs["messages"][-1]["content"]
+        content = ('{"enough": true}' if "够不够撑起" in prompt else self.gen)
+        return SimpleNamespace(choices=[SimpleNamespace(
+            message=SimpleNamespace(content=content), finish_reason="stop")])
+
+
+class TestSampleInjection:
+    """"没有生活感"的根因：她自己的动态是陈述句，跟"弹幕问答"样本不同构。
+
+    实测（2026-09-27）5 条真实动态：晚安 0.736 / 直播推迟 0.712 进得来，
+    但「新视频发出来了…」0.532、「下午出去逛了逛」0.543 全部低于 0.66 阈值和保底门槛
+    → **一条样本都进不来** → 只剩人设骨架干说。
+    """
+
+    def _patch(self, monkeypatch, client, items):
+        monkeypatch.setattr(proactive, "_get_clients", lambda: (client, object()))
+
+        async def _emb(*a, **k):
+            return [0.0]
+        monkeypatch.setattr(core, "embed_query", _emb)
+        monkeypatch.setattr(core, "retrieve_voice_samples", lambda *a, **k: items)
+
+    async def test_samples_requested_without_threshold(self, monkeypatch):
+        seen = {}
+
+        def fake_retrieve(text, vector, threshold=None, top_n=None):
+            seen["threshold"], seen["top_n"] = threshold, top_n
+            return []
+        client = _RecordingClient()
+        self._patch(monkeypatch, client, [])
+        monkeypatch.setattr(core, "retrieve_voice_samples", fake_retrieve)
+
+        await compose_proactive("下午出去逛了逛", "B站")
+        assert seen["threshold"] == KEEP_ALL     # 不设阈值（她自己的陈述句跟样本不同构）
+        assert seen["top_n"] == SAMPLE_TOP_N
+
+    async def test_framing_message_keeps_samples_as_style_only(self, monkeypatch):
+        # 不框一句的话，模型会把样本当成"最近说过的话"去接，甚至搬示例里的内容
+        item = RetrievalItem(source="voice_sample", item_id="s1", score=0.5, text="",
+                             extra={"user": "粉丝问：你忙吗", "reply": "灰泽满忙得很"})
+        client = _RecordingClient()
+        self._patch(monkeypatch, client, [item])
+
+        await compose_proactive("今天好累", "B站")
+        gen_msgs = client.calls[-1]
+        assert any("说话方式参考" in m["content"] for m in gen_msgs)
+        assert any(m["content"] == "灰泽满忙得很" for m in gen_msgs)
+
+    async def test_no_samples_no_framing(self, monkeypatch):
+        client = _RecordingClient()
+        self._patch(monkeypatch, client, [])
+        await compose_proactive("今天好累", "B站")
+        assert not any("说话方式参考" in m["content"] for m in client.calls[-1])

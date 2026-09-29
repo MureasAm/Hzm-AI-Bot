@@ -101,7 +101,8 @@ def install_traps():
         return
     _TRAPS_INSTALLED = True
     _wrap(core, "classify_l3", "L3分类")
-    _wrap(core, "retrieve_corpus", "corpus·门口直通", _items)
+    # ⚠️ 原来这里还包了 `retrieve_corpus`（标签"corpus·门口直通"）——2026-09-29 取消直通后
+    # core 不再调它，那层**永远不会出现**，看 trace 的人会误以为"corpus 没跑"。已删。
     _wrap(core, "retrieve_corpus_candidates", "corpus·候选", _items)
     _wrap(core, "judge_corpus", "corpus·LLM判", _items)
     _wrap(core, "retrieve_voice_samples", "voice_sample", _items)

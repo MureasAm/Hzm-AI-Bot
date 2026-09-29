@@ -142,15 +142,20 @@ def _extract_image_source(msg) -> tuple[str, str]:
     return "", ""
 
 
-def _extract_at_self(msg, event) -> bool:
-    """这条消息有没有 @ 她本人。
+def _extract_at_self(msg, event, is_group: bool = True) -> bool:
+    """这条消息有没有 @ 她本人。**两道信号都要看，缺一不可。**
 
-    **@ 是一个独立消息段**（at），`extract_plain_text()` 只收 text 段——所以
-    「@灰泽满 在吗」走到后面就只剩"在吗"，群里"被点名必接"的确定性判据命中不了。
-    踩坑（2026-09-26）：用户报"@了她还是不接话"，根因就在这。
+    ① **`event.to_me`**（适配器算好的）：`_check_at_me` 在 @ 落在**开头或结尾**时，
+       会把那个 at 段**整个删掉**（然后置 `to_me=True`）——所以光看消息段**永远看不到**
+       这种。踩坑（2026-09-27）：先加了段检测，"@她"还是被判成没点名，根因就在这：
+       `@灰泽满 在吗` 恰好是最常见的写法，而它轮到我们处理时 at 段已经没了。
+       ⚠️ 私聊的 `to_me` 是适配器**无条件**置的 True，所以**只在群聊认它**。
+    ② **消息段**：@ 落在**中间**（"你们看 @她 这个"）时适配器不动它，段还在消息里。
 
     "@全体成员"（qq=all）不算——那是 @ 所有人，不是点她。
     """
+    if is_group and getattr(event, "to_me", False):
+        return True
     self_id = str(getattr(event, "self_id", "") or "")
     if not self_id:
         return False
@@ -192,9 +197,31 @@ def _extract_face_text(msg) -> str:
 # 被引用消息注入时的文本上限：引用是"指路"，不是把整条消息搬进来
 QUOTE_TEXT_MAX = 80
 
+# 内层转发最多往里展开几层（防炸/防环：每层都要再调一次 get_forward_msg）
+_NESTED_FORWARD_MAX_DEPTH = 2
 
-def _extract_quote_text(event) -> str:
+# 引用的消息**没有文字**时，用它是什么类型来指路。
+# 不加这个映射的话，语音/转发卡片/文件这类引用会被**静默丢掉**——
+# 她看不到引的是什么，就会答非所问（实测 2026-09-29 群 901907410：
+# 豆子引用一条转发问她"能不能把灰泽满调成这样"，她回了句"调成哪样啊"）。
+_QUOTE_SEG_WHAT = {
+    "image": "一张图", "face": "一个表情", "mface": "一张表情包",
+    "record": "一条语音", "video": "一段视频", "file": "一个文件",
+    "forward": "一条转发聊天记录", "json": "一张卡片", "music": "一首歌",
+    "poke": "一个戳一戳", "dice": "一个骰子", "rps": "一次猜拳",
+}
+
+# 「只含这些段、又没有文字」的消息：给个占位提示，别让它**静默消失**
+# （NapCat 对卡片类消息有时给 `json`/`file`/`video` 段——不在 _extract_forward_text 的
+#  识别范围内，于是正文为空、又没有图，整条消息就一声不响地没了）
+_UNKNOWN_SEG_HINT = dict(_QUOTE_SEG_WHAT, json="一张卡片（可能是分享/转发卡片）")
+
+
+def _extract_quote_text(event, forward_detail: str = "") -> str:
     """把"用户在引用哪条消息"还原成可注入的文本；没有引用返回空串。
+
+    `forward_detail`：引用的那条**本身是转发卡片**时，由 `_quoted_forward_detail`
+    取回来的内容摘要（引用的正文是空的，不给它的话"这样/那个"就没有指向）。
 
     **不用自己调 get_msg**：适配器在 `Bot.handle_event` 里对每条消息都跑过
     `_check_reply`（nonebot/adapters/onebot/v11/bot.py:22）——发现 reply 段就自动
@@ -207,6 +234,12 @@ def _extract_quote_text(event) -> str:
     """
     reply = getattr(event, "reply", None)
     if reply is None:
+        # 有 reply 段、却没解析出 `event.reply`：适配器 `_check_reply` 在 get_msg 失败时
+        # **只记一条 WARNING 就返回**，于是引用**静默消失**。不能让它消失——
+        # 她看不到引的是什么就会答非所问（见 _QUOTE_SEG_WHAT 上的实测记录）。
+        if "[CQ:reply" in (getattr(event, "raw_message", "") or ""):
+            print("[引用] ⚠️ 引用了消息但没取到内容（适配器 get_msg 失败？）")
+            return "[有人引用了一条消息问你，但内容没取到——看不懂就直接反问对方引的是什么]"
         return ""
 
     text = ""
@@ -215,7 +248,10 @@ def _extract_quote_text(event) -> str:
     except Exception:
         text = ""
     if not text:
-        text = (getattr(reply, "raw_message", "") or "").strip()
+        # 兜底用 raw_message（CQ 串），但**必须先把 CQ 码剥掉**——
+        # 否则会把 `[CQ:record,file=91257a….amr]` 这种丑代码原样注进上下文（实测漏过）
+        text = re.sub(r"\[CQ:[^\]]*\]", "",
+                      getattr(reply, "raw_message", "") or "").strip()
     if len(text) > QUOTE_TEXT_MAX:
         text = text[:QUOTE_TEXT_MAX] + "…"
 
@@ -235,25 +271,31 @@ def _extract_quote_text(event) -> str:
             pass
         who = f"另一个绿冻{nick}" if nick else "另一个绿冻"
 
-    # 引用的那条还带了什么（图片/表情）——不然模型只知道文字部分
-    has_image, qface = False, ""
+    # 引用的那条还带了什么（图片/表情/类型）——不然模型只知道文字部分
+    has_image, qface, whats = False, "", []
     try:
-        has_image = any(seg.type == "image" for seg in reply.message)
         qface = _extract_face_text(reply.message)
+        for seg in reply.message:
+            if seg.type == "image":
+                has_image = True
+            what = _QUOTE_SEG_WHAT.get(seg.type)
+            # 表情有名字就更精确（"表情「可怜」"比"一个表情"有用），别重复列两遍
+            if seg.type == "face" and qface:
+                what = f"表情「{qface}」"
+            if what and what not in whats:
+                whats.append(what)
     except Exception:
         pass
 
     if not text:
-        # 引用的是一条纯图片/纯表情：没有文字可指路，但**不能让引用整个丢失**
-        if has_image and qface:
-            what = "一张带表情的图"
-        elif has_image:
-            what = "一张图"
-        elif qface:
-            what = f"表情「{qface}」"
-        else:
-            return ""   # 引用了一条空消息，没什么可说的
-        return f"[引用{who}发的{what}]"
+        # 引用的不是文字（图/语音/转发卡片…）：没有正文可引，但**不能让引用整个丢失**。
+        # 用"引的是什么类型"指路，她才知道该怎么接（曾静默丢弃 → 她只能反问"调成哪样啊"）。
+        if not whats:
+            return ""   # 引用了一条空消息（没有任何段），没什么可指路的
+        # 引的是**转发卡片**时，forward_detail 是取回来的内容摘要——
+        # 不给内容的话"这样/那个"就没有指向（实测踩坑见 _quoted_forward_detail）
+        detail = f"（{forward_detail}）" if forward_detail else ""
+        return f"[引用{who}发的{'、'.join(whats[:2])}{detail}]"
 
     extra = ""
     if has_image:
@@ -288,8 +330,94 @@ def _flatten_forward_content(content) -> str:
                 out.append("[图片]")
             elif t == "face":
                 out.append("[表情]")
+            elif t == "forward":
+                # ⚠️ 内层转发**必须留个痕迹**：旧实现什么都不加，于是"聊天记录里
+                # 还套着一条聊天记录"时，内层内容**整段静默消失**——
+                # 摘要只能写出"有人在群里发图并接话"这种空话（实测 2026-09-29）。
+                # 正常情况下这段标记会被 `_expand_nested_forwards` 换成取回的内容。
+                out.append("[转发的聊天记录]")
         return "".join(out).strip()
     return ""
+
+
+def _nested_forward_ids(content) -> list:
+    """挑出 content 里**内层转发**的 id（可多个）。段数组和 CQ 串两种形状都认。"""
+    ids = []
+    if isinstance(content, str):
+        ids = re.findall(r"\[CQ:forward,[^\]]*id=([^,\]]+)", content)
+    elif isinstance(content, list):
+        for s in content:
+            if isinstance(s, dict) and s.get("type") == "forward":
+                fid = str((s.get("data") or {}).get("id") or "").strip()
+                if fid:
+                    ids.append(fid)
+    return ids
+
+
+async def _expand_nested_forwards(bot, content, depth: int = 0):
+    """把 content 里的**内层转发段**取回来、递归展开成文字段；其余段原样保留。
+
+    为什么要它（2026-09-29 用户实测）：她转发的那条记录里**还套着一条记录**
+    （"蓝泽大肥鱼被拉进群后的暴力发言"就在里层）。旧实现遇到内层 forward 段直接跳过，
+    摘要于是只剩"有人在群里发图并接话，提到自己这儿还有'攻击的'"——
+    **真正的内容一个字都没进上下文**，粉丝接着问"能不能给灰泽满调成这样"，
+    她手里没有任何可关联的东西。
+    """
+    if depth >= _NESTED_FORWARD_MAX_DEPTH or not _nested_forward_ids(content):
+        return content
+    if isinstance(content, str):
+        out = content
+        for fid in _nested_forward_ids(content):
+            inner = await _fetch_nested(bot, fid, depth)
+            out = out.replace(f"[CQ:forward,id={fid}]", inner, 1)
+        return out
+    if isinstance(content, list):
+        out = []
+        for s in content:
+            if isinstance(s, dict) and s.get("type") == "forward":
+                fid = str((s.get("data") or {}).get("id") or "").strip()
+                out.append({"type": "text", "data": {"text": await _fetch_nested(bot, fid, depth)}})
+            else:
+                out.append(s)
+        return out
+    return content
+
+
+async def _fetch_nested(bot, fid: str, depth: int) -> str:
+    """取一层内层转发 → 文字（失败给一句说明，**绝不留空**）。"""
+    try:
+        sub = await bot.get_forward_msg(id=fid)
+    except Exception as e:
+        print(f"⚠️ 内层转发取回失败: {e}")
+        return "［内层转发，但没取到内容］"
+    inner = await _render_forward_deep(bot, sub, depth + 1)
+    return f"［内层转发：{inner}］" if inner else "［内层转发，但里面没有文字内容］"
+
+
+async def _render_forward_deep(bot, resp, depth: int = 0) -> str:
+    """`_render_forward` 的**递归**版：内层转发也取回来展开。
+
+    `_render_forward`（同步、不联网）保留给不需要展开的场景与测试；
+    真正的取回走这里。
+    """
+    nodes = []
+    if isinstance(resp, dict):
+        nodes = resp.get("message") or resp.get("messages") or []
+    elif isinstance(resp, list):
+        nodes = resp
+    lines = []
+    for nd in nodes:
+        if not isinstance(nd, dict):
+            continue
+        d = nd.get("data") if isinstance(nd.get("data"), dict) else nd
+        content = d.get("content") or d.get("message") or ""
+        content = await _expand_nested_forwards(bot, content, depth)
+        text = _flatten_forward_content(content)
+        if not text:
+            continue
+        nick = str(d.get("nickname") or d.get("name") or "").strip()
+        lines.append(f"{nick}：{text}" if nick else text)
+    return "\n".join(lines)
 
 
 def _render_forward(resp) -> str:
@@ -312,6 +440,57 @@ def _render_forward(resp) -> str:
     return "\n".join(lines)
 
 
+async def _fetch_forward_summary(bot, fid: str) -> tuple[bool, str]:
+    """取回一条合并转发并摘要。返回 `(取到了吗, 摘要短语或失败说明)`。
+
+    **直接转发 和 "引用一条转发" 共用这一份**——取回 / 渲染 / 摘要三步，
+    两处各写一套必然漂（直接转发那条早就通了，引用那条一直漏着）。
+    """
+    try:
+        resp = await bot.get_forward_msg(id=fid)
+    except Exception as e:
+        print(f"⚠️ 取转发内容失败: {e}")
+        return False, "但没取到内容"
+    # **用递归版**：里面还套着转发时把内层也取回来展开
+    #（不展开的话内层内容会整段消失，摘要只剩空话——2026-09-29 实测踩坑）
+    raw = await _render_forward_deep(bot, resp)
+    if not raw:
+        return False, "但里面没有文字内容"
+    from .core import summarize_forward
+    summary = await summarize_forward(raw)
+    n = raw.count("\n") + 1
+    print(f"[转发] 取回 {n} 条（含内层展开）→ 摘要 {len(summary)} 字")
+    return True, (f"共 {n} 条：{summary}" if summary else f"共 {n} 条（内容较长没细看）")
+
+
+async def _quoted_forward_detail(event, bot) -> str:
+    """引用的那条消息**自己是一条转发聊天记录**时，把里面的内容取回来（摘要）。
+
+    踩坑（2026-09-29 群 901907410）：豆子引用一条转发（里面是怎么把 AI 调成那种性格的
+    对话）问"能不能给灰泽满调成这样"——转发卡片在 `extract_plain_text()` 里是**空的**，
+    旧代码遇到这种引用`return ""`，于是**转发内容整段消失**：
+    她只看到"能不能给灰泽满调成这样"，完全不知道"这样"指什么，
+    只能回一句"调成哪样啊"。
+    """
+    reply = getattr(event, "reply", None)
+    if reply is None:
+        return ""
+    try:
+        segs = list(reply.message)
+    except Exception:
+        return ""
+    for seg in segs:
+        if seg.type != "forward":
+            continue
+        fid = str(seg.data.get("id") or "").strip()
+        if not fid:
+            continue
+        ok, inner = await _fetch_forward_summary(bot, fid)
+        print(f"[转发] 引用里的转发：{'已取回' if ok else inner}")
+        return inner
+    return ""
+
+
 async def _extract_forward_text(event, bot) -> str:
     """把"用户转发的聊天记录"取回并**摘要**成可注入的一段；没有转发返回空串。
 
@@ -329,20 +508,8 @@ async def _extract_forward_text(event, bot) -> str:
         fid = str(seg.data.get("id") or "").strip()
         if not fid:
             continue
-        try:
-            resp = await bot.get_forward_msg(id=fid)
-        except Exception as e:
-            print(f"⚠️ 取转发内容失败: {e}")
-            return "[转发了一条聊天记录，但没取到内容]"
-        raw = _render_forward(resp)
-        if not raw:
-            return "[转发了一条聊天记录，但里面没有文字内容]"
-        from .core import summarize_forward
-        summary = await summarize_forward(raw)
-        n = raw.count("\n") + 1
-        print(f"[转发] 取回 {n} 条 → 摘要 {len(summary)} 字")
-        return (f"[转发的聊天记录（{n} 条）：{summary}]" if summary
-                else f"[转发了一条聊天记录（{n} 条，内容较长没细看）]")
+        ok, inner = await _fetch_forward_summary(bot, fid)
+        return f"[转发的聊天记录（{inner}）]" if ok else f"[转发了一条聊天记录，{inner}]"
     return ""
 
 
@@ -353,8 +520,9 @@ async def _handle_chat(bot: Bot, event: Event):
     image_url, image_file = _extract_image_source(msg)
     face_text = _extract_face_text(msg)
 
-    # 引用回复：把"引用了哪条"放到消息最前——它是这条消息的语境，不是新内容
-    quote_text = _extract_quote_text(event)
+    # 引用回复：把"引用了哪条"放到消息最前——它是这条消息的语境，不是新内容。
+    # 引用的那条**本身是转发卡片**时，正文取不到 → 单独把里面的内容取回来（摘要）
+    quote_text = _extract_quote_text(event, await _quoted_forward_detail(event, bot))
     if quote_text:
         user_msg = f"{quote_text} {user_msg}".strip() if user_msg else quote_text
 
@@ -368,22 +536,39 @@ async def _handle_chat(bot: Bot, event: Event):
         face_msg = f"[表情：{face_text}]"
         user_msg = f"{user_msg} {face_msg}".strip() if user_msg else face_msg
 
+    is_private = getattr(event, "message_type", "private") == "private"
+
     # @ 她本人：放进文本最前面（同上，是这条消息的语境）。
     # 两个作用：① 群里"点名必接"能命中 ② **只 @ 不带字**的消息不再被当空消息丢掉。
-    at_self = _extract_at_self(msg, event)
+    at_self = _extract_at_self(msg, event, is_group=not is_private)
     if at_self:
         user_msg = f"{AT_SELF_MARK} {user_msg}".strip() if user_msg else AT_SELF_MARK
+
+    # **只含"我们没解析的段"的消息不能静默丢掉**（卡片/文件/视频/位置/残留的 reply 段…）：
+    # 这类消息 `extract_plain_text()` 是空的、又没有图/表情，会掉进下面"空消息"那一行
+    # **一声不响地消失**——连一条日志都没有。
+    # 踩坑（2026-09-29 群 901907410）：豆老湿先发了一条内容（疑似卡片/转发），
+    # 3 分钟后才问"能不能给灰泽满调成这样"。那条先发的**没进任何一批**，
+    # 所以她永远不知道"这样"指什么，只能回一句"调成哪样啊"。
+    # 现在给个占位提示：她至少知道"对方发了个我解析不出来的东西"，可以反问。
+    if not user_msg and not image_url and not image_file:
+        unknown = [seg.type for seg in msg
+                   if seg.type not in ("text", "at", "reply", "image", "face")]
+        if unknown:
+            what = "、".join(dict.fromkeys(_UNKNOWN_SEG_HINT.get(t, f"{t} 段") for t in unknown))
+            print(f"[收到消息] ⚠️ 只含未识别的段 {unknown} → 注入占位提示（否则这条会静默消失）")
+            user_msg = f"[对方发来{what}，但内容没能解析出来——看不懂就问他发了什么]"
 
     if not user_msg and not image_url and not image_file:
         return  # 真正空消息（无文字无图片无表情），不回复
 
     user_id = event.get_user_id()
-    is_private = getattr(event, "message_type", "private") == "private"
     target_id = str(user_id if is_private else getattr(event, "group_id", ""))
     print(f"[收到消息] user={user_id}, msg={user_msg[:40]!r}, "
           f"img={'有' if (image_url or image_file) else '无'}, "
           f"引用={'有' if quote_text else '无'}, "
-          f"转发={'有' if forward_text else '无'}")
+          f"转发={'有' if forward_text else '无'}, "
+          f"@={'有' if at_self else '无'}")
 
     # 读秒窗口（方案B）：攒批 + 静默后统一回复（含读图/归纳/分批发送）
     # target_id=会话标识（私聊=user_id，群聊=group_id），群聊按群攒批实现多人对话

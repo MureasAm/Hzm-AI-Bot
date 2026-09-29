@@ -115,4 +115,7 @@ async def main():
     print(f"\n全部 {len(empty)} 条已存 outputs/_coverage_empty.txt")
 
 
-asyncio.run(main())
+if __name__ == "__main__":
+    # ⚠️ 原来这里是裸的 `asyncio.run(main())` ——**import 这个模块就会直接跑一遍评测**
+    # （真花钱调模型）。谁想在测试或别的工具里复用它都会中招。加护栏。
+    asyncio.run(main())

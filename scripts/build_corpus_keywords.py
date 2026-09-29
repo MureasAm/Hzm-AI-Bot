@@ -135,10 +135,14 @@ async def main():
     for i, k in got:
         old[str(i)] = k
     OUT.write_text(json.dumps({
-        "_readme": "corpus 的「钩子」：用户提到这些具体词时，该条经历直通放行（不靠语义相似）。\n"
-                   "由 scripts/build_corpus_keywords.py 生成；键是 statement_final 里的**序号**。\n"
-                   "⚠️ 只放**具体**的词（人名/物品/事件名），泛词会到处误触发。\n"
-                   "⚠️ 挂完要三步验证：entry_audit（能不能勾出）→ 回放 chat_log（真发生没）→ 看误报。",
+        "_readme": "corpus 的「钩子」：用户提到这些**具体**词时，**把该条递过去让 LLM 判一眼**。\n"
+                   "⚠️ 2026-09-29 起**不再直通注入** —— 门/钩子只决定候选，判定全交 LLM"
+                   "（见 retrieval._corpus_gate_pass 的注释）。\n"
+                   "由 scripts/build_corpus_keywords.py 生成（**合并式**：已有钩子的条目会跳过，"
+                   "所以手工补的不会被覆盖）；键是 statement_final 里的**序号**。\n"
+                   "⚠️ 只放**具体**的词（人名/物品/事件名），泛词会到处误触发（现在的表现是'灌爆候选池'）。\n"
+                   "⚠️ 挂完要三步验证：entry_audit（能不能勾出）→ 回放 chat_log（真发生没）→ 看误报。\n"
+                   "⚠️ **手工补的钩子记在这里**（生成器不会覆盖，但也没人知道你为什么加）。",
         "keywords": old,
     }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"\n✅ 已写 {OUT}（共 {len(old)} 条有钩子）")

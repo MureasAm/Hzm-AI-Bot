@@ -224,11 +224,13 @@ def check(case_id=None, cases_file=None, out_dir=None) -> int:
     out.mkdir(parents=True, exist_ok=True)
     core = _init()
 
-    lines, failed = [], 0
+    lines, failed, failed_cases = [], 0, 0
     for case in cases:
         res = _run_case(core, case)
         fails = _judge(case, res)
         failed += len(fails)
+        if fails:
+            failed_cases += 1
         flag = "FAIL" if fails else "PASS"
         header = f"[{flag}] {case['id']}  ({case.get('desc', '')})"
         print(header)
@@ -241,7 +243,9 @@ def check(case_id=None, cases_file=None, out_dir=None) -> int:
                  + [f"    ✗ {f}" for f in fails] + [""]
 
     print("=" * 46)
-    print(f"case 通过率: {len(cases) - int(bool(failed))}/{len(cases)}"
+    # ⚠️ 原来这里写的是 `len(cases) - int(bool(failed))` —— 任何一条失败都印成 (N-1)/N，
+    # 看起来像"只挂了一条"，其实可能挂了一片。现在按**失败用例数**算。
+    print(f"case 通过率: {len(cases) - failed_cases}/{len(cases)}"
           f"   失败判据数: {failed}")
     (out / "check.txt").write_text("\n".join(lines), encoding="utf-8")
     print(f"✅ 明细已保存: {out / 'check.txt'}")

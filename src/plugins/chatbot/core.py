@@ -18,6 +18,7 @@ from .constants import (
     CHAT_TEMPERATURE, CHAT_FREQUENCY_PENALTY, CHAT_MAX_TOKENS,
     MEMORY_EXTRACT_TEMPERATURE, MEMORY_EXTRACT_MAX_TOKENS,
     VOICE_SAMPLE_REPLY_TRIM_CHARS,
+    PROACTIVE_SAMPLE_TOP_N, PROACTIVE_SAMPLE_KEEP_ALL,
 )
 from .persona import (
     load_persona_rules, build_global_persona_context, load_schedule,
@@ -30,7 +31,7 @@ from .memory import (
 )
 from .rag import embed_query
 from .retrieval import (
-    retrieve_corpus, retrieve_corpus_candidates, retrieve_voice_samples,
+    retrieve_corpus_candidates, retrieve_voice_samples,
     load_phrase_groups, select_phrase_groups,
     retrieve_preferences, retrieve_core_stories, fuse_and_truncate, select_behavior_item,
 )
@@ -685,6 +686,102 @@ async def update_memory_task(user_id: str, user_msg: str, reply: str, user_memor
             traceback.print_exc()
 
 
+async def gather_retrieval(query_text: str, retrieval_query: str, history_text: str,
+                           deepseek_client, zhipu_client,
+                           is_user_msg: bool = True) -> dict:
+    """规范取素材：一段文本该配的东西一次捞齐（人设 + 行为/措辞 + 直播记忆 + 风格样本 + 偏好 + 核心记忆）。
+
+    **聊天和主动发言共用这一份**。抽出来的原因：主动发言原来是自己在
+    `proactive.py` 里另拼一套（system_prompt + 自己写的规则），**素材层整层没接**，
+    输出就成了"干说、没有生活感"。两处各拼一套必然漂，所以收成一个入口
+    （周表/感知/名词库那些"每轮都注入"的层在 build_message_list 里，这里管"按内容取的"）。
+
+    `is_user_msg`：要取素材的这段文本，**是不是"用户说的话"**？
+      · True（聊天，默认）：该走的都走——L3 按"用户这句想干嘛"判行为/措辞；
+        corpus 交 LLM 判"用户是不是在问她这段"。
+      · False（主动发言）：她发的动态/微博**不是用户说的话**，上面两步的前提不成立
+        （拿它去问"用户是不是在问她这段"，答案天然是否），所以跳过；其余按**话题**取的
+        路（风格样本/偏好/核心记忆）照旧，并按"她自己的陈述句"用不设阈值的取法。
+
+    ⚠️ 后续若要给主动发言也接直播记忆，得另写一个判据（"这条内容和她的哪段经历有关"），
+    不能直接复用 corpus_judge 的问法。
+    """
+    traits, styles, behaviors = load_persona_rules()
+    global_persona = build_global_persona_context(traits, styles)
+    result = {"global_persona": global_persona, "fused_items": [],
+              "preference_items": [], "core_stories": []}
+
+    # 纯图片消息（无文字）不做检索：让灰泽满直接评价图片，避免语料/行为劫持图片内容
+    # 纯表情消息（emoji/[表情：xx]）也不做语义检索：表情只表达情绪不表达话题，
+    # 扩充句会作为语气提示注入，但检索 memory 会跑偏（如😭命中"被夸"样本）
+    if not (query_text and not is_emoji_msg(query_text)):
+        return result
+    # 纯情绪消息（如'可惜🤭'，被 probe 补全成'用户发了个偷笑的表情'）无话题词，
+    # 语义检索会误命中无关样本（实测→peer_5'新衣服'）。对齐纯表情设计：跳过检索，
+    # 补全句只作语气提示（query_hint）注入。
+    if is_emotion_only_query(retrieval_query):
+        return result
+
+    try:
+        await _fill_retrieval(result, query_text, retrieval_query, history_text,
+                              deepseek_client, zhipu_client, behaviors, is_user_msg)
+    except Exception as e:
+        # **检索层炸了不能让她变哑巴**：素材按"没检索到"处理，回复/主动发言继续。
+        # 踩坑（2026-09-27）：智谱 embedding key 过期 → retrieve_voice_samples 抛
+        # TypeError('NoneType' object is not iterable)，而调用点没有兜底 →
+        # **整条回复任务死掉，她一个字都不回**（含群聊，看起来像"不接话"）。
+        # 兜底放这里=两条链路（聊天/主动发言）一起受保护。
+        print(f"⚠️ 检索层异常（按'没检索到'继续）: {e}")
+    return result
+
+
+async def _fill_retrieval(result: dict, query_text: str, retrieval_query: str, history_text: str,
+                          deepseek_client, zhipu_client, behaviors, is_user_msg: bool) -> None:
+    """`gather_retrieval` 的干活部分（单独一层，方便上面统一兜底）。结果写进 result。"""
+    behavior_items, phrase_items, corpus_items = [], [], []
+    # L3：归属用 LLM 判意图（不再用 embedding 猜——embedding 按句式聚团，
+    # 会把'灰泽满你唱歌好听'（夸）和'灰泽满你怎么又迟到'（质问）挤在一起误判）。
+    # **一次调用同时判"行为"（该怎么做）和"措辞"（该用哪些词）**——两者是同一个问题的两半。
+    # 判别词（敷衍/骗/鸽/迟到/黄桃/擦边…）退**兜底**位：L3 判不出来时才用
+    # （这才是它 docstring 里写的定位；以前被当成"省一次调用"的短路，
+    #   但实测 138 条真实消息里它 0 次命中，而短路会顺手跳过措辞分类）。
+    if is_user_msg:
+        phrase_groups = load_phrase_groups()
+        l3 = await classify_l3(deepseek_client, query_text, history_text, behaviors, phrase_groups)
+        if l3["behavior"]:
+            print(f"[行为] LLM 判定: {l3['behavior']}")
+        if l3["phrases"]:
+            print(f"[措辞] LLM 判定: {'、'.join(l3['phrases'])}")
+        behavior_item = select_behavior_item(query_text, l3["behavior"], behaviors)
+        behavior_items = [behavior_item] if behavior_item else []
+        phrase_items = select_phrase_groups(l3["phrases"], phrase_groups)
+
+    query_vector = await embed_query(zhipu_client, retrieval_query or query_text)
+    if is_user_msg:
+        # corpus：**全部交 LLM 判**。门/钩子只决定"把哪些条递过去看"，**不再有直通**。
+        # 为什么取消直通（2026-09-29）：实测词重叠这把尺子分不开"说的是谁"——
+        #   误报 n7「宝宝我明天要早起我先去睡了」（用户说**自己**）对 #271：ov=0.40
+        #   真阳性 co9「你不是以前有喜欢的男学霸吗」（问**她**）对 #42：ov=0.143
+        #   **误报的重叠度反而更高** → 阈值只是在拿一个换另一个（试过 0.5，co9/co10 一起红）。
+        # 判不出来一律不带（宁可漏不可错，见 corpus_judge 模块头）。
+        candidates = retrieve_corpus_candidates(retrieval_query or query_text, query_vector)
+        corpus_items = await judge_corpus(deepseek_client, query_text, candidates)
+
+    if is_user_msg:
+        sample_items = retrieve_voice_samples(retrieval_query or query_text, query_vector)
+    else:
+        # 主动发言：她自己的陈述句跟"弹幕问答"样本不同构，按阈值取会一条都进不来
+        # （见 constants.PROACTIVE_SAMPLE_TOP_N 的实测数据）→ 取 top-N 不设门槛
+        sample_items = retrieve_voice_samples(
+            retrieval_query or query_text, query_vector,
+            threshold=PROACTIVE_SAMPLE_KEEP_ALL, top_n=PROACTIVE_SAMPLE_TOP_N)
+
+    result["fused_items"] = fuse_and_truncate(corpus_items, sample_items, behavior_items, phrase_items)
+    # 第 5 路：偏好（关键词命中）／核心记忆（结晶）
+    result["preference_items"] = retrieve_preferences(retrieval_query or query_text)
+    result["core_stories"] = retrieve_core_stories(retrieval_query or query_text, query_vector)
+
+
 async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
                       batch_summary: str = "", is_group: bool = False) -> str:
     """处理一条用户消息，返回机器人回复。vision_desc 为图片描述；batch_summary 为批量归纳。
@@ -747,56 +844,14 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
                 asyncio.create_task(update_memory_task(user_id, user_msg, reply, card))
             return reply
 
-    # --- 🎭 人格规则 ---
-    traits, styles, behaviors = load_persona_rules()
-    global_persona = build_global_persona_context(traits, styles)
-
-    # --- 🔍 检索 + 融合（query 只算 1 次 embedding） ---
-    # 纯图片消息（无文字）不做检索：让灰泽满直接评价图片，避免语料/行为劫持图片内容
-    # 纯表情消息（emoji/[表情：xx]）也不做语义检索：表情只表达情绪不表达话题，
-    # 扩充句会作为语气提示注入，但检索 memory 会跑偏（如😭命中"被夸"样本）
-    if query_text and not is_emoji_msg(query_text):
-        # 纯情绪消息（如'可惜🤭'，被 probe 补全成'用户发了个偷笑的表情'）无话题词，
-        # 语义检索会误命中无关样本（实测→peer_5'新衣服'）。对齐纯表情设计：跳过检索，
-        # 补全句只作语气提示（query_hint）注入。
-        if is_emotion_only_query(retrieval_query):
-            fused_items = []
-            preference_items = []
-            core_stories = []
-        else:
-            # L3：归属用 LLM 判意图（不再用 embedding 猜——embedding 按句式聚团，
-            # 会把'灰泽满你唱歌好听'（夸）和'灰泽满你怎么又迟到'（质问）挤在一起误判）。
-            # **一次调用同时判"行为"（该怎么做）和"措辞"（该用哪些词）**——两者是同一个问题的两半。
-            # 判别词（敷衍/骗/鸽/迟到/黄桃/擦边…）退**兜底**位：L3 判不出来时才用
-            # （这才是它 docstring 里写的定位；以前被当成"省一次调用"的短路，
-            #   但实测 138 条真实消息里它 0 次命中，而短路会顺手跳过措辞分类）。
-            phrase_groups = load_phrase_groups()
-            l3 = await classify_l3(deepseek_client, query_text, history_text, behaviors, phrase_groups)
-            if l3["behavior"]:
-                print(f"[行为] LLM 判定: {l3['behavior']}")
-            if l3["phrases"]:
-                print(f"[措辞] LLM 判定: {'、'.join(l3['phrases'])}")
-            behavior_item = select_behavior_item(query_text, l3["behavior"], behaviors)
-            behavior_items = [behavior_item] if behavior_item else []
-            phrase_items = select_phrase_groups(l3["phrases"], phrase_groups)
-            query_vector = await embed_query(zhipu_client, retrieval_query or query_text)
-            # corpus 两段式：① 关键词门放行的照旧直通（高置信、零成本、行为不变）
-            #              ② 门没放行的取 top-N 交 LLM 判「用户是不是在问她这段」（填平"口语问句 vs
-            #                 第三人称陈述"的鸿沟——实测「你多高啊」只有 0.443，靠分数永远进不来）。
-            # 判不出来一律不带（宁可漏不可错，见 corpus_judge 模块头）。
-            corpus_items = retrieve_corpus(retrieval_query or query_text, query_vector)
-            seen_ids = {it.item_id for it in corpus_items}
-            candidates = [c for c in retrieve_corpus_candidates(retrieval_query or query_text, query_vector)
-                          if c.item_id not in seen_ids]
-            corpus_items += await judge_corpus(deepseek_client, query_text, candidates)
-            sample_items = retrieve_voice_samples(retrieval_query or query_text, query_vector)
-            fused_items = fuse_and_truncate(corpus_items, sample_items, behavior_items, phrase_items)
-            preference_items = retrieve_preferences(retrieval_query or query_text)  # 第 5 路：偏好（关键词命中）
-            core_stories = retrieve_core_stories(retrieval_query or query_text, query_vector)     # 核心记忆（结晶）
-    else:
-        fused_items = []
-        preference_items = []
-        core_stories = []
+    # --- 🎭 人格规则 + 🔍 检索融合（query 只算 1 次 embedding）---
+    # 素材统一从 gather_retrieval 取（主动发言也走同一个入口，别再各拼一套）
+    ctx = await gather_retrieval(query_text, retrieval_query, history_text,
+                                 deepseek_client, zhipu_client)
+    global_persona = ctx["global_persona"]
+    fused_items = ctx["fused_items"]
+    preference_items = ctx["preference_items"]
+    core_stories = ctx["core_stories"]
 
     # --- 🧠 确定性两路记忆 ---
     user_memory_card = {} if is_group else get_user_memory(user_id)

@@ -16,8 +16,9 @@ from src.plugins.chatbot import _extract_quote_text, QUOTE_TEXT_MAX
 BOT_ID = "10000"
 
 
-def _event(reply, user_id="20000"):
-    return SimpleNamespace(reply=reply, self_id=BOT_ID, get_user_id=lambda: user_id)
+def _event(reply, user_id="20000", raw_message=""):
+    return SimpleNamespace(reply=reply, self_id=BOT_ID, raw_message=raw_message,
+                           get_user_id=lambda: user_id)
 
 
 def _reply(text="", *, sender_id="10000", nickname="", image=False, face=None):
@@ -38,8 +39,49 @@ class TestNoQuote:
         assert _extract_quote_text(_event(None)) == ""
 
     def test_empty_quoted_message_returns_empty(self):
-        # 引用了一条空消息：没什么可指路的
+        # 引用了一条空消息（没有任何段）：没什么可指路的
         assert _extract_quote_text(_event(_reply(""))) == ""
+
+
+class TestQuoteNeverSilentlyDropped:
+    """引用的内容取不到时**不能静默丢掉**——她会答非所问。
+
+    实测（2026-09-29 群 901907410）：豆子引用一条消息问她"能不能把灰泽满调成这样"，
+    引用内容没进来，她只能回"调成哪样啊"。
+    """
+
+    def test_forward_card_quote_is_labelled(self):
+        # 引用一条**转发聊天记录卡片**：extract_plain_text 是空的，旧代码直接 return ""
+        msg = Message([MessageSegment("forward", {"id": "abc123"})])
+        out = _extract_quote_text(_event(
+            SimpleNamespace(message=msg, raw_message="[CQ:forward,id=abc123]",
+                            sender=SimpleNamespace(user_id="30000", nickname="豆子"))))
+        assert "转发聊天记录" in out and "豆子" in out
+
+    def test_voice_quote_is_labelled(self):
+        msg = Message([MessageSegment("record", {"file": "x.amr"})])
+        out = _extract_quote_text(_event(
+            SimpleNamespace(message=msg, raw_message="[CQ:record,file=x.amr]",
+                            sender=SimpleNamespace(user_id="30000", nickname=""))))
+        assert "语音" in out
+
+    def test_unresolved_reply_segment_is_flagged(self):
+        """有 reply 段、但适配器 get_msg 失败（event.reply 为空）→ 也不能没声了。"""
+        ev = _event(None, raw_message="[CQ:reply,id=123][CQ:at,qq=10000] 能不能调成这样")
+        out = _extract_quote_text(ev)
+        assert "引用" in out and "没取到" in out
+
+    def test_no_reply_segment_no_noise(self):
+        # 真没引用时别凭空冒出提示
+        assert _extract_quote_text(_event(None, raw_message="在吗")) == ""
+
+    def test_cq_codes_stripped_from_raw_fallback(self):
+        """兜底用 raw_message 时要剥掉 CQ 码——曾把 [CQ:record,file=…] 原样注进上下文。"""
+        msg = Message([MessageSegment("record", {"file": "91257a.amr"})])
+        out = _extract_quote_text(_event(
+            SimpleNamespace(message=msg, raw_message="[CQ:record,file=91257a.amr,url=https://x]",
+                            sender=SimpleNamespace(user_id="30000", nickname=""))))
+        assert "CQ:" not in out
 
 
 class TestWhoSaidIt:

@@ -7,10 +7,10 @@
     python scripts/run_tool.py --help
     python scripts/run_tool.py <工具> --help
 
-实际 17 个子命令，分五组：蒸馏(transcribe/clean-transcript/convert-to-chat/analyze-pace)
+实际 18 个子命令，分五组：蒸馏(transcribe/clean-transcript/convert-to-chat/analyze-pace)
 / 生成(generate-statements/generate-vectors/generate-persona)
 / 向量(precompute voice-samples|phrases|preferences|core-stories)
-/ 评测(regression/persona-eval/retrieval-eval)
+/ 评测(regression/persona-eval/retrieval-eval/problems)
 / 工具(bili-check/bili-login/vision-test/mine-phrases/mine-theme/extract-persona)。
 generate-statements 已冷落（现直接对 statement_final.json 向量化）；generate-persona 会覆盖人格需 --danger。
 旧脚本仍可直接运行（向后兼容），本入口为推荐用法。
@@ -445,6 +445,37 @@ def _run_retrieval_eval(args):
     asyncio.run(retrieval_eval.run(cases, verbose=args.verbose, only_id=args.case))
 
 
+# ==================== 子命令：problems ====================
+
+def _add_problems(sub):
+    p = sub.add_parser("problems", help="★问题驱动：看到的问题 → 回归用例（先摆出检索实况，再让你判）")
+    p.add_argument("--query", default="", help="只看这一条的检索实况（不写任何文件）")
+    p.add_argument("--from-spot", action="store_true", help="读 outputs/spot_check.md 里勾了「有」的条目")
+    p.add_argument("--from-note", action="store_true", help="读根目录 问题记录.md")
+    p.add_argument("--write", action="store_true", help="确认草案没问题后，正式写进用例文件")
+    p.add_argument("--audit", action="store_true",
+                   help="★复核已有用例（老用例是人手定的，可能有错）")
+    p.set_defaults(func=_run_problems)
+
+
+def _run_problems(args):
+    import asyncio
+    import problem_cases
+    # 把本层的参数转成 argv 传进去 —— 让 `run_tool.py problems` 和直接跑脚本走同一份逻辑
+    argv = []
+    if args.query:
+        argv += ["--query", args.query]
+    if args.from_spot:
+        argv.append("--from-spot")
+    if args.from_note:
+        argv.append("--from-note")
+    if args.write:
+        argv.append("--write")
+    if args.audit:
+        argv.append("--audit")
+    sys.exit(asyncio.run(problem_cases.main(argv)))
+
+
 # ==================== 主入口 ====================
 
 def build_parser() -> argparse.ArgumentParser:
@@ -455,7 +486,7 @@ def build_parser() -> argparse.ArgumentParser:
                     "  【蒸馏】transcribe · clean-transcript · convert-to-chat · analyze-pace · mine-phrases\n"
                     "  【生成】generate-statements · generate-vectors · generate-persona · extract-persona\n"
                     "  【向量】precompute\n"
-                    "  【评测】regression · persona-eval · retrieval-eval\n"
+                    "  【评测】regression · persona-eval · retrieval-eval · problems\n"
                     "  【工具】bili-check · bili-login · vision-test · mine-theme",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -477,6 +508,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_extract_persona(sub)
     _add_persona_eval(sub)
     _add_retrieval_eval(sub)
+    _add_problems(sub)
     return parser
 
 

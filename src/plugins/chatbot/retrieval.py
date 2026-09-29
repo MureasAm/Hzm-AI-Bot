@@ -25,7 +25,7 @@ from .constants import (
     PROJECT_ROOT,
     VOICE_SAMPLE_VECTOR_FILE, CORE_STORY_VECTOR_FILE,
     PHRASES_FILE, PREFERENCES_FILE, CORPUS_KEYWORDS_FILE,
-    RAG_THRESHOLD, CORPUS_TOP_N, CORPUS_CANDIDATE_N,
+    RAG_THRESHOLD, CORPUS_TOP_N, CORPUS_CANDIDATE_N, CORPUS_LEXICAL_EXTRA_N,
     CORPUS_KEYWORD_FLOOR, CORPUS_STRONG_KEYWORD,
     VOICE_SAMPLE_THRESHOLD, VOICE_SAMPLE_TOP_N, VOICE_SAMPLE_KEEPALIVE, VOICE_SAMPLE_MIN_K,
     VOICE_SAMPLE_KEEPALIVE_MIN_SIM,
@@ -111,7 +111,8 @@ def _corpus_keyword_overlap(query: str, statement: str) -> float:
     return len(qb & tb) / len(qb)
 
 
-# corpus 的「钩子」：用户提到这些具体词时直通放行（确定性命中，不靠语义相似）
+# corpus 的「钩子」：用户提到这些具体词时，**把该条递进候选池**（确定性命中，不靠语义相似）
+# ⚠️ 不是"直通注入"了——2026-09-29 起判定全交 LLM，钩子只负责"递过去看"。
 # 为什么需要：实测 322 条里有一大批**没有任何召回入口**——用户不可能说出一句话恰好把它们
 # 勾出来，于是永远不会被注入。语义检索解决不了这个：那是"像不像"，这里缺的是"**提没提到**"。
 # 数据：persona/world/corpus_keywords.json（键是 statement_final 的序号，由 build_corpus_keywords.py 生成）。
@@ -136,11 +137,20 @@ def load_corpus_keywords() -> dict:
 
 
 def _corpus_gate_pass(query: str, statement: str, sim: float) -> bool:
-    """corpus 放行判定：强关键词直接过；否则语义达标 + 有区分性词重叠才过。
+    """corpus 的「**这个条目值得让 LLM 看一眼**」判定（强关键词重叠 / 语义达标+区分性词重叠）。
 
-    ⚠️ **钩子不在这里**（曾经放这儿，是错误的）：钩子是子串匹配，**只能证明"提到了这个词"，
-    不能证明"在聊这件事"**——实测钩子词「感冒」撞上了反例「感冒吃什么药」。
-    正确分工：**钩子负责"进候选池"**（解决"没有入口"），**LLM 判负责"该不该带"**（解决"撞词"）。
+    ⚠️ **它曾经的含义是"直通注入"（放行就进提示词、跳过 LLM 判）。2026-09-29 已改为"只进候选池"。**
+
+    为什么必须改：实测**基于词重叠/词频的尺子分不开"说的是谁"**——
+      · 误报 n7「宝宝我明天要早起我先去睡了」（用户在说**自己**）对 #271：`ov=0.40`
+      · 真阳性 co9「你不是以前有喜欢的男学霸吗」（在问**她**）对 #42：`ov=0.143`
+    **误报的重叠度反而更高**，所以任何 FLOOR 都是在拿一个换另一个（试过 0.5：
+    n7 挡住了，co9/co10 一起被打回红）。区别在"**说的是谁**"——那是 LLM 判的事，
+    词重叠（甚至 bigram 文档频率）都拿不到这个信息。
+    → 杠杆只剩一个：**别让它绕过判定**。门/钩子现在只决定"递哪些条给 LLM 看"。
+
+    判据本身保持不变——**当筛选用它够好**：挑出来的确实都跟这句话沾边，
+    只是"沾边"不等于"在问她"。
     """
     ov = _corpus_keyword_overlap(query, statement)
     if ov >= CORPUS_STRONG_KEYWORD:
@@ -153,7 +163,14 @@ def _corpus_gate_pass(query: str, statement: str, sim: float) -> bool:
 def retrieve_corpus(user_query: str, query_vector,
                     threshold: float = RAG_THRESHOLD,
                     top_n: int = CORPUS_TOP_N) -> list:
-    """直播记忆检索。item_id 用序号，text=场景化陈述。带 V6 关键词门。"""
+    """直播记忆检索：只返回**门放行**的条目，item_id 用序号，text=场景化陈述。
+
+    ⚠️ **线上注入路径已经不用它了**（2026-09-29）。现在它是**诊断/实验用**：
+    `judge_experiment` 拿它当"关键词门、不加 LLM 判"的对照方法；
+    `coverage_check` / `threshold_scan` 用它量开火率与噪声地板。
+    线上注入走的是 **`retrieve_corpus_candidates` + `judge_corpus`**（见 `core.handle_chat`）——
+    门放行的条目也在这条路上，只是**照样要过 LLM 判**（理由见 `_corpus_gate_pass`）。
+    """
     db = load_vector_db()
     if not db or not user_query or not query_vector:
         return []
@@ -169,11 +186,15 @@ def retrieve_corpus(user_query: str, query_vector,
 
 def retrieve_corpus_candidates(user_query: str, query_vector,
                                top_n: int = CORPUS_CANDIDATE_N) -> list:
-    """corpus 的**候选召回**：不过阈值、不过关键词门，只按余弦取 top-N。
+    """corpus 的**候选召回**：给 LLM 判定用的输入（见 corpus_judge）。
 
-    给 LLM 判定用的输入（见 corpus_judge）。**为什么敢不过阈值**：
-    实测正例对正确那条的**排名**是对的（「你多高啊」→ 身高那条排第 1），只是分数（0.443）
-    低于噪声地板——**排序有用、阈值没用**。所以这里把打分交给排序，把"相关不相关"交给 LLM 判。
+    三部分拼起来（**顺序 = 相关性顺序**，判定池的大小则封顶）：
+      ① 按余弦取的 top-N —— **为什么敢不过阈值**：实测正例对正确那条的**排名**是对的
+         （「你多高啊」→ 身高那条排第 1），只是分数（0.443）低于噪声地板
+         —— **排序有用、阈值没用**。所以把打分交给排序，把"相关不相关"交给 LLM 判。
+      ② 钩子命中的（用户确实提到了那些词）
+      ③ 区分性词重叠 ≥ FLOOR 的（原来"门放行直通"那批，`CORPUS_LEXICAL_EXTRA_N` 封顶）
+    ⚠️ ②③ **只看词面、不看语义分**：要救的正是"语义分低但用户确实提到了"的那批。
     """
     db = load_vector_db()
     if not db or not user_query or not query_vector:
@@ -186,14 +207,27 @@ def retrieve_corpus_candidates(user_query: str, query_vector,
     top = scored[:top_n]
     # **钩子命中的也塞进候选**——它们语义分低（正是"没有入口"那批），
     # 但用户确实提到了里面的词，值得让 LLM 判一次"是不是在聊这件事"。
+    # 让 LLM 看一眼的还有两类"**语义分低、但词面上确实沾边**"的条目：
+    #   ① **钩子命中的** —— 用户确实提到了那些词（解决"没有入口"）
+    #   ② **区分性词重叠 ≥ FLOOR 的** —— 原来"门放行直通"的那批。门不再直通了，
+    #      它们必须走这里进候选池，否则"取消直通"就等于**丢召回**。
+    # ⚠️ 判据**只看词面，不看语义分**（所以不用 _corpus_gate_pass，那个还要求 sim≥0.48）：
+    #    要救的恰恰是语义分低的那批（co9 的 #42：ov=0.143、sim 不到 0.48）。
+    #    实测若沿用 _corpus_gate_pass，co9 的候选只有 7 条且不含 #42 → 照样红。
     keywords_map = load_corpus_keywords()
     got = {it.item_id for it in top}
-    for i, it in enumerate(db):
-        kws = keywords_map.get(str(i))
-        if kws and any(k in user_query for k in kws) and str(i) not in got:
-            top.append(RetrievalItem(source="corpus", item_id=str(i),
-                                     score=cosine_similarity(query_vector, it["vector"]),
-                                     text=it["text"]))
+    lexical = []
+    for it in scored:
+        if it.item_id in got:
+            continue
+        kws = keywords_map.get(it.item_id)
+        hooked = bool(kws and any(k in user_query for k in kws))
+        ov = _corpus_keyword_overlap(user_query, it.text)
+        if hooked or ov >= CORPUS_KEYWORD_FLOOR:
+            lexical.append((2.0 if hooked else ov, it))   # 钩子命中优先于"只是撞了几个词"
+    lexical.sort(key=lambda x: -x[0])
+    for _, it in lexical[:CORPUS_LEXICAL_EXTRA_N]:         # 封顶，别把判定池灌爆
+        top.append(it)
     return top
 
 

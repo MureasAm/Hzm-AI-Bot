@@ -14,7 +14,9 @@ from src.plugins.chatbot.retrieval import (
     fuse_and_truncate,
     load_voice_sample_vectors,
     _score_candidates,
+    _corpus_keyword_overlap,
 )
+from src.plugins.chatbot.constants import CORPUS_KEYWORD_FLOOR
 
 
 # ==================== RRF 融合 ====================
@@ -184,6 +186,57 @@ class TestCorpusKeywordGate:
         monkeypatch.setattr("src.plugins.chatbot.retrieval.load_vector_db",
                             lambda: [{"text": "A", "vector": [1, 0, 0, 0]}])
         assert retrieve_corpus("", [1, 0, 0, 0]) == []
+
+    # ---- 2026-09-29：取消"门放行直通"时补的（此前这个门只有上面几条）----
+
+    def test_误报的重叠度比真阳性还高_所以不能靠调阈值(self):
+        """⚠️ 把这条事实钉住，免得后人再试一次"提高 FLOOR 挡误报"。
+
+        两者只差"**说的是谁**"：误报是用户在说**自己**，真阳性是在问**她**。
+        词重叠（甚至 bigram 文档频率）都拿不到这个信息 —— 实测试过 0.5：
+        n7 挡住了，co9/co10 一起被打回红。
+        """
+        fp = _corpus_keyword_overlap(
+            "宝宝我明天要早起我先去睡了",
+            "粉丝问她明天会不会早起，她先表示可能性很低，又说其实很想早起")
+        tp = _corpus_keyword_overlap(
+            "你不是以前有喜欢的男学霸吗，你直播里说的",
+            "灰泽满聊到学生时代时，提到自己曾被女同学质问是不是女同，情急之下谎称喜欢一个男同学")
+        assert fp > tp, (
+            f"前提变了（误报 ov={fp:.3f} 不再 > 真阳性 ov={tp:.3f}）—— "
+            "若真是这样，那时再回来讨论阈值这个杠杆")
+
+    def test_真提到同一件事仍然放行(self):
+        ov = _corpus_keyword_overlap("你和女同学一起上学的事",
+                                     "灰泽满和女同学一起上学，幸亏有女同学陪")
+        assert ov >= CORPUS_KEYWORD_FLOOR
+
+    def test_语义分低但词面沾边的条目也要递给LLM(self, monkeypatch):
+        """co9 的救法，而且必须是**语义分低也照递**。
+
+        踩过的坑：第一版补位沿用了 `_corpus_gate_pass`（要求 sim≥0.48）——
+        而要救的恰恰是语义分低的那批（co9 的目标条 sim 不到 0.48），
+        结果实测"候选 7 条 → 保留 0 条"，照样红。**补位只能看词面。**
+        """
+        target = {"text": "灰泽满聊到学生时代时，提到自己曾被女同学质问是不是女同，"
+                          "情急之下谎称喜欢一个男同学",
+                  "vector": [0.1, 0.995, 0, 0]}           # sim≈0.1：**远低于** 0.48
+        filler = [{"text": f"无关的第{i}条", "vector": [1, 0, 0, 0]} for i in range(2)]
+        db = [target] + filler
+        monkeypatch.setattr("src.plugins.chatbot.retrieval.load_vector_db", lambda: db)
+        monkeypatch.setattr("src.plugins.chatbot.retrieval.load_corpus_keywords", lambda: {})
+        cands = retrieve_corpus_candidates("你不是以前有喜欢的男学霸吗，你直播里说的",
+                                          [1, 0, 0, 0], top_n=1)
+        assert "0" in [c.item_id for c in cands], "语义分低但词面沾边的条目没被递过去 → 等于丢召回"
+
+    def test_没沾边的条目不会被塞进候选池(self, monkeypatch):
+        # 反面：候选池别被灌爆（判定质量会被稀释 —— 判据对比实验量过"候选给多了反而更差"）
+        db = [{"text": "灰泽满提到明天要搬家", "vector": [1, 0, 0, 0]},
+              {"text": "完全无关的一条", "vector": [0.5, 0.86, 0, 0]}]
+        monkeypatch.setattr("src.plugins.chatbot.retrieval.load_vector_db", lambda: db)
+        monkeypatch.setattr("src.plugins.chatbot.retrieval.load_corpus_keywords", lambda: {})
+        cands = retrieve_corpus_candidates("今天天气不错啊", [1, 0, 0, 0], top_n=1)
+        assert [c.item_id for c in cands] == ["0"]
 
 
 class TestSelectPhraseGroups:

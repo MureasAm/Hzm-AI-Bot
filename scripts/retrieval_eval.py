@@ -8,11 +8,14 @@
     python scripts/retrieval_eval.py --case b1    # 只看某个 case
     python scripts/retrieval_eval.py --verbose    # 打印每个 source 命中的 top 项 + 分数
 
-标注集：data/retrieval_eval_cases.json
-每条 case = query + 对各路的期望：
-    "behavior"/"voice_sample"/"phrase"/"preference"/"core_story" → {"should": [ids]} 期望命中
-    "behavior"/"voice_sample" 等 → {"should_not_hit": true}    期望不命中（负例）
-    "corpus" → {"contains": [关键词]}                          期望 top-k 文本含关键词
+标注集：`scripts/retrieval_eval_cases.json`（**唯一的** query→期望 存储；
+原 `scripts/judge_labels.json` 已于 2026-09-29 并入，判据实验也从这份推导 want）
+每条 case = query + 对各路的期望，**四档从强到弱**（按"你能确定到什么程度"选）：
+    {"should": [ids]}        该路必须命中**具体某条**（最强）
+    {"contains": [关键词]}   该路 top-k 的文本要含关键词（corpus 用）
+    {"should_fire": true}    该路只要有东西就行、**不钉是哪条**（说不出是哪条时用这个）
+    {"should_not_hit": true} 该路必须**为空**（负例）
+⚠️ 别把"现在返回的东西"钉成 should —— 那是把现状当真理，是反过来的循环论证。
 
 不读线上记忆、只读向量缓存、不写任何数据文件。调两类模型：
   · 智谱 embedding（与线上同款）
@@ -87,6 +90,10 @@ def check_case(case: dict, got: dict) -> dict:
             hit = [i for i in cond["should"] if i in ids]
             ok = bool(hit)
             detail = f"期望{cond['should']} 命中{hit} 实际{ids[:3]}"
+        elif "should_fire" in cond:
+            # 该路只要有东西就行，不钉具体是哪条（说不出是哪条时的诚实写法）
+            ok = bool(items)
+            detail = f"期望该路非空 实际{len(items)}条"
         elif "should_not_hit" in cond:
             ok = len(items) == 0
             detail = f"期望不命中 实际{len(items)}条"
@@ -102,16 +109,14 @@ def check_case(case: dict, got: dict) -> dict:
 
 
 async def corpus_items(query: str, qv, ds_client) -> list:
-    """corpus 两段式（**必须与 core.handle_chat 保持一致**，否则评测测的不是线上的东西）：
-    ① 关键词门放行的直通 ② 门没放行的取 top-N 交 LLM 判。
-    没有 deepseek client 时退回只用①（等于旧行为，用于纯 embedding 环境）。
+    """corpus（**必须与 core.handle_chat 保持一致**，否则评测测的不是线上的东西）：
+    门/钩子只决定候选，**判定全部交 LLM**（2026-09-29 起取消"门放行直通"，
+    理由见 `retrieval._corpus_gate_pass`）。
+    没有 deepseek client 时退回"只看门"的旧行为（纯 embedding 环境用）。
     """
-    items = retrieval.retrieve_corpus(query, qv)
     if not ds_client:
-        return items
-    seen = {it.item_id for it in items}
-    cands = [c for c in retrieval.retrieve_corpus_candidates(query, qv) if c.item_id not in seen]
-    return items + await judge_corpus(ds_client, query, cands)
+        return retrieval.retrieve_corpus(query, qv)
+    return await judge_corpus(ds_client, query, retrieval.retrieve_corpus_candidates(query, qv))
 
 
 def _summarize_got(got: dict, top: int = 3) -> dict:
@@ -125,6 +130,59 @@ def _summarize_got(got: dict, top: int = 3) -> dict:
         else:
             out[source] = [(it.item_id, round(it.score, 3)) for it in items[:top]]
     return out
+
+
+# ==================== 一条消息走六路的实况（评测与问题驱动入口共用） ====================
+
+async def snapshot(query: str, client, ds_client, behaviors) -> tuple:
+    """跑一遍**线上真实的六路检索**，返回 `(got, l3)`；`got` 是 source -> 命中项。
+
+    ⚠️ 这里必须与 `core.handle_chat` 同一条路 —— 评测（本文件）和问题驱动入口
+    （`problem_cases.py`）都调它，所以"线上到底怎么检索"**只有这一处实现**。
+    别在别处再写一遍：自己写一遍"检索应该怎么做"，追的就不是线上跑的东西了（循环论证）。
+
+    `got` 为 None 表示 embedding 失败（调用方自己决定怎么报）。
+    """
+    qv = await embed_query(client, query)
+    if not qv:
+        return None, {"behavior": "", "phrases": []}
+    phrase_groups = retrieval.load_phrase_groups()
+    # L3：一次调用同时判行为 + 措辞（与 core.handle_chat 同一条路）
+    l3 = (await classify_l3(ds_client, query, "", behaviors, phrase_groups)
+          if ds_client else {"behavior": "", "phrases": []})
+    got = {
+        "corpus": await corpus_items(query, qv, ds_client),
+        "voice_sample": retrieval.retrieve_voice_samples(query, qv),
+        "phrase": retrieval.select_phrase_groups(l3["phrases"], phrase_groups),
+        "preference": retrieval.retrieve_preferences(query),
+        "core_story": retrieval.retrieve_core_stories(query, qv),
+        "behavior": [],
+    }
+    # 行为：LLM 判意图 → 判别词兜底（不再有 embedding 基线）
+    item = select_behavior_item(query, l3["behavior"], behaviors)
+    got["behavior"] = [item] if item else []
+    return got, l3
+
+
+def format_snapshot(got: dict, l3: dict, full_text: bool = False) -> list:
+    """把实况渲染成人读的行（给 `--verbose` 和问题驱动入口共用）。"""
+    lines = []
+    if l3.get("behavior"):
+        lines.append(f"行为 L3 判定：{l3['behavior']}")
+    for source, items in got.items():
+        if not items:
+            lines.append(f"{source:>12}: （空）")
+        elif source in ("preference", "core_story"):
+            lines.append(f"{source:>12}: " + "、".join(
+                f"{i.get('id','')}({i.get('score',0):.3f})" for i in items[:3]))
+        elif source == "corpus":
+            lines.append(f"{source:>12}: " + "、".join(
+                f"#{it.item_id}({it.score:.3f})“{(it.text or '')[:40 if not full_text else 200]}”"
+                for it in items[:3]))
+        else:
+            lines.append(f"{source:>12}: " + "、".join(
+                f"{it.item_id}({it.score:.3f})“{(getattr(it,'text','') or '')[:40]}”" for it in items[:3]))
+    return lines
 
 
 # ==================== 主流程 ====================
@@ -145,25 +203,10 @@ async def run(cases, verbose: bool, only_id: str = None):
         if only_id and only_id not in case["id"]:
             continue
         query = case["query"]
-        qv = await embed_query(client, query)
-        if not qv:
+        got, l3 = await snapshot(query, client, ds_client, behaviors)
+        if got is None:
             print(f"[SKIP] {case['id']}  {query}  （embedding 失败）")
             continue
-        # L3：一次调用同时判行为 + 措辞（**与 core.handle_chat 同一条路**）
-        phrase_groups = retrieval.load_phrase_groups()
-        l3 = (await classify_l3(ds_client, query, "", behaviors, phrase_groups)
-              if ds_client else {"behavior": "", "phrases": []})
-        got = {
-            "corpus": await corpus_items(query, qv, ds_client),
-            "voice_sample": retrieval.retrieve_voice_samples(query, qv),
-            "phrase": retrieval.select_phrase_groups(l3["phrases"], phrase_groups),
-            "preference": retrieval.retrieve_preferences(query),
-            "core_story": retrieval.retrieve_core_stories(query, qv),
-            "behavior": [],
-        }
-        # 行为：LLM 判意图 → 判别词兜底（不再有 embedding 基线）
-        item = select_behavior_item(query, l3["behavior"], behaviors)
-        got["behavior"] = [item] if item else []
         behavior_intent = l3["behavior"]
 
         verdict = check_case(case, got)

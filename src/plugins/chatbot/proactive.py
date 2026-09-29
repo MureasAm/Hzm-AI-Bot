@@ -5,9 +5,16 @@
 「灰泽满刚刚发了动态哦！\n\n动态内容：xxx\n\n<空间链接>」。
 那一眼就是机器播报，不像她。人不会这样跟朋友说话，她会随口提一句。
 
-**和被动回复的区别**：没有"用户消息"。所以不走 `build_message_list` 那套十层注入，
-只用 system_prompt + 性格基底 + **按这条动态检索到的风格样本**（检索仍然有用：
-动态讲熬夜，就该捞她讲熬夜时怎么说话）。
+**素材走主链路**：跟聊天**共用** `core.gather_retrieval` + `core.build_message_list`——
+人设骨架 / 性格基底 / 语言风格 / 周表 / 当前时间（含直播状态、天气）/ 名词库 /
+风格样本 / 偏好 / 核心记忆，全部按这条动态检索一遍。
+（原来这里是自己拼的一套：system_prompt + 自己写的规则 + 几条样本——**素材层整层没接**，
+输出干巴、没有生活感；用户 2026-09-29 指出"只在一个代码里做了提示词和调用"，就是这个。）
+
+**跟聊天唯一的区别**：没有"用户消息"，这条动态是**她自己发的**。所以
+`gather_retrieval(..., is_user_msg=False)`：跳过两个前提不成立的层
+（L3 行为/措辞 = "用户这句想干嘛"；corpus 判 = "用户是不是在问她这段"），
+其余照旧；风格样本按"她自己的陈述句"取（不设阈值，见 constants）。
 
 **两道闸，都只拦"这一句"，原文通知照发**（信息不丢）：
   ① `content_is_clear()`（**开口前**先判断）：内容本身缺信息、单独看不知道在说什么 → 不发。
@@ -27,13 +34,9 @@ import os
 import re
 from pathlib import Path
 
-from .constants import (
-    SYSTEM_PROMPT_FILE, THINKING_DISABLED,
-)
+from .constants import THINKING_DISABLED
 from .config import _get_clients, _get_model_name, extract_chat_content, parse_json_block
-from .persona import load_persona_rules, build_global_persona_context
-from .rag import embed_query
-from .retrieval import retrieve_voice_samples
+from .core import gather_retrieval, build_message_list
 from .vision import describe_image_bytes
 
 # 主动发言的长度上限：私聊里蹦出一大段很出戏
@@ -66,11 +69,11 @@ PROACTIVE_PROMPT = """你刚在{source}发了下面这条内容。
 
 要求：
 - **就一句话，短**，像 QQ 私聊随手打的，不是发公告
-- **不要复述"我发了什么 / 我刚说了什么"**：没有"灰泽满刚……"这种句式——
+- **不要复述"灰泽满刚才发了什么/说了什么"**：没有"灰泽满刚……"这种句式——
   你就是正在说这句话的人，不是转述者
-- 自称用"我"最自然；用"灰泽满/小满"也行，但那是**自称**（"灰泽满睡不着"），
-  不是"灰泽满刚做了某某"这种向别人转述
-- **绝对别像播报**：不要"我发了动态""快去看看"这种，就像跟朋友顺口提一句
+- **绝对别像播报**：不要"灰泽满发了动态""快去看看"这种，就像跟朋友顺口提一句
+  （**自称怎么写由人设决定**：system_prompt 的【自我称呼】+ 上面的说话片段说了算，
+   这里**不要额外规定自称**——曾在此写"自称用'我'最自然"，等于把人格文件覆盖了）
 - ⚠️ **但"随口"指的是口气，不是少说信息。** 这条内容里对绿冻**有用的东西**
   （什么时间、去哪儿、做什么、有什么看点）**必须说出来**——时间和那件事本身一个字都不能省。
   踩坑：曾把"明天来玩这个音游"缩成"明天音游有翻唱"，**粉丝该被邀请的那件事没了**。
@@ -80,13 +83,12 @@ PROACTIVE_PROMPT = """你刚在{source}发了下面这条内容。
   反例（错的）：内容「写完了…终于写完了…」→「**写稿**写得快不行了」
   （"稿"内容里根本没有；而且「终于写完了」是**已经写完**，不该说成"快不行了"）
   正例：「终于写完了，人快没了…晚上来打游戏回回血」
-- ⚠️ **「⬇️ / 这个 / 图片里那个」指的是配图**，不是正文里另外那个名字。
-  配图信息看不清、或者这条没给配图，就**别提它**——**绝对不许拿正文里另一个名字去填**。
+- ⚠️ **别把内容里两件事揉成一件**：「⬇️ / 这个 / 图片里那个」指的是**配图**，
+  不是正文里另外那个名字——拿它去填就会把两件事说混。
   反例（错的）：内容「会到这个⬇️里面鲨会儿人」+ 正文另有"20:00多来玩BanG Dream"
   →「晚上八点多来玩BanG Dream! OurNotes嘛，让灰泽满也鲨会儿人」
   （把**两件事揉成一件**，而且鲨人的根本不是 BanG Dream）
-- ⚠️ **内容里是几件事就说几件，别揉成一个**；揉不清就**只挑一件说**
-  （优先时间/邀请——那件对绿冻最有用）。
+  **配图看不清、或这条没配图，就只挑一件说**（优先时间/邀请——那件对绿冻最有用）。
 - 不要贴链接、不要提"B站/微博/动态"这些平台词
 - 可以有态度、可以自嘲、可以吐槽，别干巴巴复述内容
 - 如果这条**不适合**拿来主动找人聊天（纯转发、抽奖、广告、只是打卡签到、
@@ -190,6 +192,10 @@ async def compose_proactive(content: str, source: str = "B站",
                             image_paths: list | None = None) -> str | None:
     """把一条动态/微博转成她会主动说的私聊消息；不适合主动说返回 None。
 
+    **素材走主链路**：`gather_retrieval`（人设 + 按这条内容检索的素材）+
+    `build_message_list`（周表 / 感知 / 名词库 / 样本 / 偏好 / 核心记忆 一次到位），
+    跟聊天共用同一份人格数据。
+
     失败（异常/空）也返回 None —— 由调用方决定退回通知模板还是不发。
     """
     text = (content or "").strip()
@@ -216,30 +222,21 @@ async def compose_proactive(content: str, source: str = "B站",
         if image_desc:
             image_block = (f"\n【这条的配图】{image_desc}"
                            f"\n（她内容里写「⬇️」「这个」「图片里那个」时，指的就是这张图）")
-        system = SYSTEM_PROMPT_FILE.read_text(encoding="utf-8")
-        traits, styles, _ = load_persona_rules()
-        persona = build_global_persona_context(traits, styles)
-        if persona:
-            system += "\n\n" + persona
+        # 素材：跟聊天同一个入口取。
+        # `is_user_msg=False`——这条动态是**她自己发的**，不是"用户说的话"，
+        # 所以跳过两个前提不成立的层（L3 行为/措辞、corpus 的"用户是不是在问她"判），
+        # 风格样本也按"她自己的陈述句"取（不设阈值）。
+        ctx = await gather_retrieval(text, text, "", deepseek_client, zhipu_client,
+                                     is_user_msg=False)
 
-        messages = [{"role": "system", "content": system}]
-
-        # 按这条动态检索风格样本：动态讲熬夜，就捞她讲熬夜时怎么说话。
-        # 检索失败不影响主流程（宁可不给样本，也别因为检索挂了就不发）。
-        try:
-            vector = await embed_query(zhipu_client, text)
-            for s in retrieve_voice_samples(text, vector)[:2]:
-                u, r = s.extra.get("user", ""), s.extra.get("reply", "")
-                if u and r:
-                    messages.append({"role": "user", "content": u})
-                    messages.append({"role": "assistant",
-                                     "content": r[:PROACTIVE_REPLY_TRIM]})
-        except Exception as e:
-            print(f"⚠️ 主动发言：风格样本检索失败（照常生成）: {e}")
-
-        messages.append({"role": "user",
-                         "content": PROACTIVE_PROMPT.format(
-                             source=source, content=text, image_block=image_block)})
+        # 组装：跟聊天同一套（周表 / 当前时间+直播状态 / 名词库 / 风格样本 / 偏好 / 核心记忆…）。
+        # 记忆两路传空——主动发言是**广播给所有好友**的，没有"这个用户"这回事。
+        messages = build_message_list(
+            PROACTIVE_PROMPT.format(source=source, content=text, image_block=image_block),
+            ctx["global_persona"], ctx["fused_items"], "", [],
+            preference_items=ctx["preference_items"],
+            core_stories=ctx["core_stories"],
+        )
 
         resp = await deepseek_client.chat.completions.create(
             model=_get_model_name(),
