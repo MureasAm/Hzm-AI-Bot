@@ -17,7 +17,7 @@ NoneBot2 + OneBot v11(NapCat) 的"灰泽满"人格聊天机器人。核心是**�
 
 ## 怎么跑 / 怎么测
 - 启动：NapCat 自己开 → `env\python.exe api_v2.py`(GPT-SoVITS,端口9880) → `python bot.py`（或双击 `启动.bat`）。**改代码/数据后要重启 bot**（有进程内缓存）。
-- 测试：`.venv\Scripts\python.exe -m pytest -q`（**765 个**，全绿才算完；数字变了说明你增删了用例，顺手改这里）。
+- 测试：`.venv\Scripts\python.exe -m pytest -q`（**779 个**，全绿才算完；数字变了说明你增删了用例，顺手改这里）。
 - 改**检索/判据/素材**后必跑这两个（unit test 测不出"检索该不该命中"）：
   `run_tool.py retrieval-eval`（query→各路期望，**改语料会把候选排名洗牌，改完必须重跑**）、
   `run_tool.py regression --check`（真实翻车固化成的确定性判据）。
@@ -32,12 +32,12 @@ NoneBot2 + OneBot v11(NapCat) 的"灰泽满"人格聊天机器人。核心是**�
 
 ## 文件地图（详见 docs/FILE_MAP.md）
 - **一条消息的链路**（改之前先认路，跳过这步最容易改错地方）：
-  `__init__._handle_chat` → `chat_window.enqueue` → 读秒窗口 → `_flush`(读图+归纳) → `core.handle_chat` → `build_message_list`(18 段注入) → `generate_reply` → `clean_reply` → `split_reply` → `_send`
+  `__init__._handle_chat` → `chat_window.enqueue` → 读秒窗口 → `_flush`(读图+归纳) → `core.handle_chat` → `build_message_list`(17 段注入) → `generate_reply` → `clean_reply` → `split_reply` → `_send`
   （语音优先：`clean_reply` 后先 `should_voice`→`send_voice`，成功就不走文字分段）
 - 运行时核心：`src/plugins/chatbot/`（core 主循环 / chat_window 读秒窗口 / retrieval 六路检索+RRF / reply_style 纯函数 / routing 梗库+行为分类 / persona 加载 / memory|session_memory|group_memory 记忆 / voice 语音 / bili_bridge|weibo_bridge 联动 / context_probe 感知 / vision 看图 / rag 向量 / config 客户端 / constants 常量★）
 - 人格数据：`persona/`（core/behavior/speech/world，源文件+向量）
 - 长期记忆：根 `memory_manager.py`
-- 离线工具：`scripts/run_tool.py <工具>`；**52 个脚本各干什么见 `docs/脚本清单.md`**
+- 离线工具：`scripts/run_tool.py <工具>`；**55 个脚本各干什么见 `docs/脚本清单.md`**
 
 ## 文档指针（按需懒读，别开头全灌）
 - **`docs/` —— 全部说明文档都在这里面，索引是 `docs/README.md`**（按"你现在要干什么"找）
@@ -45,7 +45,7 @@ NoneBot2 + OneBot v11(NapCat) 的"灰泽满"人格聊天机器人。核心是**�
 - `docs/FILE_MAP.md` —— 每个文件干什么 ★ 想知道"该改哪"先看这个
 - `docs/注入链路.md` —— 素材层 + 注入层的完整解剖（**现在是什么样**）
 - `docs/注入设计原理.md` —— 判据怎么选、素材该长什么形式、每改一次是变好还是变坏（**带实验数据**）
-- `docs/脚本清单.md` —— 52 个脚本各干什么；**改链路先看"实验/诊断工具"那节**
+- `docs/脚本清单.md` —— 55 个脚本各干什么；**改链路先看"实验/诊断工具"那节**
 - `docs/待办清单.md` —— 还没做的问题 + "已判定不是问题、别再改回去"的登记
 - `docs/版本史.md` —— V1.0→V7.8 每个版本改了什么、为什么、踩过哪些坑
 - `docs/抽查清单.md` —— 抽查她回复时看什么（**推荐用 `scripts/spot_check.py` 自动挑**）

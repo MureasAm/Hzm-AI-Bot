@@ -16,8 +16,8 @@
 | `启动.bat` / `更新周表.bat` | 一键开两个窗口 / 拖一张周表图就识图更新 | ✅ |
 | `src/` | **跑起来要用的代码**（`src/plugins/chatbot/` 是核心，见第二、三节） | ✅ |
 | `persona/` | **她是谁/懂什么/怎么说**——所有素材（见第三节，**你会改的主要是这里**） | ✅ |
-| `scripts/` | **离线工具**：蒸馏素材、跑评测、做实验（52 个，见第四节 + `脚本清单.md`） | ✅ |
-| `tests/` | 单元测试（765 个，`pytest -q`） | ✅ |
+| `scripts/` | **离线工具**：蒸馏素材、跑评测、做实验（55 个，见第四节 + `脚本清单.md`） | ✅ |
+| `tests/` | 单元测试（782 个，`pytest -q`） | ✅ |
 | `docs/` | 全部说明文档，索引在 `docs/README.md` | ✅ |
 | `assets/` | 素材文件：`audio/` 原始音频、`transcripts/` 转写、`stickers/` 表情包、`voice_refs/` 语音参考、`emotes/` `img/` | ⚠️ 部分（`audio/` 不入库，太大） |
 | `bin/` | ffmpeg 三件套（音频处理用，**不是我们写的**） | ✅ |
@@ -158,7 +158,7 @@
 | 加了新表情包 | 丢进 `assets/stickers/` 再跑 `label_stickers.py` | `persona/media/stickers.json` |
 | 更新周表 | 把图拖到根目录 `更新周表.bat` | `persona/world/schedule.json` |
 | 检查 B站/微博能不能连上 | `run_tool.py bili-check` | 打印 |
-| 想知道**测试**过不过 | `.venv\Scripts\python.exe -m pytest -q` | 打印（765 个） |
+| 想知道**测试**过不过 | `.venv\Scripts\python.exe -m pytest -q` | 打印（782 个） |
 
 ### 4.2 ⭐ 评测/标注在哪、怎么用（**新合并的那份**）
 
@@ -171,7 +171,7 @@
 | 问题驱动入口 | `scripts/problem_cases.py` | `run_tool.py problems`——看到问题 → 摆出检索实况 → 变成用例。**怎么用看 `docs/问题驱动.md`**（含 `--audit` 复核老用例） |
 | **风格层标注**（第三份，2026-09-30） | `scripts/style_eval_cases.json` | **"像不像她"的判据**（原来没有这一格）。你只碰根目录 `风格标注.md`（不入库），出题/回读/读数走 `run_tool.py style-annotate`。**看 `docs/交接文档.md` 负二节** |
 
-## 五、测试（`tests/`，765 个）
+## 五、测试（`tests/`，782 个）
 `conftest.py` 初始化 NoneBot 并加载插件。核心逻辑（reply_style/retrieval/session/voice/chat_window/bili/group_memory/weibo/short_memory 纯函数）覆盖较全；weibo 推送、config、`__init__` 心跳、watchdog/notifier 覆盖少。
 
 ## 六、产物 / 状态（**全部不入库**）
