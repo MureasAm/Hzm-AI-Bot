@@ -123,7 +123,7 @@ class TestNewPostPush:
         _patch(monkeypatch, m, post_id="p1")
         pushed = []
 
-        async def fake_push(bot, content, image_paths=None):
+        async def fake_push(bot, content, image_paths=None, record=True):
             pushed.append(content)
 
         monkeypatch.setattr(m, "_push", fake_push)
@@ -142,7 +142,7 @@ class TestNewPostPush:
         _patch(monkeypatch, m, post_id="p1")
         pushed = []
 
-        async def fake_push(bot, content, image_paths=None):
+        async def fake_push(bot, content, image_paths=None, record=True):
             pushed.append(content)
 
         monkeypatch.setattr(m, "_push", fake_push)
@@ -154,7 +154,7 @@ class TestNewPostPush:
         _patch(monkeypatch, m, post_id="")
         pushed = []
 
-        async def fake_push(bot, content, image_paths=None):
+        async def fake_push(bot, content, image_paths=None, record=True):
             pushed.append(content)
 
         monkeypatch.setattr(m, "_push", fake_push)
@@ -337,7 +337,7 @@ class TestPrime:
         _patch(monkeypatch, m, post_id="p1")
         pushed = []
 
-        async def fake_push(bot, content, image_paths=None):
+        async def fake_push(bot, content, image_paths=None, record=True):
             pushed.append(content)
 
         monkeypatch.setattr(m, "_push", fake_push)
@@ -352,7 +352,7 @@ class TestPrime:
         _patch(monkeypatch, m, post_id="停机期间发的")
         pushed = []
 
-        async def fake_push(bot, content, image_paths=None):
+        async def fake_push(bot, content, image_paths=None, record=True):
             pushed.append(content)
 
         monkeypatch.setattr(m, "_push", fake_push)
@@ -364,7 +364,7 @@ class TestPrime:
         _patch(monkeypatch, m, post_id="p2")
         pushed = []
 
-        async def fake_push(bot, content, image_paths=None):
+        async def fake_push(bot, content, image_paths=None, record=True):
             pushed.append(content)
 
         monkeypatch.setattr(m, "_push", fake_push)
@@ -510,3 +510,21 @@ class TestErrorThrottle:
         bot = FakeBot()
         await m._check_posts(bot)   # 不抛
         assert bot.sent == []
+
+
+class TestPushRecordsIntoMemory:
+    """同 B站：推出去的话要写进那个好友的短期记忆，否则他回她时她不知道在说什么。"""
+
+    @pytest.fixture(autouse=True)
+    def _spy(self, monkeypatch):
+        self.recorded = []
+        monkeypatch.setattr(wb, "append_bot_message",
+                            lambda uid, text: self.recorded.append((uid, text)))
+
+    async def test_success_records_per_friend(self, monkeypatch):
+        m = _make_monitor(uid="1", state={})
+        monkeypatch.setattr(wb, "get_notify_whitelist", lambda: [])
+        await m._push(FakeBot(friends=("111", "222")),
+                      "灰泽满刚刚发了微博哦！\n\n微博内容：测试内容")
+        assert self.recorded == [("111", "（刚发了条微博：测试内容）"),
+                                 ("222", "（刚发了条微博：测试内容）")]

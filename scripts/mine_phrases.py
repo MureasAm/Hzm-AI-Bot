@@ -20,9 +20,10 @@ import sys
 from pathlib import Path
 from openai import AsyncOpenAI
 
+import _common
 from analyze_pace import get_deepseek_key
 
-MODEL = "deepseek-v4-flash"
+MODEL = "deepseek-flash"
 BASE_URL = "https://api.deepseek.com/v1"
 BATCH_SIZE = 60  # 每批话轮数
 
@@ -94,7 +95,7 @@ async def mine_batch(client, batch_text: str) -> list:
     """调 DeepSeek 挖掘一批话轮的措辞组。失败返回空。"""
     try:
         resp = await client.chat.completions.create(
-            model=MODEL,
+            model=_common.get_model_name(MODEL),
             messages=[{"role": "user", "content": MINE_PROMPT.format(text=batch_text)}],
             temperature=0.2,
             max_tokens=2000,
@@ -147,7 +148,7 @@ async def run(input_paths, output_file, batch_size=BATCH_SIZE):
         print("❌ 没有加载到话轮")
         return
     print(f"📄 加载 {len(turns)} 个话轮，分批挖掘（每批 {batch_size}）...")
-    client = AsyncOpenAI(api_key=key, base_url=BASE_URL)
+    client = AsyncOpenAI(api_key=key, base_url=_common.get_openai_base_url(BASE_URL))
 
     all_groups = []
     n_batches = (len(turns) + batch_size - 1) // batch_size
@@ -159,6 +160,8 @@ async def run(input_paths, output_file, batch_size=BATCH_SIZE):
         print(f"  [批次 {i // batch_size + 1}/{n_batches}] 挖到 {len(groups)} 组")
 
     merged = merge_groups(all_groups)
+    for i, group in enumerate(merged, 1):
+        group.setdefault("id", f"phrase_{i:03d}")
     out = {
         "source_files": [str(p) for p in input_paths],
         "total_turns": len(turns),
@@ -170,7 +173,7 @@ async def run(input_paths, output_file, batch_size=BATCH_SIZE):
     print(f"   共 {len(merged)} 组措辞指纹")
     for g in merged:
         print(f"   - {g['meaning']}：{g['phrases'][:4]}")
-    print("   💡 下一步：人工审批后并入 persona/speech/phrases.json，再重跑 precompute phrases")
+    print("   💡 下一步：人工审批后并入 persona/speech/phrases.json；phrases 走 L3 分类，不需要重算向量")
 
 
 async def main():

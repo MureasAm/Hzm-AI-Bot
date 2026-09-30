@@ -7,12 +7,13 @@
     python scripts/run_tool.py --help
     python scripts/run_tool.py <工具> --help
 
-实际 19 个子命令，分五组：蒸馏(transcribe/clean-transcript/convert-to-chat/analyze-pace)
+实际 20 个子命令，分六组：流水线(persona-pipeline)
+/ 蒸馏(transcribe/clean-transcript/convert-to-chat/analyze-pace)
 / 生成(generate-statements/generate-vectors/generate-persona)
-/ 向量(precompute voice-samples|phrases|preferences|core-stories)
+/ 向量(precompute voice-samples|core-stories)
 / 评测(regression/persona-eval/retrieval-eval/style-annotate/problems)
 / 工具(bili-check/bili-login/vision-test/mine-phrases/mine-theme/extract-persona)。
-generate-statements 已冷落（现直接对 statement_final.json 向量化）；generate-persona 会覆盖人格需 --danger。
+generate-statements 作为 persona-pipeline corpus 的内部步骤保留；generate-persona 会覆盖人格需 --danger。
 旧脚本仍可直接运行（向后兼容），本入口为推荐用法。
 """
 import argparse
@@ -121,6 +122,47 @@ def _run_convert_to_chat(args):
     _common.report_saved(out)
 
 
+# ==================== 子命令：persona-pipeline ====================
+
+def _add_persona_pipeline(sub):
+    p = sub.add_parser(
+        "persona-pipeline",
+        help="四条安全流水线：清洗素材 → corpus/voice/phrases/behaviors 候选 → 审批写回",
+    )
+    p.add_argument("target", choices=["corpus", "voice-samples", "phrases", "behaviors"])
+    p.add_argument("-i", "--input", nargs="+", action="append",
+                   help="清洗后的 JSON；可传多个（-i a b 或 -i a -i b）")
+    p.add_argument("--audio", help="原始音频；内部依次执行 transcribe + clean")
+    p.add_argument("--session", default=None, help="本次素材标签，用于输出目录和新 id")
+    p.add_argument("--apply", action="store_true",
+                   help="审批后写回 persona；缺省只生成候选")
+    p.add_argument("--refresh", action="store_true",
+                   help="配合 --apply：不用已有候选，重新生成")
+    p.add_argument("--no-vectorize", action="store_true",
+                   help="corpus/voice 写回后不重建向量")
+    p.add_argument("--no-hooks", action="store_true",
+                   help="corpus 写回后不自动补 corpus_keywords 钩子")
+    p.add_argument("--sanitize-existing", action="store_true",
+                   help="corpus：审计并改写已有 statement_final 的自指代词")
+    p.add_argument("--from-index", type=int, default=0,
+                   help="配合 --sanitize-existing：只处理该索引及之后的条目")
+    p.add_argument("--batch-size", type=int, default=0)
+    p.add_argument("--turn-gap", type=float, default=2.0)
+    p.add_argument("--device", choices=["cuda", "cpu"], default="cuda")
+    p.add_argument("--whisper-model", default="medium")
+    p.add_argument("--whisper-python", default=None,
+                   help="faster-whisper 所在解释器；例如 D:\\whisper_env\\Scripts\\python.exe")
+    p.set_defaults(func=_run_persona_pipeline)
+
+
+def _run_persona_pipeline(args):
+    import asyncio
+    import persona_pipeline
+    if args.input:
+        args.input = _flatten_inputs(args.input)
+    asyncio.run(persona_pipeline.run(args))
+
+
 # ==================== 子命令：analyze-pace ====================
 
 def _add_analyze_pace(sub):
@@ -164,6 +206,8 @@ def _add_generate_vectors(sub):
                    help="场景化陈述 JSON（缺省 persona/world/statement_final.json；不要依赖内置 RAW_CORPUS，那是过期副本）")
     p.add_argument("-o", "--output", default=None,
                    help="输出路径（默认 persona/world/corpus_vectors.json，机器人读取）")
+    p.add_argument("--only-index", default="",
+                   help="只重算这些 statement 索引，如 --only-index 335,410,420")
     p.set_defaults(func=_run_generate_vectors)
 
 
@@ -172,7 +216,12 @@ def _run_generate_vectors(args):
     import generate_vectors
     out = Path(args.output) if args.output else _common.VECTOR_FILE
     before = out.stat().st_mtime if out.exists() else None
-    asyncio.run(generate_vectors.run(input_path=args.input, output_file=str(out)))
+    only_indices = [
+        int(x.strip()) for x in args.only_index.split(",") if x.strip()
+    ] if args.only_index else None
+    asyncio.run(generate_vectors.run(
+        input_path=args.input, output_file=str(out), only_indices=only_indices,
+    ))
     # ⚠️ 别无条件报"已保存"：generate_vectors 失败（如 embedding 余额不足）时**直接 return 不写文件**，
     # 旧版本这里照样打印"✅ 输出已保存"，会让人以为跑成功了。用 mtime 判到底写没写。
     after = out.stat().st_mtime if out.exists() else None
@@ -217,21 +266,19 @@ def _run_generate_persona(args):
 # 类型 → (模块名, 默认输入, 默认输出)
 _PRECOMPUTE_TARGETS = {
     "voice-samples": ("precompute_voice_sample_vectors", _common.VOICE_SAMPLES_FILE, _common.VOICE_SAMPLE_VECTOR_FILE),
-    "phrases":       ("precompute_phrase_vectors", _common.PHRASES_FILE, _common.PHRASE_VECTOR_FILE),
-    "preferences":   ("precompute_preference_vectors", _common.PREFERENCES_FILE, _common.PREFERENCE_VECTOR_FILE),
     "core-stories":  ("precompute_core_stories", _common.CORE_STORIES_FILE, _common.CORE_STORY_VECTOR_FILE),
 }
 
 
 def _add_precompute(sub):
-    p = sub.add_parser("precompute", help="预计算向量缓存（trigger / 声音样本 / 措辞）")
+    p = sub.add_parser("precompute", help="预计算运行时向量缓存（声音样本 / 核心记忆）")
     p.add_argument("target", nargs="?", choices=list(_PRECOMPUTE_TARGETS.keys()),
                    help="要预计算的类型")
-    p.add_argument("--all", action="store_true", help="一次性预计算全部三类")
+    p.add_argument("--all", action="store_true", help="预计算 voice-samples + core-stories")
     p.add_argument("-i", "--input", default=None,
                    help="源 JSON（缺省 persona/ 下默认文件）")
     p.add_argument("-o", "--output", default=None,
-                   help="输出路径（默认 data/ 下固定文件，机器人读取，勿改）")
+                   help="输出路径（默认 persona/ 下固定缓存，机器人读取，勿改）")
     p.set_defaults(func=_run_precompute)
 
 
@@ -531,6 +578,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="run_tool",
         description="灰泽满离线工具箱：统一所有离线脚本的入口。\n"
                     "子命令按流水线阶段分组：\n"
+                    "  【流水线】persona-pipeline（corpus / voice-samples / phrases / behaviors）\n"
                     "  【蒸馏】transcribe · clean-transcript · convert-to-chat · analyze-pace · mine-phrases\n"
                     "  【生成】generate-statements · generate-vectors · generate-persona · extract-persona\n"
                     "  【向量】precompute\n"
@@ -541,6 +589,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True, title="可用工具")
     _add_transcribe(sub)
     _add_clean_transcript(sub)
+    _add_persona_pipeline(sub)
     _add_convert_to_chat(sub)
     _add_analyze_pace(sub)
     _add_generate_vectors(sub)

@@ -21,11 +21,12 @@ import sys
 import asyncio
 from pathlib import Path
 from openai import AsyncOpenAI
+import _common
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = PROJECT_ROOT / ".env.prod"
 DEFAULT_OUT = PROJECT_ROOT / "outputs" / "pace_map"
-MODEL = "deepseek-v4-flash"
+MODEL = "deepseek-flash"
 BASE_URL = "https://api.deepseek.com/v1"
 TURN_GAP_SEC = 2.0  # 间隔 ≤2s 视为同一句话
 
@@ -38,12 +39,7 @@ SCENARIOS = [
 
 
 def get_deepseek_key():
-    if ENV_FILE.exists():
-        with open(ENV_FILE, "r", encoding="utf-8") as f:
-            for line in f:
-                if line.startswith("OPENAI_API_KEY"):
-                    return line.split("=")[1].replace('"', '').strip()
-    return None
+    return _common.get_api_key("OPENAI_API_KEY")
 
 
 def load_transcript(path) -> list:
@@ -146,11 +142,11 @@ def build_focus_instruction(focus: list) -> str:
     extra = ""
     if "被催播/催更" in focus:
         extra = (
-            f"\n【失约片段的范围】\"被催播/催更\"不仅指弹幕直接催播，还包括：\n"
-            f"- 迟到/鸽了/该播没播的开场解释（\"为什么迟到\"\"今天怎么又没播\"\"多久没直播了\"）\n"
-            f"- 被弹幕戳穿作息/状态后，解释直播安排的回应\n"
-            f"- 提到\"下周一定\"\"明天准时\"\"这周表全准时\"等补救承诺的片段\n"
-            f"以上都属于失约片段，归入\"被催播/催更\"。\n"
+            "\n【失约片段的范围】\"被催播/催更\"不仅指弹幕直接催播，还包括：\n"
+            "- 迟到/鸽了/该播没播的开场解释（\"为什么迟到\"\"今天怎么又没播\"\"多久没直播了\"）\n"
+            "- 被弹幕戳穿作息/状态后，解释直播安排的回应\n"
+            "- 提到\"下周一定\"\"明天准时\"\"这周表全准时\"等补救承诺的片段\n"
+            "以上都属于失约片段，归入\"被催播/催更\"。\n"
         )
     return (
         f"【本场聚焦目标】\n"
@@ -167,7 +163,7 @@ async def analyze_turn(client, text: str, focus: list = None) -> dict:
     focus_instruction = build_focus_instruction(focus or [])
     try:
         resp = await client.chat.completions.create(
-            model=MODEL,
+            model=_common.get_model_name(MODEL),
             messages=[{"role": "user", "content": ANALYZE_PROMPT.format(text=text, focus_instruction=focus_instruction)}],
             temperature=0.1,
             max_tokens=120,
@@ -214,7 +210,6 @@ def summarize(turns, annotations) -> dict:
     scene_overview = {}
     for scene in scene_counts:
         lens = scene_len.get(scene, {})
-        total = sum(lens.values())
         main_tier = max(lens, key=lens.get) if lens else "unknown"
         scene_overview[scene] = {
             "count": scene_counts[scene],
@@ -298,7 +293,7 @@ async def run(input_paths, out_prefix, sessions=None, merge=False, turn_gap=TURN
             prev = json.load(f)
 
     # 2. 逐个分析本批次
-    client = AsyncOpenAI(api_key=key, base_url=BASE_URL)
+    client = AsyncOpenAI(api_key=key, base_url=_common.get_openai_base_url(BASE_URL))
     all_detail = []
     for input_path, session in zip(input_paths, sessions):
         items = load_transcript(input_path)
@@ -325,7 +320,7 @@ async def run(input_paths, out_prefix, sessions=None, merge=False, turn_gap=TURN
     with open(out_md, "w", encoding="utf-8") as f:
         f.write(render_markdown(merged["summary"]))
 
-    print(f"\n✅ 完成")
+    print("\n✅ 完成")
     print(f"   JSON 明细: {out_json}")
     print(f"   Markdown 总览: {out_md}")
 

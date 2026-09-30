@@ -118,3 +118,37 @@ class TestHumanizeGap:
     def test_bad_input_is_silent(self):
         assert memory.humanize_gap(None) == ""
         assert memory.humanize_gap("abc") == ""
+
+
+class TestAppendBotMessage:
+    """主动发言/推送写进记忆——**只记她那一句，没有对应的用户消息**。
+
+    2026-09-29 用户反馈：主动发出去的消息是机器人自己用 API 发的，不会作为事件回来，
+    所以从没进过记忆；粉丝顺着那句回她时，她的【最近对话记录】里没有那一句，
+    完全不知道对方在说什么。
+    """
+
+    def test_records_only_her_line(self, tmp_memory):
+        memory.append_bot_message("u1", "明天晚上八点来玩音游啊")
+        lines = memory.get_user_history("u1")
+        assert lines == ["灰泽满：明天晚上八点来玩音游啊"]
+        assert not any(ln.startswith("用户：") for ln in lines)
+
+    def test_has_timestamp(self, tmp_memory):
+        memory.append_bot_message("u1", "晚安")
+        raw = json.loads(tmp_memory.read_text(encoding="utf-8"))["u1"]
+        assert "t" in raw[0] and raw[0]["text"] == "灰泽满：晚安"
+
+    def test_appends_after_existing_history(self, tmp_memory):
+        memory.append_user_history("u1", "在吗", "在")
+        memory.append_bot_message("u1", "刚发了个动态，来看看")
+        assert memory.get_user_history("u1") == ["用户：在吗", "灰泽满：在", "灰泽满：刚发了个动态，来看看"]
+
+    def test_still_caps_length(self, tmp_memory):
+        for i in range(20):
+            memory.append_bot_message("u1", f"第{i}条")
+        assert len(memory.get_user_history("u1")) == memory.SHORT_MEMORY_LINES
+
+    def test_empty_text_writes_nothing(self, tmp_memory):
+        memory.append_bot_message("u1", "   ")
+        assert memory.get_user_history("u1") == []

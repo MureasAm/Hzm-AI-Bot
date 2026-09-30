@@ -23,6 +23,7 @@ from nonebot import get_bot, get_driver
 from nonebot.adapters.onebot.v11 import Message, MessageSegment
 
 from .constants import BILI_STATE_FILE
+from .memory import append_bot_message
 from .proactive import compose_proactive
 from . import _bridge_common
 from .config import get_bili_uid, get_bili_sessdata, get_notify_whitelist, get_push_interval
@@ -403,7 +404,9 @@ class BiliMonitor:
                                        image_paths=image_paths if photos else None)
         print(f"[B站] 检测到新动态 -> 原文通知"
               f"{(' + 主动发言：' + said) if said else '（主动发言未生成，只发原文）'}")
-        await self._push(bot, notice, image_paths=image_paths)
+        # 通知只在"她那句没发出去"时才写进记忆——她那句已经覆盖了同一件事，
+        # 再记一条机器复述是白占窗口（用户 2026-09-29 的建议）
+        await self._push(bot, notice, image_paths=image_paths, record=not said)
         if said:
             await self._push(bot, said)
         self.state["last_dynamic_id"] = dyn["id"]
@@ -438,10 +441,13 @@ class BiliMonitor:
         _save_state(self.state)
         return friends
 
-    async def _push(self, bot, content: str, image_paths: list | None = None) -> None:
+    async def _push(self, bot, content: str, image_paths: list | None = None,
+                    record: bool = True) -> None:
         """私聊广播给全部好友（白名单非空则只发白名单）。单好友失败不中断。
 
         image_paths 提供时，消息附带这些图片（动态配图 + 表情图）。
+        `record=False` = 这条不用写进记忆（动态推送里"她那句"已经记过了，
+        通知只是同一件事的机器复述，再记一条是重复占窗口）。
         """
         friends = await self._get_friends(bot)
         whitelist = get_notify_whitelist()
@@ -458,6 +464,12 @@ class BiliMonitor:
                     msg += MessageSegment.image(file=str(p))
                 await bot.send_private_msg(user_id=t["user_id"], message=msg)
                 ok += 1
+                # **记进那个好友的短期记忆**：这条是机器人自己 API 发的，不会作为事件回来，
+                # 不记的话他顺着这句回她时，她的【最近对话记录】里没有这一句，
+                # 完全不知道在说什么（2026-09-29 用户反馈）
+                if record:
+                    append_bot_message(str(t["user_id"]),
+                                       _bridge_common.to_memory_line(content))
             except Exception as e:
                 print(f"⚠️ 推送失败 user={t.get('user_id')}: {e}")
         print(f"[B站] 已推送 {ok}/{len(targets)} 位好友")

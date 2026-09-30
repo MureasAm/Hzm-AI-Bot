@@ -41,6 +41,7 @@ nonebot.init()
 
 from openai import AsyncOpenAI  # noqa: E402
 from src.plugins.chatbot.constants import DEEPSEEK_BASE_URL, THINKING_DISABLED  # noqa: E402
+import _common  # noqa: E402
 
 SRC = ROOT / "persona" / "world" / "statement_final.json"
 OUT = ROOT / "persona" / "world" / "corpus_keywords.json"
@@ -74,6 +75,17 @@ GENERIC = (
     "灰泽满", "hzm", "绿冻", "直播", "粉丝", "观众", "弹幕", "上次", "那天", "当时",
     "事情", "东西", "时候", "自己", "可以", "什么",
 )
+README_MARKER = "⚠️ **手工补的钩子记在这里**（生成器不会覆盖，但也没人知道你为什么加）。"
+README_BASE = (
+    "corpus 的「钩子」：用户提到这些**具体**词时，**把该条递过去让 LLM 判一眼**。\n"
+    "⚠️ 2026-09-29 起**不再直通注入** —— 门/钩子只决定候选，判定全交 LLM"
+    "（见 retrieval._corpus_gate_pass 的注释）。\n"
+    "由 scripts/build_corpus_keywords.py 生成（**合并式**：已有钩子的条目会跳过，"
+    "所以手工补的不会被覆盖）；键是 statement_final 里的**序号**。\n"
+    "⚠️ 只放**具体**的词（人名/物品/事件名），泛词会到处误触发（现在的表现是'灌爆候选池'）。\n"
+    "⚠️ 挂完要三步验证：entry_audit（能不能勾出）→ 回放 chat_log（真发生没）→ 看误报。\n"
+    + README_MARKER
+)
 
 
 def _clean(kws: list) -> list:
@@ -101,16 +113,20 @@ async def main():
     items = json.loads(SRC.read_text(encoding="utf-8"))["statements"]
     texts = [x["statement"] for x in items]
     old = {}
+    old_readme = ""
     if OUT.exists():
-        old = json.loads(OUT.read_text(encoding="utf-8")).get("keywords", {})
+        previous = json.loads(OUT.read_text(encoding="utf-8"))
+        old = previous.get("keywords", {})
+        old_readme = previous.get("_readme", "")
 
     todo = [(i, t) for i, t in enumerate(texts) if str(i) not in old]
     if args.limit:
         todo = todo[: args.limit]
     print(f"待处理 {len(todo)} 条（已有钩子的 {len(old)} 条跳过）\n")
 
-    ds = AsyncOpenAI(api_key=_key("OPENAI_API_KEY"), base_url=DEEPSEEK_BASE_URL)
-    model = _key("OPENAI_MODEL") or "deepseek-flash"
+    ds = AsyncOpenAI(api_key=_key("OPENAI_API_KEY"),
+                     base_url=_common.get_openai_base_url(DEEPSEEK_BASE_URL))
+    model = _common.get_model_name()
     sem = asyncio.Semaphore(5)
 
     async def one(i, t):
@@ -122,7 +138,7 @@ async def main():
                 c = (r.choices[0].message.content or "").replace("```json", "").replace("```", "").strip()
                 kws = _clean([k for k in json.loads(c) if isinstance(k, str)])
                 return i, kws
-            except Exception as e:
+            except Exception:
                 return i, []
 
     res = await asyncio.gather(*[one(i, t) for i, t in todo])
@@ -134,15 +150,11 @@ async def main():
 
     for i, k in got:
         old[str(i)] = k
+    manual_note = ""
+    if README_MARKER in old_readme:
+        manual_note = old_readme.split(README_MARKER, 1)[1]
     OUT.write_text(json.dumps({
-        "_readme": "corpus 的「钩子」：用户提到这些**具体**词时，**把该条递过去让 LLM 判一眼**。\n"
-                   "⚠️ 2026-09-29 起**不再直通注入** —— 门/钩子只决定候选，判定全交 LLM"
-                   "（见 retrieval._corpus_gate_pass 的注释）。\n"
-                   "由 scripts/build_corpus_keywords.py 生成（**合并式**：已有钩子的条目会跳过，"
-                   "所以手工补的不会被覆盖）；键是 statement_final 里的**序号**。\n"
-                   "⚠️ 只放**具体**的词（人名/物品/事件名），泛词会到处误触发（现在的表现是'灌爆候选池'）。\n"
-                   "⚠️ 挂完要三步验证：entry_audit（能不能勾出）→ 回放 chat_log（真发生没）→ 看误报。\n"
-                   "⚠️ **手工补的钩子记在这里**（生成器不会覆盖，但也没人知道你为什么加）。",
+        "_readme": README_BASE + manual_note,
         "keywords": old,
     }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"\n✅ 已写 {OUT}（共 {len(old)} 条有钩子）")

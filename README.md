@@ -6,7 +6,7 @@
 
 > 一句话：**不是靠模型的聪明，而是靠数据、检索、记忆、评测这套体系的构建，让一个 LLM 从"会聊天"变成"像某个人"。**
 
-**一眼了解：** **54** 真实用户 · **六路**语义检索 · **三层**记忆 · **706** 单元测试 · **480+** 条人格数据 · **承诺记忆** · **会开口说话（GPT-SoVITS 语音）** · **问题驱动评测**（看到答错记一笔 → 自动变成回归用例）
+**一眼了解：** **54** 真实用户 · **四路 RRF 素材融合 + 两路直达** · **三层**记忆 · **795** 单元测试 · **480+** 条人格数据 · **承诺记忆** · **会开口说话（GPT-SoVITS 语音）** · **问题驱动评测**（看到答错记一笔 → 自动变成回归用例）
 
 ---
 
@@ -60,7 +60,10 @@
 
 > 方法论、踩坑记录、回复链路逐层剖析、记忆系统设计、终极愿景——都沉淀在 [`docs/版本史.md`](docs/版本史.md)。
 > 接手这个仓库（或让 AI 接手）时按这个顺序读：[`CLAUDE.md`](CLAUDE.md)（常驻速查：黄金律 / 怎么跑测 / 危险清单）
-> → [`FILE_MAP.md`](docs/FILE_MAP.md)（每个文件干什么）→ [`待办清单.md`](docs/待办清单.md)（还没做的问题 + 已被判定"不用改"的）。
+> → [`注入设计·人话版.md`](docs/注入设计·人话版.md)（只看最终会进入 messages 的注入文件）
+> → [`FILE_MAP.md`](docs/FILE_MAP.md)（每个文件干什么）
+> → [`人格素材流水线.md`](docs/人格素材流水线.md)（新素材怎样分流进四类 persona 数据）
+> → [`待办清单.md`](docs/待办清单.md)（还没做的问题 + 已被判定"不用改"的）。
 
 ## 更新记录
 
@@ -78,7 +81,7 @@
 - system_prompt 318 行/3.2 万字 → 40 行/3500 字，删掉数字配额与语气词详解——**提示词不是越多越好**。
 
 ### V3.0 · 多路融合检索
-- corpus / 声音 / 行为 / 措辞四路向量 + RRF 融合 + 预算截断，全程只调 1 次 embedding（后扩为六路）——"按需注入"的雏形。
+- corpus / 声音 / 行为 / 措辞四路 RRF 融合 + 预算截断，全程只调 1 次 embedding；后来再加入偏好 / 核心记忆两路命中直达——"按需注入"的雏形。
 
 ### V3.1 · 措辞指纹库
 - "同一意思 → 她真实说过的原话"；样本分 short / long 档 + 节奏地图。
@@ -120,7 +123,7 @@
 - core 1069 → 584 行（reply_style / routing / config 各自独立，消除循环依赖），梗库与判别词数据化——**"该改哪"第一次有答案**。
 
 ### V6.1 · 稳定性三件套（08-14 ~ 08-16）
-- terms v2（主动用黑话 + LLM 语境确认）；QQ 图片两道保险（急切缓存 / 读 NapCat 本地文件）；watchdog 假死自愈；检索路数统一为六路。
+- terms v2（主动用黑话 + LLM 语境确认）；QQ 图片两道保险（急切缓存 / 读 NapCat 本地文件）；watchdog 假死自愈；素材注入通道完成统一。
 
 ### V6.2 · 黑话补全（08-19）
 - 富区 / 独轮车 / 爆了；修短 query 扩充误判（"富区"被猜成"富拉尔基区"）。
@@ -170,7 +173,10 @@
 ### V7.7 · 群聊新能力 + 素材本土化（09-25）
 - **接话门**（该不该开口有判据）/ 读合并转发 / 发表情包 / 主动发言；样本情境越具体越危险（3/5 → 0/5）；QQ 引用可见；判据回归集。
 
-### V7.9 · 评测资产合并 + 文件体检（09-27 ~ 09-30，当前版本）
+### V7.8 · 检索层判据改造（09-25 ~ 09-26）
+- 量出噪声地板（voice_sample 阈值压在地板上；phrase / preference 真信号与噪声完全重叠）；corpus 召回改成"**门放行的直通、没放行的交 LLM 判**——排序有用、阈值没用"；聊天落盘 + 索引工具；四处修复收尾。测试 528 → 534。
+
+### V7.9 · 评测资产合并 + 文件体检 + 注入审计（09-27 ~ 10-01，当前版本）
 
 - **评测集与标注集合并成一份**（`scripts/retrieval_eval_cases.json`，48 条）：
   原来两份同源却**互相打架**（同一条标注在三个地方有两个值）；判据实验的 `want` 改由它**推导**。
@@ -186,19 +192,30 @@
   "像不像她"没有客观标准，三把尺子（自定义指标 / 指纹距离 / LLM 成对比较）**先后失败**，
   最后靠"**左右打乱 + 不标注 + 用户盲判 + 复现两次**"才站得住。
   **判据铁律：「如果她答错了，这个判据会通过吗？」会通过就不是判据。**
-
-### V7.8 · 检索层判据改造（09-25 ~ 09-26）
-- 量出噪声地板（voice_sample 阈值压在地板上；phrase / preference 真信号与噪声完全重叠）；corpus 召回改成"**门放行的直通、没放行的交 LLM 判**——排序有用、阈值没用"；聊天落盘 + 索引工具；四处修复收尾。测试 528 → 534。
+- **包装语审计与删除**：10 处逐条分类；A 类用法说明 6 处、C 类骨架重复 2 处已实际删除，
+  B 类时间语义/优先级声明保留。`retrieval-eval` 47/48、`regression --check` 8/8。
+- **风格标注集结论**：工具和用例库保留，但这条路线已实测停止，不再作为风格类消融入口。
+  用户标 30 条后，23 道成对题里 20 道回答"差不多"（87%）；根因是两版同模型、同 base，差异落在人眼分辨极限以下。
+- **当前工作区**：主动发言/动态推送开始写入对应好友的短期记忆；新的周表已更新；
+  这批改动在 `2026-10-01` 验证为 **795 tests passed**。
+- **persona 更新流水线**：新增 `persona-pipeline`，一条命令即可从音频或清洗素材生成
+  corpus / voice-samples / phrases / behaviors 候选；默认 review，`--apply` 后备份写回，
+  corpus / voice 自动重建向量；corpus 还会自动补 `corpus_keywords` 钩子并审计自指代词。
+- **2026-10-01 实跑**：`20260923-wanjianzatan` 清洗出 273 个话轮、生成 99 条 corpus 候选；
+  corpus `322 → 421`，`corpus_vectors.json` 与 `corpus_keywords.json` 均同步为 421 条。
+- **注入链路说明视频**：`video/` 下的 Remotion 工程已把 `注入设计·人话版` 做成
+  16:9 / 30fps / 约 92 秒的 8 场景样片；旁白使用本地 `HZM-SPEAK` 权重，
+  逐句时间轴、SRT、CSV 和渲染脚本均可复跑。
 
 ## 技术亮点
 
 - **分层注入架构**：10+ 层条件注入（人设/行为/corpus/记忆/会话/措辞/样本/感知），每层管一件事，出问题能定位到具体层。
 - **记忆系统**：三层（短期 5 轮 / 长期画像+承诺 / 会话话题追踪）。长期记忆卡存"印象标签（带置信度）+ 用户事实 + 承诺 + 重要时刻"，支持 supersede 作废旧信息、'null' 污染防御、拒绝提取 AI 自嗨式自我披露。
-- **检索评测体系**：32 条标注集 + `retrieval_eval.py`，量化每路命中率，阈值/样本改动可回归验证。
+- **检索评测体系**：48 条标注集 + `retrieval_eval.py`，量化每路命中率，阈值/样本改动可回归验证。
 - **人格一致性评测**：InCharacter 式大五人格开放题 + 匿名化防名字作弊，实测实名/匿名都不掉分。
 - **图片与视觉工程**：QQ/B站 CDN 的 Referer 分流、rkey 时效急切缓存、格式归一化、NapCat 本地缓存兜底绕开 CDN。
 - **真人节奏交互**：读秒窗口攒批 + 插话优先（发送中用户插话，取消未发送分段先回新消息）。
-- **工程纪律**：610 个单元测试；方法论 + 踩坑记录持续沉淀进 `docs/`，常驻速查在 CLAUDE.md。
+- **工程纪律**：795 个单元测试；方法论 + 踩坑记录持续沉淀进 `docs/`，常驻速查在 CLAUDE.md。
 
 ## 技术栈
 
@@ -232,23 +249,51 @@ pip install -e .              # 依赖声明在 pyproject.toml（仓库里没有
 
 ## 人格蒸馏流水线（离线工具箱）
 
-从直播素材到人格数据的全链路：`python scripts/run_tool.py <工具>` 统一入口（17 子命令按阶段分组）。
+从直播素材到人格数据的全链路：`python scripts/run_tool.py <工具>` 统一入口（20 子命令按阶段分组）。
 
 ```
 【蒸馏】transcribe → clean-transcript → analyze-pace → convert-to-chat
-【生成】extract-persona(→behaviors 人工审批) / mine-phrases / mine-theme
-         ⚠️ generate-statements 已冷落：语料现直接对 statement_final.json 向量化，不先跑它
+【流水线】persona-pipeline corpus|voice-samples|phrases|behaviors
+         从音频或清洗素材生成候选；确认后 --apply 写回，corpus/voice 自动重建向量
 【向量】generate-vectors -i persona/world/statement_final.json → corpus_vectors.json
-         precompute voice-samples|phrases|preferences|core-stories
+         --only-index 335,410,420 可只重算指定索引
+         precompute voice-samples|core-stories
 【评测】regression / persona-eval / retrieval-eval
 【工具】bili-check / bili-login / vision-test
 不在 run_tool（独立运行）：watchdog.py（假死自愈进程）/ notifier.py（SMTP，被 watchdog 用）
                      / update_schedule.py（把周表图丢 data/schedule_inbox/ 后无参跑即 OCR 更新周表）
 ```
 
+新增直播素材时，推荐直接用四条安全流水线：
+
+```bash
+# 从音频开始，先生成候选（不改 persona）
+# 同一个 session 只会转写/清洗一次，后三条复用 cleaned.json
+python scripts/run_tool.py persona-pipeline corpus --audio assets/audio/xxx.m4a --session 20261001
+python scripts/run_tool.py persona-pipeline voice-samples --audio assets/audio/xxx.m4a --session 20261001
+python scripts/run_tool.py persona-pipeline phrases --audio assets/audio/xxx.m4a --session 20261001
+python scripts/run_tool.py persona-pipeline behaviors --audio assets/audio/xxx.m4a --session 20261001
+
+# 看 outputs/persona_pipeline/<session>/<target>_review.md
+# 确认后复用候选写回；corpus 会自动补钩子并重建向量，voice 会自动重建向量
+python scripts/run_tool.py persona-pipeline corpus --session 20261001 --apply
+```
+
 产物按阶段落盘到 `outputs/` 对应文件夹（transcribe/clean/pace/convert/mine/statements/eval），最终源数据 `persona/world/statement_final.json` → `persona/world/corpus_vectors.json`（机器人只读后者）。
 
 > 改过 `persona/behavior/behaviors.json` / `persona/speech/voice_samples.json` / `persona/speech/phrases.json` / `persona/world/preferences.json` 后需重跑对应向量；source 与 *_vectors 缓存不同步时会用旧文本检索。
+
+## 注入链路说明视频
+
+`video/` 是独立的 Remotion 工程，输入是 `docs/注入设计·人话版.md` 的内容结构：
+
+```bash
+cd video
+npm install --registry=https://registry.npmmirror.com
+npm run render:voice
+```
+
+成片、旁白时间轴和 TTS 接入方式见 `video/README.md`。
 
 ## 项目结构
 
@@ -259,15 +304,16 @@ CLAUDE.md                    # 常驻速查：黄金律 / 怎么跑测 / 危险�
 docs/                        # 全部说明文档（入口 docs/README.md）
 docs/FILE_MAP.md             # 文件地图：每个文件干什么
 docs/待办清单.md             # 还没做的问题 + 已判定"不用改"的（防顺手改回去）
-docs/版本史.md               # 完整版本史（V1.0→V7.8）：每版改了什么、为什么、踩过什么坑
-ROADMAP.md                   # 踩坑记录 / 回复链路逐层剖析 / 终极愿景（部分内容停在 2026-08）
-注入链路.md                  # 素材层 + 注入层的完整解剖（每层多少字符、各路阈值、为什么这么设计）
-交接文档.md                  # 当前状态 + 下一步（新会话先读这份）
+docs/版本史.md               # 完整版本史（V1.0→V7.9）：每版改了什么、为什么、踩过什么坑
+docs/_archive/ROADMAP.md     # 踩坑记录 / 回复链路逐层剖析 / 终极愿景（部分内容停在 2026-08）
+docs/注入链路.md             # 素材层 + 注入层的完整解剖（每层多少字符、各路阈值、为什么这么设计）
+docs/交接文档.md             # 当前状态 + 下一步（新会话先读这份）
+video/                       # Remotion 注入链路说明视频（场景、旁白、字幕、渲染）
 src/plugins/chatbot/         # 运行时核心
 ├── core.py                  # 主循环（组装 + 生成 + 记忆更新 + 防复读）
 ├── reply_style.py           # 纯函数后处理（clean_reply / split_reply / 防复读检测）
 ├── routing.py               # 硬路由（legendary 梗库双路由 + 行为意图 L3）
-├── retrieval.py             # 六路检索 + RRF + 预算/关键词门（行为走 L3，不走向量）
+├── retrieval.py             # 四路 RRF + 两路命中直达 + 预算/关键词门
 ├── rag.py                   # 向量工具（embedding 客户端封装）
 ├── config.py / constants.py # 配置读取+客户端工厂 / 可调参数集中 ★
 ├── persona.py               # 人格/traits/styles/terms/schedule 加载
@@ -296,7 +342,7 @@ outputs/                     # 分析产物（按阶段分文件夹，gitignore�
 assets/                      # 原始素材（音频、参考音频 voice_refs、表情 emotes）+ 展示图
 data/                        # 运行时状态：bili_state / weibo_state / weibo_cookies(会话jar) / heartbeat / voice_cache / schedule_inbox
 scripts/                     # 离线工具箱 + 自愈：run_tool.py 统一入口；watchdog.py / notifier.py / update_schedule.py 独立运行
-tests/                       # 706 个单元测试
+tests/                       # 795 个单元测试
 ```
 
 ## 结语

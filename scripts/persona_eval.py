@@ -23,25 +23,21 @@ import asyncio
 from datetime import datetime
 from pathlib import Path
 from openai import AsyncOpenAI
+import _common
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = PROJECT_ROOT / ".env.prod"
 PERSONA_DIR = PROJECT_ROOT / "persona"
 OUT_DIR = PROJECT_ROOT / "outputs" / "eval" / "persona"
 
-MODEL = "deepseek-v4-flash"
+MODEL = "deepseek-flash"
 BASE_URL = "https://api.deepseek.com/v1"
 THINKING_DISABLED = {"extra_body": {"thinking": {"type": "disabled"}}}
 
 # ==================== 人格数据加载 ====================
 
 def get_deepseek_key():
-    if ENV_FILE.exists():
-        with open(ENV_FILE, "r", encoding="utf-8") as f:
-            for line in f:
-                if line.startswith("OPENAI_API_KEY"):
-                    return line.split("=", 1)[1].replace('"', '').strip()
-    return None
+    return _common.get_api_key("OPENAI_API_KEY")
 
 
 def load_persona(anonymous=False):
@@ -155,7 +151,7 @@ def build_answer_prompt(persona: str, question: str) -> str:
 
 async def ask(client, prompt: str, max_tokens=300, temperature=0.7) -> str:
     resp = await client.chat.completions.create(
-        model=MODEL,
+        model=_common.get_model_name(MODEL),
         messages=[{"role": "user", "content": prompt}],
         temperature=temperature,
         max_tokens=max_tokens,
@@ -211,7 +207,7 @@ async def run(anonymous=False, traits_filter=None, full=False):
     mode = "匿名" if anonymous else "实名"
     print(f"🔍 人格一致性评测（{mode}）| {len(questions)} 题 | 维度: {sorted(set(q[0] for q in questions))}")
 
-    client = AsyncOpenAI(api_key=key, base_url=BASE_URL)
+    client = AsyncOpenAI(api_key=key, base_url=_common.get_openai_base_url(BASE_URL))
     results = []
     for dim, label, question in questions:
         answer = await ask(client, build_answer_prompt(persona, question))
@@ -256,14 +252,13 @@ async def run(anonymous=False, traits_filter=None, full=False):
     out_md = OUT_DIR / f"{out_stem}.md"
     out_md.write_text("\n".join(lines), encoding="utf-8")
 
-    print(f"\n✅ 评测完成")
+    print("\n✅ 评测完成")
     print(f"   总还原率: {summary['总还原率']}")
     print(f"   明细: {out_json}")
     print(f"   报告: {out_md}")
 
 
 def summarize(results: list, mode: str, ts: str) -> dict:
-    from collections import Counter
     by_dim = {}
     for r in results:
         d = r.get("dimension", "?")

@@ -11,7 +11,7 @@
 用法：
     python scripts/run_tool.py generate-statements -i cleaned_0626.json cleaned_0608.json ...
 
-输出：statement JSON（{"statements": ["..."]}），供 generate-vectors 向量化。
+输出：statement JSON（{"statements": [{"statement": "..."}]}），供 generate-vectors 向量化。
 """
 import json
 import asyncio
@@ -19,9 +19,10 @@ import sys
 from pathlib import Path
 from openai import AsyncOpenAI
 
+import _common
 from analyze_pace import get_deepseek_key
 
-MODEL = "deepseek-v4-flash"
+MODEL = "deepseek-flash"
 BASE_URL = "https://api.deepseek.com/v1"
 BATCH_SIZE = 50  # 每批话轮数
 
@@ -43,19 +44,24 @@ STATEMENT_PROMPT = """你是"灰泽满"的专属人格档案学家。我给你�
 # 写作铁律
 1. 严禁时间戳：绝对不要出现"在直播的第X分钟""在视频X分Y秒"等时间标记；时间要转化为自然语境（"深夜闲聊时""被粉丝问及近况时""在聊到家庭话题时"）
 2. 严禁复述"直播"这个载体：不要说"她在直播中说""她在直播时被问到"。直接进入事件本身，仿佛你亲眼目睹
-3. 第三人称 + 原话引用：全篇第三人称，但她的标志性语言必须用引号直接引用，大量化用转写原文，完整保留口癖（hzm、好吧、说实话、只能说、可恶啊等）、碎碎念的节奏和戏剧化的反转
-4. 隐含人格标签：文本中自然融入她的性格特质关键词（如"嘴硬心软""乐观的悲观主义者""用自嘲消解尴尬""生活喜剧人""回避型亲近者"等），但不是以标签形式罗列，而是作为描述的一部分自然呈现
-5. 必须是素材里真实发生的，不编造、不加素材没有的细节
+3. 全篇第三人称，**只写发生过什么、她是什么态度**。不要写"她当时怎么说"、不要保留台词、不要用引号引用她的原话——她的措辞归 voice_samples / phrases，不属于 corpus。
+4. 严禁写"灰泽满……她/他……"这种复指自己的句式。先说"灰泽满"后，后续同主语省略主语或继续写"灰泽满"，绝不用"她/他"指灰泽满；如果"她/他"指别的人，则必须让那个人的名字在这一句里明确出现。
+5. 可以保留专名、作品名、被解释的词，但不要保留成句对白。
+6. 隐含人格标签：通过行为描述体现性格，不要直接罗列标签。
+7. 必须是素材里真实发生的，不编造、不加素材没有的细节
 
 # 结构
-每条陈述讲一个完整的小场景/经历（她的行为、心理、反应模式），50-120 字。按"触发情境→即兴表演→性格切片"的自然顺序写成一段连贯文字，不要用标题或列表。
+每条陈述讲一个完整的小场景/经历（她的行为、心理、反应模式），50-120 字。按"触发情境→发生的事→她的态度/结果"写成一段连贯文字，不要用标题或列表。
 
 # 数量
 宁缺毋滥：这批话轮里有多少条值得写就输出多少条。
 
 输出 JSON：
 {{
-  "statements": ["灰泽满当时……", "……"]
+  "statements": [
+    {{"statement": "灰泽满当时……"}},
+    {{"statement": "……"}}
+  ]
 }}
 
 【素材话轮】
@@ -83,7 +89,7 @@ async def gen_batch(client, batch_text: str) -> list:
     """调 DeepSeek 生成一批话轮的 statement。失败返回空。"""
     try:
         resp = await client.chat.completions.create(
-            model=MODEL,
+            model=_common.get_model_name(MODEL),
             messages=[{"role": "user", "content": STATEMENT_PROMPT.format(text=batch_text)}],
             temperature=0.3,
             max_tokens=2000,
@@ -96,7 +102,13 @@ async def gen_batch(client, batch_text: str) -> list:
             content = content.split("```")[1].split("```")[0].strip()
         result = json.loads(content)
         stmts = result.get("statements", [])
-        return [s.strip() for s in stmts if s and isinstance(s, str)]
+        out = []
+        for s in stmts:
+            if isinstance(s, str) and s.strip():
+                out.append(s.strip())
+            elif isinstance(s, dict) and str(s.get("statement", "")).strip():
+                out.append(str(s["statement"]).strip())
+        return out
     except Exception as e:
         print(f"⚠️ 生成批次失败: {e}")
         return []
@@ -112,7 +124,7 @@ async def run(input_paths, output_file, batch_size=BATCH_SIZE):
         print("❌ 没有加载到话轮")
         return
     print(f"📄 加载 {len(turns)} 个话轮，分批生成 statement（每批 {batch_size}）...")
-    client = AsyncOpenAI(api_key=key, base_url=BASE_URL)
+    client = AsyncOpenAI(api_key=key, base_url=_common.get_openai_base_url(BASE_URL))
 
     all_stmts = []
     n_batches = (len(turns) + batch_size - 1) // batch_size
@@ -130,7 +142,10 @@ async def run(input_paths, output_file, batch_size=BATCH_SIZE):
             seen.add(s)
             uniq.append(s)
 
-    out = {"source_files": [str(p) for p in input_paths], "statements": uniq}
+    out = {
+        "source_files": [str(p) for p in input_paths],
+        "statements": [{"statement": s} for s in uniq],
+    }
     with open(output_file, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)
     print(f"\n✅ statement 生成完成：{output_file}")

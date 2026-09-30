@@ -30,18 +30,19 @@ import sys
 import asyncio
 from pathlib import Path
 from openai import AsyncOpenAI
+import _common
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = PROJECT_ROOT / ".env.prod"
 OUT_DIR = PROJECT_ROOT / "outputs" / "persona_extract"
 DEFAULT_OUT = OUT_DIR / "behaviors_candidates.json"
 
-MODEL = "deepseek-v4-flash"
+MODEL = "deepseek-flash"
 BASE_URL = "https://api.deepseek.com/v1"
 THINKING_DISABLED = {"extra_body": {"thinking": {"type": "disabled"}}}
 BATCH_SIZE = 50
 
-# 现有 behaviors 的 8 大场景（对齐 behavior/behaviors.json 的 name 归类）
+# 现有 behaviors 的稳定场景（对齐 behavior/behaviors.json 的 name 归类）
 SCENE_GROUPS = {
     "被夸": "被夸时嘴硬否认",
     "被质疑": "被质疑时心虚辩解",
@@ -54,21 +55,18 @@ SCENE_GROUPS = {
     "抛梗": "主动抛梗与预判调侃",
     "推进": "主动抛梗与预判调侃",
     "感性": "感性流露后迅速缩回",
-    "脆弱": "感性流露后迅速缩回",
-    "失约": "失约被抓包时滑跪",
-    "催播": "失约被抓包时滑跪",
-    "日常": "日常闲聊（无固定行为模式）",
+    "脆弱": "被真心戳中时别扭缩回",
+    "失约": "失约被催时认栽滑跪",
+    "失约被催": "失约被催时认栽滑跪",
+    "催播": "失约被催时认栽滑跪",
+    "同期": "能嘴熟络同期是亲近",
+    "套话": "被套话点名排名他人时端水",
 }
 
 # ==================== 数据加载 ====================
 
 def get_deepseek_key():
-    if ENV_FILE.exists():
-        with open(ENV_FILE, "r", encoding="utf-8") as f:
-            for line in f:
-                if line.startswith("OPENAI_API_KEY"):
-                    return line.split("=", 1)[1].replace('"', '').strip()
-    return None
+    return _common.get_api_key("OPENAI_API_KEY")
 
 
 def load_converted_pairs(input_paths) -> list:
@@ -97,7 +95,7 @@ EXTRACT_PROMPT = """你是灰泽满直播语料的人格分析师。我给你一
 
 # 新格式（每条行为规则）
 {{
-  "scene": "行为场景（从以下选）：被夸 / 被质疑 / 被戳穿 / 被越界 / 被调戏 / 冷场 / 立Flag / 承诺 / 抛梗 / 推进 / 感性 / 脆弱 / 失约 / 催播",
+  "scene": "行为场景（从以下选）：被夸 / 被质疑 / 被戳穿 / 被越界 / 被调戏 / 冷场 / 立Flag / 承诺 / 抛梗 / 推进 / 感性 / 脆弱 / 失约被催 / 同期 / 套话",
   "name": "行为名（4-10字，如'被夸时嘴硬否认'）",
   "trigger": "触发情境（向量匹配用，要概括到"这类情境"，如'被粉丝夸时'，不要细到'被夸声音/被夸厉害'）",
   "response": "她的典型反应流程（一句话描述行为，如'先嘴硬否认再用自嘲带过'）",
@@ -137,7 +135,7 @@ EXTRACT_PROMPT = """你是灰泽满直播语料的人格分析师。我给你一
 async def extract_batch(client, batch_text: str) -> list:
     try:
         resp = await client.chat.completions.create(
-            model=MODEL,
+            model=_common.get_model_name(MODEL),
             messages=[{"role": "user", "content": EXTRACT_PROMPT.format(text=batch_text)}],
             temperature=0.3,
             max_tokens=8000,
@@ -242,7 +240,7 @@ async def run(input_paths, out_file=None):
     out.parent.mkdir(parents=True, exist_ok=True)
 
     print(f"📄 加载 {len(pairs)} 个对话对，分批提取行为规则（每批 {BATCH_SIZE}）...")
-    client = AsyncOpenAI(api_key=key, base_url=BASE_URL)
+    client = AsyncOpenAI(api_key=key, base_url=_common.get_openai_base_url(BASE_URL))
 
     all_behaviors = []
     n_batches = (len(pairs) + BATCH_SIZE - 1) // BATCH_SIZE
@@ -271,7 +269,7 @@ async def run(input_paths, out_file=None):
     print(f"   场景分布: {dict(scenes)}")
     for b in merged:
         print(f"   [{b.get('scene','')}] {b['name']} | trigger={b['trigger'][:30]} | {len(b.get('samples',[]))} 示范")
-    print("\n💡 下一步：人工审批后并入 persona/behavior/behaviors.json，再跑 precompute triggers")
+    print("\n💡 下一步：人工审批后并入 persona/behavior/behaviors.json；behaviors 不走向量，不需要 precompute")
 
 
 async def main():

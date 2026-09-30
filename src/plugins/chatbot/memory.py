@@ -87,12 +87,11 @@ def get_last_turn_gap_seconds(user_id: str) -> float | None:
         return None
 
 
-def append_user_history(user_id: str, user_msg: str, reply: str) -> None:
-    """追加一轮对话到短期记忆（带时间戳），保留最近 N 条。全程持锁。
-
-    `reply` 传空串 = **她这批没开口**（群聊接话门判定安静）。这时只记"群里说了什么"，
-    不记一条空的"灰泽满："——她看到了、只是没接，下一轮判定和生成仍该看得到上下文。
-    """
+def _append_lines(user_id: str, lines: list) -> None:
+    """往某会话的短期记忆尾部追加若干行（持锁 + 截断到窗口）。空串行自动丢掉。"""
+    lines = [ln for ln in lines if ln]
+    if not lines:
+        return
     with _memory_lock:
         memory = load_short_memory()
         history = memory.get(user_id, [])
@@ -101,14 +100,33 @@ def append_user_history(user_id: str, user_msg: str, reply: str) -> None:
         elif not isinstance(history, list):
             history = []
         now = time.time()
-        history.append({"t": now, "text": f"用户：{user_msg}"})
-        if reply:
-            history.append({"t": now, "text": f"灰泽满：{reply}"})
-        if len(history) > SHORT_MEMORY_LINES:
-            history = history[-SHORT_MEMORY_LINES:]
-        memory[user_id] = history
+        history.extend({"t": now, "text": ln} for ln in lines)
+        memory[user_id] = history[-SHORT_MEMORY_LINES:]
         with open(MEMORY_FILE, "w", encoding="utf-8") as f:
             json.dump(memory, f, ensure_ascii=False, indent=2)
+
+
+def append_user_history(user_id: str, user_msg: str, reply: str) -> None:
+    """追加一轮对话到短期记忆（带时间戳），保留最近 N 条。全程持锁。
+
+    `reply` 传空串 = **她这批没开口**（群聊接话门判定安静）。这时只记"群里说了什么"，
+    不记一条空的"灰泽满："——她看到了、只是没接，下一轮判定和生成仍该看得到上下文。
+    """
+    _append_lines(user_id, [f"用户：{user_msg}", f"灰泽满：{reply}" if reply else ""])
+
+
+def append_bot_message(user_id: str, text: str) -> None:
+    """只追加一条「她主动说的话」——**没有对应的用户消息**（主动发言/动态推送用）。
+
+    为什么必须记（2026-09-29 用户反馈）：主动发出去的那条消息是机器人**自己用 API
+    发出去的**，不会作为事件回到 `_handle_chat`，所以它**从来没进过记忆**。
+    粉丝顺着那句回她（"这个好玩吗""你说的是哪个"）时，她的【最近对话记录】里
+    根本没有那一句 → 完全不知道对方在说什么。
+    """
+    text = (text or "").strip()
+    if not text:
+        return
+    _append_lines(user_id, [f"灰泽满：{text}"])
 
 
 __all__ = [
@@ -116,6 +134,7 @@ __all__ = [
     "get_user_history",
     "get_last_turn_gap_seconds",
     "append_user_history",
+    "append_bot_message",
     "humanize_gap",
     "get_user_memory",
     "update_user_memory",

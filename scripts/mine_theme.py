@@ -20,7 +20,7 @@ from openai import AsyncOpenAI
 
 BATCH = 35      # 每批段落数
 OVERLAP = 8     # 批间重叠（跨批的主题瞬间不丢）
-MODEL = "deepseek-v4-flash"
+MODEL = "deepseek-flash"
 BASE_URL = "https://api.deepseek.com/v1"
 
 # 主题 → 详细定义（喂给模型的"什么算命中"）
@@ -74,7 +74,8 @@ def batched(segs, size=BATCH, overlap=OVERLAP):
 async def mine_batch(client, batch: list, theme_meta: str, batch_no: int) -> list:
     lines = []
     for i, s in enumerate(batch):
-        start = s.get("start", ""); end = s.get("end", "")
+        start = s.get("start", "")
+        end = s.get("end", "")
         ts = f"[{start}-{end}]" if start != "" else f"#{i}"
         lines.append(f"{ts} {s['text']}")
     prompt = f"""你是灰泽满直播素材的主题挖掘师。下面是直播转写片段（每段带编号/时间），共 {len(batch)} 段。
@@ -92,7 +93,7 @@ async def mine_batch(client, batch: list, theme_meta: str, batch_no: int) -> lis
 只输出 JSON 数组（没有命中就 []），不要多余内容。"""
     try:
         resp = await client.chat.completions.create(
-            model=MODEL,
+            model=_common.get_model_name(MODEL),
             messages=[{"role": "user", "content": prompt}],
             temperature=0.2,
             max_tokens=800,
@@ -119,7 +120,7 @@ async def run(input_path: str, theme: str, output_file: str | None = None):
     if not key:
         print("❌ 未找到 OPENAI_API_KEY")
         return
-    client = AsyncOpenAI(api_key=key, base_url=BASE_URL)
+    client = AsyncOpenAI(api_key=key, base_url=_common.get_openai_base_url(BASE_URL))
     print(f"🧠 用模型挖掘【{theme}】... 共 {len(segs)} 段，分 {len(list(batched(segs)))} 批")
     results = []
     for no, batch in enumerate(batched(segs), 1):

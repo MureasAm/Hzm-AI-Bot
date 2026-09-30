@@ -16,9 +16,10 @@ import sys
 from pathlib import Path
 from openai import AsyncOpenAI
 
-from analyze_pace import aggregate_turns, load_transcript, has_timestamps, get_deepseek_key
+import _common
+from analyze_pace import load_transcript, has_timestamps, get_deepseek_key
 
-MODEL = "deepseek-v4-flash"
+MODEL = "deepseek-flash"
 BASE_URL = "https://api.deepseek.com/v1"
 
 CLEAN_PROMPT = """你是直播转写的清洗员。我会给你一段直播转写的原始片段（可能含口语杂质、错字、无标点、碎片化的内容）。
@@ -84,7 +85,7 @@ async def clean_turn(client, text: str) -> str:
     """调 DeepSeek 清洗一个话轮。失败返回原文本。"""
     try:
         resp = await client.chat.completions.create(
-            model=MODEL,
+            model=_common.get_model_name(MODEL),
             messages=[{"role": "user", "content": CLEAN_PROMPT.format(text=text)}],
             temperature=0.1,
             max_tokens=200,
@@ -107,7 +108,7 @@ async def run(input_paths, output_file, turn_gap=2.0):
     turns = build_clean_turns(raw_items, gap=turn_gap)
     print(f"📄 原始片段 {len(raw_items)} → 聚合出 {len(turns)} 个话轮")
 
-    client = AsyncOpenAI(api_key=key, base_url=BASE_URL)
+    client = AsyncOpenAI(api_key=key, base_url=_common.get_openai_base_url(BASE_URL))
     print("🧠 正在清洗话轮...")
     out_turns = []
     for i, t in enumerate(turns):

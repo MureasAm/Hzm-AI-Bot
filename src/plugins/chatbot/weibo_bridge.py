@@ -21,6 +21,7 @@ from nonebot import get_bot, get_driver
 from nonebot.adapters.onebot.v11 import Message, MessageSegment
 
 from .constants import WEIBO_STATE_FILE
+from .memory import append_bot_message
 from .proactive import compose_proactive
 from . import _bridge_common
 from .config import get_weibo_uid, get_weibo_cookie, get_notify_whitelist, get_push_interval
@@ -305,7 +306,8 @@ class WeiboMonitor:
         # 配图传给她看（同 B站）：内容里的"⬇️/这个/图片里那个"指的就是它
         said = await compose_proactive(post["text"], "微博", image_paths=image_paths)
         print(f"[微博] 检测到新微博 -> {'原文 + 主动发言' if said else '原文（转写失败）'}")
-        await self._push(bot, notice, image_paths=image_paths)
+        # 同 B站：通知只在"她那句没发出去"时写进记忆
+        await self._push(bot, notice, image_paths=image_paths, record=not said)
         if said:
             await self._push(bot, said)
         self.state["last_post_id"] = post["id"]
@@ -329,8 +331,12 @@ class WeiboMonitor:
         _save_state(self.state)
         return friends
 
-    async def _push(self, bot, content: str, image_paths: list | None = None) -> None:
-        """私聊广播给全部好友（白名单非空则只发白名单）。单好友失败不中断。"""
+    async def _push(self, bot, content: str, image_paths: list | None = None,
+                    record: bool = True) -> None:
+        """私聊广播给全部好友（白名单非空则只发白名单）。单好友失败不中断。
+
+        `record=False` = 这条不用写进记忆（"她那句"已经记过了，通知是同一件事的机器复述）。
+        """
         friends = await self._get_friends(bot)
         whitelist = get_notify_whitelist()
         targets = [f for f in friends
@@ -346,6 +352,10 @@ class WeiboMonitor:
                     msg += MessageSegment.image(file=str(p))
                 await bot.send_private_msg(user_id=t["user_id"], message=msg)
                 ok += 1
+                # 同 B站：记进那个好友的短期记忆，否则他顺着这句回她时她不知道在说什么
+                if record:
+                    append_bot_message(str(t["user_id"]),
+                                       _bridge_common.to_memory_line(content))
             except Exception as e:
                 print(f"⚠️ 推送失败 user={t.get('user_id')}: {e}")
         print(f"[微博] 已推送 {ok}/{len(targets)} 位好友")

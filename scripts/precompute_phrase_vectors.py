@@ -18,7 +18,7 @@ from openai import AsyncOpenAI
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = PROJECT_ROOT / ".env.prod"
-PHRASES_FILE = PROJECT_ROOT / "persona" / "persona/speech/phrases.json"
+PHRASES_FILE = PROJECT_ROOT / "persona" / "speech" / "phrases.json"
 OUTPUT_FILE = PROJECT_ROOT / "persona" / "speech" / "phrase_vectors.json"
 EMBEDDING_MODEL = "embedding-3"
 ZHIPU_BASE_URL = "https://open.bigmodel.cn/api/paas/v4/"

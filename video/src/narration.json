@@ -1,0 +1,195 @@
+{
+  "title": "灰泽满是怎么回复的",
+  "fps": 30,
+  "width": 1920,
+  "height": 1080,
+  "durationMs": 91440,
+  "scenes": [
+    {
+      "id": "hook",
+      "startMs": 0,
+      "endMs": 8470,
+      "kicker": "01 · 先记住一句话",
+      "title": "模型看到的，不是文件",
+      "subtitle": "它真正接收到的，只有一串 messages",
+      "visual": "file-to-message"
+    },
+    {
+      "id": "file-to-message",
+      "startMs": 8470,
+      "endMs": 19300,
+      "kicker": "02 · 文件是维护单位",
+      "title": "文件 → 消息",
+      "subtitle": "代码读取文件，再把内容编成 system、user、assistant",
+      "visual": "transform"
+    },
+    {
+      "id": "journey",
+      "startMs": 19300,
+      "endMs": 30530,
+      "kicker": "03 · 一条消息的旅程",
+      "title": "9 步链路",
+      "subtitle": "收到、攒批、理解、取素材、组装、生成、后处理、发送、回写",
+      "visual": "journey"
+    },
+    {
+      "id": "always-on",
+      "startMs": 30530,
+      "endMs": 42400,
+      "kicker": "04 · 检索之前",
+      "title": "三份常驻人格",
+      "subtitle": "system prompt、traits、styles 全程在场",
+      "visual": "always-on"
+    },
+    {
+      "id": "conditional",
+      "startMs": 42400,
+      "endMs": 56190,
+      "kicker": "05 · 按需注入",
+      "title": "不同素材，不同入口",
+      "subtitle": "周表、偏好、经历、行为和说话样本，各靠不同判据决定出现",
+      "visual": "injection"
+    },
+    {
+      "id": "rrf",
+      "startMs": 56190,
+      "endMs": 69160,
+      "kicker": "06 · 融合与直达",
+      "title": "四路 RRF + 两路直达",
+      "subtitle": "corpus、voice sample、behavior、phrase 竞争 top 6",
+      "visual": "rrf"
+    },
+    {
+      "id": "segments",
+      "startMs": 69160,
+      "endMs": 79590,
+      "kicker": "07 · 最终组装",
+      "title": "17 个逻辑段",
+      "subtitle": "越靠前越像长期背景，越靠后越像刚刚发生的事",
+      "visual": "segments"
+    },
+    {
+      "id": "summary",
+      "startMs": 79590,
+      "endMs": 91440,
+      "kicker": "08 · 记住这条链",
+      "title": "文件 → 判断 → 检索 → messages",
+      "subtitle": "模型生成回复，代码再清洗、发送、写回记忆",
+      "visual": "summary"
+    }
+  ],
+  "lines": [
+    {
+      "id": "hook-1",
+      "sceneId": "hook",
+      "startMs": 120,
+      "endMs": 4160,
+      "text": "你可能以为，机器人看到的是很多文件。"
+    },
+    {
+      "id": "hook-2",
+      "sceneId": "hook",
+      "startMs": 4420,
+      "endMs": 8120,
+      "text": "其实模型真正看到的，只有一串 messages。"
+    },
+    {
+      "id": "file-1",
+      "sceneId": "file-to-message",
+      "startMs": 8590,
+      "endMs": 12390,
+      "text": "文件只是维护单位。"
+    },
+    {
+      "id": "file-2",
+      "sceneId": "file-to-message",
+      "startMs": 12650,
+      "endMs": 18950,
+      "text": "代码把文件读成文字，再变成 system、user、assistant 消息。"
+    },
+    {
+      "id": "journey-1",
+      "sceneId": "journey",
+      "startMs": 19420,
+      "endMs": 23820,
+      "text": "一条消息进来，先攒批、理解，再去取素材。"
+    },
+    {
+      "id": "journey-2",
+      "sceneId": "journey",
+      "startMs": 24080,
+      "endMs": 30180,
+      "text": "然后组装、生成、后处理、发送，最后回写记忆。"
+    },
+    {
+      "id": "persona-1",
+      "sceneId": "always-on",
+      "startMs": 30650,
+      "endMs": 35490,
+      "text": "在所有检索开始之前，有三份人格文件已经全程注入。"
+    },
+    {
+      "id": "persona-2",
+      "sceneId": "always-on",
+      "startMs": 35750,
+      "endMs": 42050,
+      "text": "system prompt、traits、styles，它们决定她是谁、什么性格、怎么说话。"
+    },
+    {
+      "id": "inject-1",
+      "sceneId": "conditional",
+      "startMs": 42520,
+      "endMs": 47080,
+      "text": "其他素材按需进入，不会一股脑全塞给模型。"
+    },
+    {
+      "id": "inject-2",
+      "sceneId": "conditional",
+      "startMs": 47340,
+      "endMs": 55840,
+      "text": "周表、偏好、经历、行为和说话样本，各靠不同的判别方式决定要不要出现。"
+    },
+    {
+      "id": "rrf-1",
+      "sceneId": "rrf",
+      "startMs": 56310,
+      "endMs": 61150,
+      "text": "四路素材走 RRF：corpus、voice sample、behavior、phrase。"
+    },
+    {
+      "id": "rrf-2",
+      "sceneId": "rrf",
+      "startMs": 61410,
+      "endMs": 68810,
+      "text": "preference 和 core story 不参加排名，命中后直接注入。"
+    },
+    {
+      "id": "segments-1",
+      "sceneId": "segments",
+      "startMs": 69280,
+      "endMs": 73580,
+      "text": "最后拼成 17 个逻辑段。"
+    },
+    {
+      "id": "segments-2",
+      "sceneId": "segments",
+      "startMs": 73840,
+      "endMs": 79240,
+      "text": "越靠前越像长期背景，越靠后越像刚刚发生的事。"
+    },
+    {
+      "id": "summary-1",
+      "sceneId": "summary",
+      "startMs": 79710,
+      "endMs": 85830,
+      "text": "所以整条链是：文件、触发判断、检索筛选、messages 组装、模型生成。"
+    },
+    {
+      "id": "summary-2",
+      "sceneId": "summary",
+      "startMs": 86090,
+      "endMs": 91090,
+      "text": "记住这一句，就够了。"
+    }
+  ]
+}

@@ -20,7 +20,7 @@ from openai import AsyncOpenAI
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = PROJECT_ROOT / ".env.prod"
-STORIES_FILE = PROJECT_ROOT / "persona" / "persona/world/core_stories.json"
+STORIES_FILE = PROJECT_ROOT / "persona" / "world" / "core_stories.json"
 OUTPUT_FILE = PROJECT_ROOT / "persona" / "world" / "core_story_vectors.json"
 EMBEDDING_MODEL = "embedding-3"
 ZHIPU_BASE_URL = "https://open.bigmodel.cn/api/paas/v4/"

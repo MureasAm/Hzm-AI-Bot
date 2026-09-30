@@ -7,6 +7,7 @@
 - persona/     人格数据（路径固定，机器人读）
 """
 import sys
+import os
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -41,10 +42,7 @@ ENV_FILE = PROJECT_ROOT / ".env.prod"
 # 机器人启动要读的固定文件（与 src/plugins/chatbot/constants.py 对齐）
 # 向量缓存跟源文件放一起（persona/*/），corpus 向量也归 persona/world/（人物记忆）
 VECTOR_FILE = WORLD_DIR / "corpus_vectors.json"
-TRIGGER_VECTOR_FILE = BEHAVIOR_DIR / "trigger_vectors.json"
 VOICE_SAMPLE_VECTOR_FILE = SPEECH_DIR / "voice_sample_vectors.json"
-PHRASE_VECTOR_FILE = SPEECH_DIR / "phrase_vectors.json"
-PREFERENCE_VECTOR_FILE = WORLD_DIR / "preference_vectors.json"
 CORE_STORY_VECTOR_FILE = WORLD_DIR / "core_story_vectors.json"
 TRAITS_FILE = CORE_DIR / "traits.json"
 STYLES_FILE = CORE_DIR / "styles.json"
@@ -56,13 +54,25 @@ CORE_STORIES_FILE = WORLD_DIR / "core_stories.json"
 
 
 def get_api_key(name: str) -> str | None:
-    """从 .env.prod 读取 API key（OPENAI_API_KEY / ZHIPU_API_KEY）。"""
+    """读取配置值：优先进程环境，其次 .env.prod（OPENAI_MODEL 也用这个）。"""
+    if os.environ.get(name):
+        return os.environ[name]
     if ENV_FILE.exists():
         with open(ENV_FILE, "r", encoding="utf-8") as f:
             for line in f:
                 if line.startswith(name):
                     return line.split("=", 1)[1].replace('"', '').strip()
     return None
+
+
+def get_model_name(default: str = "deepseek-flash") -> str:
+    """读取对话模型名；优先环境变量，其次 .env.prod。"""
+    return get_api_key("OPENAI_MODEL") or default
+
+
+def get_openai_base_url(default: str = "https://api.deepseek.com/v1") -> str:
+    """读取 OpenAI 兼容接口地址。"""
+    return get_api_key("OPENAI_API_BASE") or default
 
 
 def ensure_utf8_stdout():

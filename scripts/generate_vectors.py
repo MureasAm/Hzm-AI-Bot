@@ -308,7 +308,8 @@ def _load_corpus(input_path) -> list:
     raise ValueError(f"无法识别的场景化陈述结构: {input_path}")
 
 
-async def run(input_path: str | None = None, output_file: str | None = None):
+async def run(input_path: str | None = None, output_file: str | None = None,
+              only_indices: list[int] | None = None):
     """参数化入口（供 run_tool 调用）。"""
     out_path = Path(output_file) if output_file else OUTPUT_VECTOR_FILE
     corpus = _load_corpus(input_path)
@@ -320,6 +321,24 @@ async def run(input_path: str | None = None, output_file: str | None = None):
 
     print("🚀 正在连接智谱 AI 向量生成服务...")
     client = AsyncOpenAI(api_key=zhipu_key, base_url="https://open.bigmodel.cn/api/paas/v4/")
+
+    if only_indices:
+        if not out_path.exists():
+            raise FileNotFoundError(f"指定索引增量更新时，现有向量库不存在：{out_path}")
+        vectorized_db = json.loads(out_path.read_text(encoding="utf-8"))
+        if len(vectorized_db) != len(corpus):
+            raise ValueError("statement_final 与 corpus_vectors 长度不一致，不能增量更新")
+        for idx in sorted(set(only_indices)):
+            if not (0 <= idx < len(corpus)):
+                raise IndexError(f"索引越界：{idx}")
+            text = corpus[idx]["statement"]
+            response = await client.embeddings.create(model="embedding-3", input=text)
+            vectorized_db[idx] = {"text": text, "vector": response.data[0].embedding}
+            print(f"增量向量化 {idx + 1}/{len(corpus)}: {text[:36]}...")
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(vectorized_db, f, ensure_ascii=False, indent=2)
+        print(f"\n✅ 已增量更新 {out_path}（{len(set(only_indices))} 条）")
+        return
 
     vectorized_db = []
 

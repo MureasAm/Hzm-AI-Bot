@@ -17,16 +17,20 @@ NoneBot2 + OneBot v11(NapCat) 的"灰泽满"人格聊天机器人。核心是**�
 
 ## 怎么跑 / 怎么测
 - 启动：NapCat 自己开 → `env\python.exe api_v2.py`(GPT-SoVITS,端口9880) → `python bot.py`（或双击 `启动.bat`）。**改代码/数据后要重启 bot**（有进程内缓存）。
-- 测试：`.venv\Scripts\python.exe -m pytest -q`（**782 个**，全绿才算完；数字变了说明你增删了用例，顺手改这里）。
+- 测试：`.venv\Scripts\python.exe -m pytest -q`（**795 个**，全绿才算完；数字变了说明你增删了用例，顺手改这里）。
 - 改**检索/判据/素材**后必跑这两个（unit test 测不出"检索该不该命中"）：
   `run_tool.py retrieval-eval`（query→各路期望，**改语料会把候选排名洗牌，改完必须重跑**）、
   `run_tool.py regression --check`（真实翻车固化成的确定性判据）。
   看到答得不对 → `run_tool.py problems --query "那句话"` 先看检索实况，再决定改哪个文件。
+- 新增直播素材：`run_tool.py persona-pipeline <corpus|voice-samples|phrases|behaviors>`
+  先产候选，人工看 review，确认后加 `--apply`；corpus/voice 会自动重建向量。
+  corpus 默认补 `corpus_keywords` 钩子并审计自指代词；存量语料用
+  `--sanitize-existing --from-index N` 定向清理。
 - 推送：代理常抽风。先试 `git push origin main`（直连有时通），不行再用 `-c http.proxy=http://127.0.0.1:7897/7898`。
 
 ## 别碰 / 危险
 - `generate-persona` 会覆盖人工人格三件套 → 已加 `--danger`，别乱跑。
-- `generate-vectors` 别省略 `-i`（缺省指向 statement_final；内置 RAW_CORPUS 是过期副本会覆盖线上322条）。
+- `generate-vectors` 别省略 `-i`（缺省指向 statement_final；内置 RAW_CORPUS 是过期副本会覆盖线上421条）。
 - `outputs/`、`data/`、`.env.prod` 不入库；`data/weibo_cookies.json` 是敏感会话。
 - 语音参考音频必须"无尾静音"（否则合成退化成"几个字+长空尾"）。
 
@@ -34,20 +38,24 @@ NoneBot2 + OneBot v11(NapCat) 的"灰泽满"人格聊天机器人。核心是**�
 - **一条消息的链路**（改之前先认路，跳过这步最容易改错地方）：
   `__init__._handle_chat` → `chat_window.enqueue` → 读秒窗口 → `_flush`(读图+归纳) → `core.handle_chat` → `build_message_list`(17 段注入) → `generate_reply` → `clean_reply` → `split_reply` → `_send`
   （语音优先：`clean_reply` 后先 `should_voice`→`send_voice`，成功就不走文字分段）
-- 运行时核心：`src/plugins/chatbot/`（core 主循环 / chat_window 读秒窗口 / retrieval 六路检索+RRF / reply_style 纯函数 / routing 梗库+行为分类 / persona 加载 / memory|session_memory|group_memory 记忆 / voice 语音 / bili_bridge|weibo_bridge 联动 / context_probe 感知 / vision 看图 / rag 向量 / config 客户端 / constants 常量★）
+- 运行时核心：`src/plugins/chatbot/`（core 主循环 / chat_window 读秒窗口 / retrieval 四路 RRF+两路直达 / reply_style 纯函数 / routing 梗库+行为分类 / persona 加载 / memory|session_memory|group_memory 记忆 / voice 语音 / bili_bridge|weibo_bridge 联动 / context_probe 感知 / vision 看图 / rag 向量 / config 客户端 / constants 常量★）
 - 人格数据：`persona/`（core/behavior/speech/world，源文件+向量）
 - 长期记忆：根 `memory_manager.py`
-- 离线工具：`scripts/run_tool.py <工具>`；**55 个脚本各干什么见 `docs/脚本清单.md`**
+- 离线工具：`scripts/run_tool.py <工具>`；**56 个脚本各干什么见 `docs/脚本清单.md`**
 
 ## 文档指针（按需懒读，别开头全灌）
 - **`docs/` —— 全部说明文档都在这里面，索引是 `docs/README.md`**（按"你现在要干什么"找）
 - `docs/交接文档.md` —— **下个会话先读这份**（当前状态 + 下一步 + 卡住的东西）
+- `docs/注入设计·人话版.md` —— **最终 messages 的注入文件清单与顺序**
 - `docs/FILE_MAP.md` —— 每个文件干什么 ★ 想知道"该改哪"先看这个
 - `docs/注入链路.md` —— 素材层 + 注入层的完整解剖（**现在是什么样**）
 - `docs/注入设计原理.md` —— 判据怎么选、素材该长什么形式、每改一次是变好还是变坏（**带实验数据**）
-- `docs/脚本清单.md` —— 55 个脚本各干什么；**改链路先看"实验/诊断工具"那节**
+- `docs/脚本清单.md` —— 56 个脚本各干什么；**改链路先看"实验/诊断工具"那节**
+- `docs/人格素材流水线.md` —— **新直播素材 → persona 四类数据的四条安全流水线**
+- `video/README.md` —— **注入链路说明视频**：Remotion 工程、旁白时间轴、Speak TTS 接入和渲染命令
+- `docs/包装语审计.md` —— A/C 类已删、B 类保留；它是历史审计记录，不是新的待办。
 - `docs/待办清单.md` —— 还没做的问题 + "已判定不是问题、别再改回去"的登记
-- `docs/版本史.md` —— V1.0→V7.8 每个版本改了什么、为什么、踩过哪些坑
+- `docs/版本史.md` —— V1.0→V7.9 每个版本改了什么、为什么、踩过哪些坑
 - `docs/抽查清单.md` —— 抽查她回复时看什么（**推荐用 `scripts/spot_check.py` 自动挑**）
 
 ## 当前状态 / 下一步（更新时改这里）

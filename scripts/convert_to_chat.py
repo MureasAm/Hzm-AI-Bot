@@ -22,9 +22,10 @@ import sys
 from pathlib import Path
 from openai import AsyncOpenAI
 
+import _common
 from analyze_pace import get_deepseek_key
 
-MODEL = "deepseek-v4-flash"
+MODEL = "deepseek-flash"
 BASE_URL = "https://api.deepseek.com/v1"
 
 CONVERT_PROMPT = """你是灰泽满的"直播→聊天"转化师。我给你一段她在直播里的原话（单人声音转写：只有她一个人在说话，其中混着"她读弹幕/转述粉丝的话"和"她本人回答/表达"）。你的任务是把这段变成"她在 QQ 聊天里会怎么回复"——聊天里的灰泽满默认短句、一次只说一个想法，说话节奏和直播完全不同。
@@ -95,7 +96,7 @@ async def convert_one(client, text: str) -> dict:
         # 注意：用 replace 而非 format——prompt 内嵌 JSON 示例含花括号，
         # format 会把 {"convertible"...} 误当占位符抛 KeyError。
         resp = await client.chat.completions.create(
-            model=MODEL,
+            model=_common.get_model_name(MODEL),
             messages=[{"role": "user", "content": CONVERT_PROMPT.replace("{text}", text)}],
             temperature=0.3,
             max_tokens=500,
@@ -152,7 +153,7 @@ async def run(input_paths, output_file):
         elif isinstance(it, dict) and it.get("statement"):
             texts.append(it["statement"])
 
-    client = AsyncOpenAI(api_key=key, base_url=BASE_URL)
+    client = AsyncOpenAI(api_key=key, base_url=_common.get_openai_base_url(BASE_URL))
     print(f"🧠 正在转化 {len(texts)} 条（先分离转述/回答 → 分析 → 切分 → 压缩）...")
     results = []
     skipped = 0
@@ -183,7 +184,7 @@ async def run(input_paths, output_file):
         json.dump(results, f, ensure_ascii=False, indent=2)
     print(f"\n✅ 转化完成：{output_file}")
     print(f"   原文 {len(texts)} 条 → 样本 {len(results)} 条（跳过噪声 {skipped}）")
-    print(f"   💡 下一步：人工筛选后补进 persona/speech/voice_samples.json，再重跑 precompute voice-samples")
+    print("   💡 下一步：人工筛选后补进 persona/speech/voice_samples.json，再重跑 precompute voice-samples")
 
 
 async def main():

@@ -46,7 +46,7 @@ class TestLiveTransition:
         m = _make_monitor(uid="1298779265", state={"last_live_status": False})
         pushed = []
 
-        async def fake_push(bot, content, image_paths=None):
+        async def fake_push(bot, content, image_paths=None, record=True):
             pushed.append(content)
 
         monkeypatch.setattr(m, "_push", fake_push)
@@ -72,7 +72,7 @@ class TestLiveTransition:
         pushed = []
         download_called = []
 
-        async def fake_push(bot, content, image_paths=None):
+        async def fake_push(bot, content, image_paths=None, record=True):
             pushed.append((content, image_paths))
 
         async def fake_download(url):
@@ -98,7 +98,7 @@ class TestLiveTransition:
         m = _make_monitor(uid="1298779265", state={"last_live_status": False})
         pushed = []
 
-        async def fake_push(bot, content, image_paths=None):
+        async def fake_push(bot, content, image_paths=None, record=True):
             pushed.append((content, image_paths))
 
         async def fake_download(url):
@@ -121,7 +121,7 @@ class TestLiveTransition:
         m = _make_monitor(uid="1", state={"last_live_status": True})
         pushed = []
 
-        async def fake_push(bot, content, image_paths=None):
+        async def fake_push(bot, content, image_paths=None, record=True):
             pushed.append(content)
 
         monkeypatch.setattr(m, "_push", fake_push)
@@ -138,7 +138,7 @@ class TestLiveTransition:
         m = _make_monitor(uid="1", state={"last_live_status": False})
         pushed = []
 
-        async def fake_push(bot, content, image_paths=None):
+        async def fake_push(bot, content, image_paths=None, record=True):
             pushed.append(content)
 
         monkeypatch.setattr(m, "_push", fake_push)
@@ -201,7 +201,7 @@ class TestProactiveDynamic:
         m = _make_monitor(uid="1", sessdata="sess", state={"last_dynamic_id": "old"})
         pushed = []
 
-        async def fake_push(bot, content, image_paths=None):
+        async def fake_push(bot, content, image_paths=None, record=True):
             pushed.append(content)
 
         monkeypatch.setattr(m, "_push", fake_push)
@@ -235,7 +235,7 @@ class TestProactiveDynamic:
         m, _ = self._setup(monkeypatch, "明天来玩啊")
         calls = []
 
-        async def fake_push(bot, content, image_paths=None):
+        async def fake_push(bot, content, image_paths=None, record=True):
             calls.append((content, image_paths))
 
         async def fake_download(url):
@@ -260,7 +260,7 @@ class TestDynamic:
         m = _make_monitor(uid="1", sessdata="sess", state={"last_dynamic_id": "old"})
         pushed = []
 
-        async def fake_push(bot, content, image_paths=None):
+        async def fake_push(bot, content, image_paths=None, record=True):
             pushed.append(content)
 
         monkeypatch.setattr(m, "_push", fake_push)
@@ -320,7 +320,7 @@ class TestDynamicRetraction:
         m = self._monitor(monkeypatch, "1246839524441456643", {"last_dynamic_id": "1246839524441456000"})
         pushed = []
 
-        async def fake_push(bot, content, image_paths=None):
+        async def fake_push(bot, content, image_paths=None, record=True):
             pushed.append(content)
 
         monkeypatch.setattr(m, "_push", fake_push)
@@ -333,7 +333,7 @@ class TestDynamicRetraction:
         m = self._monitor(monkeypatch, "1246311690117578769", {"last_dynamic_id": "1246839524441456643"})
         pushed = []
 
-        async def fake_push(bot, content, image_paths=None):
+        async def fake_push(bot, content, image_paths=None, record=True):
             pushed.append(content)
 
         monkeypatch.setattr(m, "_push", fake_push)
@@ -346,7 +346,7 @@ class TestDynamicRetraction:
         m = self._monitor(monkeypatch, "1246839524441456643", {"last_dynamic_id": "1246839524441456643"})
         pushed = []
 
-        async def fake_push(bot, content, image_paths=None):
+        async def fake_push(bot, content, image_paths=None, record=True):
             pushed.append(content)
 
         monkeypatch.setattr(m, "_push", fake_push)
@@ -388,7 +388,7 @@ class TestPrime:
         m = _make_monitor(uid="1", sessdata="sess", state={})
         pushed = []
 
-        async def fake_push(bot, content, image_paths=None):
+        async def fake_push(bot, content, image_paths=None, record=True):
             pushed.append(content)
 
         async def _live():
@@ -427,7 +427,7 @@ class TestPrime:
         assert m._primed is False
         pushed = []
 
-        async def fake_push(bot, content, image_paths=None):
+        async def fake_push(bot, content, image_paths=None, record=True):
             pushed.append(content)
 
         # 停机期间灰泽满开播了 + 发了新动态（都比 state 里的旧记录新）
@@ -454,7 +454,7 @@ class TestPrime:
             "last_live_status": False, "last_dynamic_id": "old"})
         pushed = []
 
-        async def fake_push(bot, content, image_paths=None):
+        async def fake_push(bot, content, image_paths=None, record=True):
             pushed.append(content)
 
         async def _live():
@@ -543,3 +543,123 @@ class TestPush:
         await m._push(bot, "内容", image_paths=["C:/fake/dyn.jpg"])
         assert len(bot.sent) == 1
         assert "CQ:image" in str(bot.sent[0][1])  # 消息含图片段
+
+
+class TestPushRecordsIntoMemory:
+    """推出去的消息要写进**那个好友**的短期记忆。
+
+    2026-09-29 用户反馈：主动发出去的消息是机器人自己用 API 发的，不会作为事件回来，
+    从没进过记忆 → 粉丝顺着它回她（"这个好玩吗"）时，她不知道对方在说什么。
+    """
+
+    @pytest.fixture(autouse=True)
+    def _spy(self, monkeypatch):
+        self.recorded = []
+        monkeypatch.setattr(bb, "append_bot_message",
+                            lambda uid, text: self.recorded.append((uid, text)))
+
+    async def test_success_records_per_friend(self, monkeypatch):
+        m = _make_monitor(uid="1", state={})
+        monkeypatch.setattr(bb, "get_notify_whitelist", lambda: [])
+        await m._push(FakeBot(friends=("111", "222")),
+                      "灰泽满刚刚发了动态哦！\n\n动态内容：写完了\n\nhttps://space.bilibili.com/x/dynamic")
+        # 记的是**整理过的人话**（剥掉播报腔和链接），不是原样的通知模板
+        assert self.recorded == [("111", "（刚发了条动态：写完了）"),
+                                 ("222", "（刚发了条动态：写完了）")]
+
+    async def test_failed_send_not_recorded(self, monkeypatch):
+        m = _make_monitor(uid="1", state={})
+        monkeypatch.setattr(bb, "get_notify_whitelist", lambda: [])
+
+        class FlakyBot(FakeBot):
+            async def send_private_msg(self, user_id=None, message=None):
+                raise RuntimeError("发不出去")
+        await m._push(FlakyBot(friends=("111",)), "内容")
+        assert self.recorded == []      # 没发出去就别写进记忆
+
+    async def test_whitelist_still_records_only_targets(self, monkeypatch):
+        m = _make_monitor(uid="1", state={})
+        monkeypatch.setattr(bb, "get_notify_whitelist", lambda: ["222"])
+        await m._push(FakeBot(friends=("111", "222")), "内容")
+        assert self.recorded == [("222", "内容")]
+
+
+class TestToMemoryLine:
+    """通知模板是播报腔，写进记忆前要整理成人话。
+
+    照原样记会变成「灰泽满：灰泽满刚刚发了动态哦！」——名字两遍、像旁白，
+    而且短期记忆会作为 few-shot 喂回去，播报句会被她学走。
+    """
+
+    def test_dynamic_notice_becomes_plain(self):
+        out = _bc.to_memory_line("灰泽满刚刚发了动态哦！\n\n动态内容：写完了…终于写完了…\n\n"
+                                 "https://space.bilibili.com/1298779265/dynamic")
+        assert out == "（刚发了条动态：写完了…终于写完了…）"
+        assert "http" not in out and "灰泽满刚刚" not in out
+
+    def test_weibo_notice(self):
+        out = _bc.to_memory_line("灰泽满刚刚发了微博哦！\n\n微博内容：今天好累\n\nhttps://weibo.com/1/2")
+        assert out == "（刚发了条微博：今天好累）"
+
+    def test_live_notice(self):
+        out = _bc.to_memory_line("灰泽满宣布开播！\n\n今天的内容是：游玩下BanG Dream\n\n"
+                                 "https://live.bilibili.com/1713546334")
+        assert out == "（刚宣布开播：游玩下BanG Dream）"
+
+    def test_her_own_sentence_kept_verbatim(self):
+        assert _bc.to_memory_line("终于写完了，人快没了…晚上来打游戏") == "终于写完了，人快没了…晚上来打游戏"
+
+    def test_empty_body_still_readable(self):
+        assert _bc.to_memory_line("灰泽满刚刚发了动态哦！\n\n动态内容：（图片动态）") == "（刚发了条动态：（图片动态））"
+
+
+class TestNoticeOnlyRecordedWhenNoProactive:
+    """通知只在"她那句没发出去"时写进记忆（用户 2026-09-29 的建议）。
+
+    她那句本来就覆盖了同一件事，通知只是机器复述——再记一条是白占窗口。
+    但她那句没发出去时（判官拦住/生成失败/PROACTIVE=0），粉丝回的就是通知本身，
+    那时必须留痕。
+    """
+
+    @pytest.fixture(autouse=True)
+    def _spy(self, monkeypatch):
+        self.recorded = []
+        monkeypatch.setattr(bb, "append_bot_message",
+                            lambda uid, text: self.recorded.append((uid, text)))
+        monkeypatch.setattr(bb, "get_notify_whitelist", lambda: [])
+
+    def _dyn(self, monkeypatch, said):
+        m = _make_monitor(uid="1", sessdata="sess", state={"last_dynamic_id": "old"})
+
+        async def _d():
+            return {"id": "new", "text": "正文", "image_urls": []}
+        monkeypatch.setattr(m, "_fetch_latest_dynamic", _d)
+        monkeypatch.setattr(bb, "_save_state", lambda s: None)
+        monkeypatch.setattr(m, "_format_dynamic_push", lambda text: f"灰泽满刚刚发了动态哦！\n\n动态内容：{text}")
+
+        async def _compose(*a, **k):
+            return said
+        monkeypatch.setattr(bb, "compose_proactive", _compose)
+        return m
+
+    async def test_only_her_sentence_recorded(self, monkeypatch):
+        m = self._dyn(monkeypatch, "明天来玩啊")
+        await m._check_dynamic(FakeBot(friends=("111",)))
+        assert self.recorded == [("111", "明天来玩啊")]      # 通知没记
+
+    async def test_notice_recorded_when_no_sentence(self, monkeypatch):
+        m = self._dyn(monkeypatch, None)
+        await m._check_dynamic(FakeBot(friends=("111",)))
+        assert self.recorded == [("111", "（刚发了条动态：正文）")]   # 通知兜底留痕
+
+    async def test_live_notice_always_recorded(self, monkeypatch):
+        # 开播没有"她那句"，通知就是唯一留痕
+        m = _make_monitor(uid="1", state={"last_live_status": False})
+
+        async def _live():
+            return {"live_status": 1, "title": "测试直播", "room_id": 1}
+        monkeypatch.setattr(m, "_fetch_live_status", _live)
+        monkeypatch.setattr(bb, "_save_state", lambda s: None)
+        await m._check_live(FakeBot(friends=("111",)))
+        assert self.recorded and self.recorded[0][0] == "111"
+        assert "开播" in self.recorded[0][1]

@@ -1,0 +1,29 @@
+{
+  "name": "hazel-injection-explainer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "灰泽满注入链路 Remotion explainer",
+  "scripts": {
+    "studio": "remotion studio src/index.ts",
+    "render": "remotion render src/index.ts HazelInjectionExplainer out/hazel-injection-explainer.mp4 --codec h264",
+    "render:preview": "remotion render src/index.ts HazelInjectionExplainer out/hazel-injection-explainer-preview.mp4 --codec h264 --scale 0.5",
+    "render:voice": "remotion render src/index.ts HazelInjectionExplainer out/hazel-injection-explainer-with-voice.mp4 --codec h264 --props=render-props-voice.json",
+    "still": "remotion still src/index.ts HazelInjectionExplainer out/poster.png --frame=120",
+    "captions": "node scripts/export-captions.mjs",
+    "fit-voice": "node scripts/fit-narration-to-audio.mjs",
+    "voiceover": "powershell -ExecutionPolicy Bypass -File scripts/generate-voiceover.ps1",
+    "voice-api": "powershell -ExecutionPolicy Bypass -File scripts/start-speak-api.ps1"
+  },
+  "dependencies": {
+    "@remotion/media": "4.0.531",
+    "@remotion/cli": "4.0.531",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "remotion": "4.0.531"
+  },
+  "devDependencies": {
+    "@types/react": "18.3.3",
+    "@types/react-dom": "18.3.0",
+    "typescript": "5.6.3"
+  }
+}

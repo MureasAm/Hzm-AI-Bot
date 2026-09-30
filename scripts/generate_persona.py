@@ -11,14 +11,7 @@ import asyncio
 import sys
 from pathlib import Path
 from openai import AsyncOpenAI
-
-
-# ==========================
-# 读取 RAW_CORPUS
-# ==========================
-
-# 直接从你的 generate_vectors.py 导入
-from generate_vectors import RAW_CORPUS
+import _common
 
 
 # ==========================
@@ -32,13 +25,7 @@ PERSONA_DIR = PROJECT_ROOT / "persona"   # 人格 JSON 统一输出到 persona/
 
 
 def get_deepseek_key():
-    if ENV_FILE.exists():
-        with open(ENV_FILE, "r", encoding="utf-8") as f:
-            for line in f:
-                if line.startswith("OPENAI_API_KEY"):
-                    return line.split("=")[1].replace('"', '').strip()
-
-    return None
+    return _common.get_api_key("OPENAI_API_KEY")
 
 
 client = None
@@ -180,7 +167,7 @@ async def run(input_path: str | None = None, out_dir: str | None = None):
 
     client = AsyncOpenAI(
         api_key=key,
-        base_url="https://api.deepseek.com/v1"
+        base_url=_common.get_openai_base_url()
     )
 
     # 合并素材
@@ -196,7 +183,7 @@ async def run(input_path: str | None = None, out_dir: str | None = None):
 
 
     response = await client.chat.completions.create(
-        model="deepseek-v4-flash",
+        model=_common.get_model_name(),
 
         messages=[
             {

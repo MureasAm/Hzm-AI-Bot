@@ -5,9 +5,43 @@ cookie 会话策略刻意不同（B站塞 Header / 微博用 httpx cookie jar �
 那是有注释解释的差异，不是重复。
 """
 import json
+import re
 import tempfile
 import time
 from pathlib import Path
+
+# ==================== 写进记忆前的整理 ====================
+# 通知模板是**播报腔**：`灰泽满刚刚发了动态哦！\n\n动态内容：…\n\n<链接>`。
+# 照原样写进她的短期记忆有两个问题：
+#  ① 记忆行是"灰泽满：{内容}"，于是变成「灰泽满：灰泽满刚刚发了动态哦！」——
+#     名字出现两遍，读起来像旁白（正是提示词里明令禁止的那种句式）；
+#  ② 短期记忆会作为 few-shot 喂回模型，播报句会被她学走。
+# 所以剥掉播报开头/正文前缀/链接，留一句人话。
+_NOTICE_HEADS = {
+    "灰泽满刚刚发了动态哦！": "刚发了条动态",
+    "灰泽满刚刚发了微博哦！": "刚发了条微博",
+    "灰泽满宣布开播！": "刚宣布开播",
+}
+_BODY_PREFIXES = ("动态内容：", "微博内容：", "今天的内容是：")
+_TRAILING_URL_RE = re.compile(r"\s*https?://\S+\s*$")
+
+
+def to_memory_line(content: str) -> str:
+    """把推出去的文案整理成"记忆里她说过的那句"。
+
+    她本人的话（主动发言）原样返回；通知模板转成 `（刚发了条动态：…）`。
+    """
+    t = (content or "").strip()
+    head = next((h for h in _NOTICE_HEADS if t.startswith(h)), "")
+    if not head:
+        return t
+    body = t[len(head):].strip()
+    for p in _BODY_PREFIXES:
+        if body.startswith(p):
+            body = body[len(p):].strip()
+    body = _TRAILING_URL_RE.sub("", body).strip()
+    what = _NOTICE_HEADS[head]
+    return f"（{what}：{body}）" if body else f"（{what}）"
 
 
 def is_newer_id(new_id, last_id) -> bool:
