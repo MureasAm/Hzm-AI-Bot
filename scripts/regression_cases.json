@@ -38,21 +38,23 @@
    "id": "no_fixed_opener_when_deflecting",
    "desc": "被反复求交往时不能每轮同一个词开头、也不能逐字复读同一句",
    "user": "我是认真的，我想和你交往",
-   "runs": 8,
+   "runs": 24,
    "opener_homogeneity_max": 0.5,
    "verbatim_repeat_max": 3,
    "source": "记录.txt Joker 段 8/14 条以'呃，'开头。根因是 behaviors #3 的 response 明文写\"'呃…'起头\"，且 samples 里那句例句被逐字照抄（旧版 10/10 逐字相同）。已删例句 + response 去措辞规定。",
-   "_verbatim_note": "2026-09-30 由 1 提到 3：实测（12 轮 × 8 条）正常时最多就有 2 条完全相同—— 短回复撞车是正常的。原 bug 是 10/10 逐字相同，3 仍然抓得到（`outputs/_homogeneity_dist.py` 量的）。"
+   "_verbatim_note": "2026-09-30 由 1 提到 3：实测（12 轮 × 8 条）正常时最多就有 2 条完全相同—— 短回复撞车是正常的。原 bug 是 10/10 逐字相同，3 仍然抓得到（`outputs/_homogeneity_dist.py` 量的）。",
+   "_runs_note": "2026-09-30：runs 由 8 提到 24。同质判据要数「同一个开头占多少」，样本太小时**巧合就能撞破阈值**（实测 runs=6 时 4/6=67% 就挂，而那 4 轮 24 条回报里开头其实很分散、根本没稳定固化）。24 次里要凑到 >50% 需要 13 次同一个开头，巧合做不到——而真固化会给 20+/24。"
   },
   {
    "id": "no_verbatim_repeat_after_late",
    "desc": "被催迟到时不能逐字复读同一句解释",
    "user": "你怎么又迟到了，说好八点的",
-   "runs": 6,
+   "runs": 24,
    "verbatim_repeat_max": 3,
    "opener_homogeneity_max": 0.6,
    "source": "行为 #8『失约被催时认栽滑跪』。历史上'搬家''威严'都被【一致性规则】锁死过一个又一个来回；这条防的是它换个词再来一次。",
-   "_verbatim_note": "2026-09-30 由 1 提到 3：实测（12 轮 × 8 条）正常时最多就有 2 条完全相同—— 短回复撞车是正常的。原 bug 是 10/10 逐字相同，3 仍然抓得到（`outputs/_homogeneity_dist.py` 量的）。"
+   "_verbatim_note": "2026-09-30 由 1 提到 3：实测（12 轮 × 8 条）正常时最多就有 2 条完全相同—— 短回复撞车是正常的。原 bug 是 10/10 逐字相同，3 仍然抓得到（`outputs/_homogeneity_dist.py` 量的）。",
+   "_runs_note": "2026-09-30：runs 由 6 提到 24。同质判据要数「同一个开头占多少」，样本太小时**巧合就能撞破阈值**（实测 runs=6 时 4/6=67% 就挂，而那 4 轮 24 条回报里开头其实很分散、根本没稳定固化）。24 次里要凑到 >50% 需要 13 次同一个开头，巧合做不到——而真固化会给 20+/24。"
   },
   {
    "id": "no_third_person_self_reference",
