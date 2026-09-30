@@ -24,7 +24,7 @@
 用法：
     python scripts/skeleton_rule_ablation.py                  # 全部规矩用例
     python scripts/skeleton_rule_ablation.py --runs 4
-    python scripts/skeleton_rule_ablation.py --case no_third_person_self_reference
+    python scripts/skeleton_rule_ablation.py --case no_assistant_tone
 """
 import argparse
 import asyncio
