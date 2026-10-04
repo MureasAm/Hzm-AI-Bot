@@ -4,6 +4,7 @@ behaviors **不走向量**（L3 改为「判别词 + LLM 意图分类」，见 r
 所以改 behaviors.json 后不需要重算任何向量（旧文档提的 trigger_vectors.json 已废弃）。
 """
 import json
+import re
 
 from .constants import (
     TRAITS_FILE, STYLES_FILE, BEHAVIORS_FILE,
@@ -120,6 +121,16 @@ def build_global_persona_context(traits, styles):
 # 缓存的 trigger → 向量 映射（模块级，只加载一次）
 
 
+def _strip_speaker_prefix(u: str) -> str:
+    """去掉 samples.user 里自带的说话人前缀，防注入时出现「粉丝说：粉丝说：」。
+
+    数据里 11 条 behaviors 的 samples 有 8 条 user 写成「粉丝说：…」、3 条是裸问题
+    （不统一）。注入模板自己会加「粉丝说：」，所以数据侧的前缀必须在这里收掉——
+    改数据是治本，但历史上漏过，所以代码侧也兜一道。
+    """
+    return re.sub(r"^\s*(?:粉丝|观众|弹幕|绿冻)\s*(?:说|问|提到)[：:，,]?\s*", "", str(u or "")).strip()
+
+
 def _format_behavior_rule(rule: dict) -> str:
     """将一条行为规则格式化为注入文本。供检索层（select_behavior_item）使用。
 
@@ -148,7 +159,7 @@ def _format_behavior_rule(rule: dict) -> str:
         # 真人原话示范：模型照这个腔调学，不自己发明
         sample_lines = []
         for s in samples:
-            u = s.get("user", "")
+            u = _strip_speaker_prefix(s.get("user", ""))
             r = s.get("reply", "")
             if u and r:
                 sample_lines.append(f"  粉丝说：{u} → 灰泽满：{r}")

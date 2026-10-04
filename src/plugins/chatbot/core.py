@@ -18,8 +18,6 @@ from .constants import (
     DEFAULT_MODEL, THINKING_DISABLED,
     CHAT_TEMPERATURE, CHAT_FREQUENCY_PENALTY, CHAT_MAX_TOKENS,
     MEMORY_EXTRACT_TEMPERATURE, MEMORY_EXTRACT_MAX_TOKENS,
-    VOICE_SAMPLE_REPLY_TRIM_CHARS,
-    PROACTIVE_SAMPLE_TOP_N, PROACTIVE_SAMPLE_KEEP_ALL,
 )
 from .persona import (
     load_persona_rules, build_global_persona_context, load_schedule,
@@ -32,7 +30,7 @@ from .memory import (
 )
 from .rag import embed_query
 from .retrieval import (
-    retrieve_corpus_candidates, retrieve_voice_samples,
+    retrieve_corpus_candidates,
     load_phrase_groups, select_phrase_groups,
     retrieve_preferences, retrieve_core_stories, fuse_and_truncate, select_behavior_item,
 )
@@ -46,6 +44,7 @@ from . import context_probe
 from . import group_memory
 from .routing import (
     LEGENDARY_REPLIES, LEGENDARY_CONFIRMS, legendary_confirmed, legendary_hit, classify_l3,
+    _repair_llm_json,
 )
 from .reply_style import (
     split_reply, split_delay, clean_reply, is_echo_reply, is_emotion_only_query,
@@ -357,7 +356,7 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
                        core_stories: list = None, session_context: str = "",
                        query_hint: str = "", denied_terms: set | None = None,
                        group_context: str = "", history_gap_note: str = "",
-                       prev_session_note: str = "") -> list:
+                       prev_session_note: str = "", same_request: dict = None) -> list:
     """按优先级组装发送给模型的消息列表。
 
     fused_items 为三路融合后的 RetrievalItem 列表，按源分组注入。
@@ -542,32 +541,33 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
                 "content": "【她的固定说法】以下情景她说这些话：\n" + "\n".join(phrase_blocks)
             })
 
-    # 声音样本 few-shot（source=voice_sample）：示范灰泽满"怎么说话"
-    if samples:
-        messages.append({
-            "role": "system",
-            # A 类包装语已删（2026-09-30）：原来还有「只学其中的语气、断句、自称（灰泽满/hzm）和措辞。
-            # 内容要针对当前话题，不要复述」——§3.5 实测这类"管怎么用"的说明零作用（④ vs ⑧ 逐字率一样）。
-            # 还有「日常回复保持短句、简短干脆」——与骨架【说话节奏】重复。
-            # ⚠️ **保留**「不要套用示例里的具体内容（人物/礼物/衣服/事件等）」——它是**防内容泄漏**，
-            #    **§3.5 没测过这一条**（那次测的是"会不会整句搬走"，不是"会不会把礼物/人名搬进新句"）。
-            #    测试 `test_core.py::TestVoiceSampleLabel` 守着它，删这轮**不该顺手动它**。
-            "content": "【灰泽满的说话方式参考】以下是她真实的对话片段。"
-                       "不要套用示例里的具体内容（人物/礼物/衣服/事件等）。"
-        })
-        # 同一句真人原话可能既作为"行为示范"被注入、又被 RRF 命中当风格样本——
-        # 已作为行为示范出现过的就不重复塞，避免同轮同句出现两遍。
-        already_shown = "\n".join(m.get("content", "") for m in messages)
-        for it in samples:
-            user_part = it.extra.get("user", "")
-            reply_part = it.extra.get("reply", "")
-            if user_part and reply_part and reply_part not in already_shown:
-                messages.append({"role": "user", "content": user_part})
-                messages.append({"role": "assistant", "content": _trim_text(reply_part, VOICE_SAMPLE_REPLY_TRIM_CHARS)})
+    # ⛔【灰泽满的说话方式参考】整段已删（2026-10-04）——voice_samples 通道取消。
+    #   原因（实测，n=32）：
+    #     ① 它按【话题】检索，必然捞到"同话题的完整回答" → 把**事实**灌进对话：
+    #        "你今天吃什么了"→捞到"今天怎么没吃饭"→她答"还没吃呢"→下一轮自相矛盾；
+    #        "外面下雨了"→她答"刚淋着跑回来的"（编的）；"最近怎么样"→"要写出百年孤独了"（近乎逐字搬）
+    #     ② assistant 通道注入时，样本和真实历史混在一起（样本 user 与真实 user 相邻，
+    #        模型读成"连着两轮用户发言"）→ **与【当前时间】"正在直播中"冲突 13/32**（system 一行只 2/32），
+    #        样本词泄漏 4/32（system 一行 1/32），反问率 38%（system 一行 50%）
+    #   这批原句里**该留的 18 条已并入 behaviors 的 samples**（按情景触发，不按话题乱捞）。
 
     # ⛔【回复节奏】已删（2026-09-30）——C 类：与骨架【说话节奏】重复
     #   （骨架写的是"默认短句，一句一个想法，说清楚就停"），纯浪费预算。
     #   短句仍由骨架软引导 + `split_reply` 分段 + 语音兜底，**没有丢机制**。
+
+    # 连续索要（客观事实，不含指令）：她需要知道"这已经是第几次了"。
+    # 为什么必须有（2026-10-04 从真实记录发现）：上下文只带最近 10 条，
+    # 跨轮的连续索要她完全看不见 → 每轮都当成"第一次被要" → 换着理由挡 5 轮后突然松口，
+    # 松口之后又失去"我从没答应过"的立场（3076669330 要"宝宝"/要语音两段都是这样）。
+    # ⚠️ 这里**只给事实**（第几轮、之前在要什么），**不给"该不该答应"**——
+    #    "怎么应对"是 behaviors 的事；而且实测"管怎么用"的说明无效、事实类信息有效。
+    if same_request and int(same_request.get("count") or 1) >= 2:
+        what = same_request.get("what") or "同一件事"
+        messages.append({
+            "role": "system",
+            "content": f"【客观情况】用户已经连续 {same_request['count']} 轮在向灰泽满要{what}了"
+                       f"（换着说法也算同一件事）。前面 {same_request['count'] - 1} 轮都没有答应。",
+        })
 
     # 感知源②：图片消息——把视觉描述并入用户消息，避免空消息让模型以为"对方没说话"
     final_user = user_msg
@@ -646,37 +646,12 @@ async def generate_reply(messages: list) -> str:
     return reply if reply else _FALLBACK_SILENT
 
 
-def _repair_llm_json(text: str) -> str:
-    """修复 LLM 常见的不规范 JSON（DeepSeek 偶发），尽力让 json.loads 能过。
-
-    常见病：键没加双引号（{name: "x"}）、单引号键/值、尾逗号、markdown 围栏、前后杂质。
-    修不好的原样返回，交给调用方兜底（重试/丢弃）。
-    """
-    if not text:
-        return text
-    t = text.strip()
-    # 剥 markdown 代码围栏
-    t = re.sub(r"^```[a-zA-Z]*\s*", "", t)
-    t = re.sub(r"\s*```$", "", t)
-    # 只取最外层 {…} / […]（剥掉前后杂质，如模型先写"好的"）
-    start = min((i for i in (t.find("{"), t.find("[")) if i != -1), default=-1)
-    end = max(t.rfind("}"), t.rfind("]"))
-    if start != -1 and end > start:
-        t = t[start:end + 1]
-    # 键补双引号：单引号键 {'a': …} 和裸键 {a: …}
-    t = re.sub(r"([{,]\s*)'([^']+)'(\s*:)", r'\1"\2"\3', t)
-    t = re.sub(r"([{,]\s*)([A-Za-z_][A-Za-z0-9_]*)(\s*:)", r'\1"\2"\3', t)
-    # 单引号字符串值 → 双引号
-    t = re.sub(r":\s*'([^']*)'", lambda m: ': "' + m.group(1).replace('"', '\\"') + '"', t)
-    # 尾逗号 ,} / ,]
-    t = re.sub(r",\s*([}\]])", r"\1", t)
-    return t
-
-
 def _parse_memory_extract(content: str) -> dict:
     """把记忆提取 LLM 的输出解析为 dict：剥围栏 + 修复不规范 JSON。
 
     内容为 "null" 返回 {}；修复后仍不是合法 JSON 则抛异常（调用方重试一次）。
+
+    `_repair_llm_json` 已挪到 routing.py（L3 也要用，且 core 反向 import 会循环）。
     """
     content = (content or "").strip()
     if content == "null":
@@ -773,7 +748,7 @@ async def gather_retrieval(query_text: str, retrieval_query: str, history_text: 
     traits, styles, behaviors = load_persona_rules()
     global_persona = build_global_persona_context(traits, styles)
     result = {"global_persona": global_persona, "fused_items": [],
-              "preference_items": [], "core_stories": []}
+              "preference_items": [], "core_stories": [], "same_request": None}
 
     # 纯图片消息（无文字）不做检索：让灰泽满直接评价图片，避免语料/行为劫持图片内容
     # 纯表情消息（emoji/[表情：xx]）也不做语义检索：表情只表达情绪不表达话题，
@@ -816,6 +791,10 @@ async def _fill_retrieval(result: dict, query_text: str, retrieval_query: str, h
             print(f"[行为] LLM 判定: {l3['behavior']}")
         if l3["phrases"]:
             print(f"[措辞] LLM 判定: {'、'.join(l3['phrases'])}")
+        sr = l3.get("same_request") or {}
+        if int(sr.get("count") or 1) >= 2:
+            result["same_request"] = sr
+            print(f"[连续索要] 第 {sr['count']} 轮：{sr.get('what') or '（未说明）'}")
         behavior_item = select_behavior_item(query_text, l3["behavior"], behaviors)
         behavior_items = [behavior_item] if behavior_item else []
         phrase_items = select_phrase_groups(l3["phrases"], phrase_groups)
@@ -831,14 +810,8 @@ async def _fill_retrieval(result: dict, query_text: str, retrieval_query: str, h
         candidates = retrieve_corpus_candidates(retrieval_query or query_text, query_vector)
         corpus_items = await judge_corpus(deepseek_client, query_text, candidates)
 
-    if is_user_msg:
-        sample_items = retrieve_voice_samples(retrieval_query or query_text, query_vector)
-    else:
-        # 主动发言：她自己的陈述句跟"弹幕问答"样本不同构，按阈值取会一条都进不来
-        # （见 constants.PROACTIVE_SAMPLE_TOP_N 的实测数据）→ 取 top-N 不设门槛
-        sample_items = retrieve_voice_samples(
-            retrieval_query or query_text, query_vector,
-            threshold=PROACTIVE_SAMPLE_KEEP_ALL, top_n=PROACTIVE_SAMPLE_TOP_N)
+    # 声音样本那一路已删（2026-10-04）：sample_items 恒为空，见 retrieval.py 顶部说明。
+    sample_items: list = []
 
     if _detach_behavior_from_rrf():
         # 行为/措辞**不进 RRF**：它们是 L3 判出类别后**按名字查表**的结果（没有相似度、
@@ -967,6 +940,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         session_context=session_context, query_hint=query_hint,
         denied_terms=denied_terms, group_context=group_context,
         history_gap_note=history_gap_note, prev_session_note=_prev_session_note,
+        same_request=ctx.get("same_request"),
     )
 
     # --- 🤖 调用大模型 ---

@@ -17,9 +17,6 @@ import pytest
 from src.plugins.chatbot import proactive
 from src.plugins.chatbot import core
 from src.plugins.chatbot.proactive import compose_proactive, proactive_enabled
-from src.plugins.chatbot.constants import (
-    PROACTIVE_SAMPLE_KEEP_ALL as KEEP_ALL, PROACTIVE_SAMPLE_TOP_N as SAMPLE_TOP_N,
-)
 from src.plugins.chatbot.retrieval import RetrievalItem
 
 
@@ -50,7 +47,6 @@ def _isolate(monkeypatch):
     async def _no_embed(*a, **k):
         return [0.0]
     monkeypatch.setattr(core, "embed_query", _no_embed)
-    monkeypatch.setattr(core, "retrieve_voice_samples", lambda *a, **k: [])
 
 
 def _with_llm(monkeypatch, content=None, exc=None):
@@ -377,50 +373,41 @@ class _RecordingClient:
             message=SimpleNamespace(content=content), finish_reason="stop")])
 
 
-class TestSampleInjection:
-    """"没有生活感"的根因：她自己的动态是陈述句，跟"弹幕问答"样本不同构。
+class TestTrailingEmoji:
+    """原文带 emoji → 她这句话结尾也带一个。
 
-    实测（2026-09-27）5 条真实动态：晚安 0.736 / 直播推迟 0.712 进得来，
-    但「新视频发出来了…」0.532、「下午出去逛了逛」0.543 全部低于 0.66 阈值和保底门槛
-    → **一条样本都进不来** → 只剩人设骨架干说。
+    她发动态爱带 emoji（🌙💤📑🥺😭），但聊天样本里一个都没有（那批是直播口语转写，
+    说话打不出 emoji）——所以用**确定性**做法：照抄原文那一个，不靠提示词、不自造。
     """
 
-    def _patch(self, monkeypatch, client, items):
-        monkeypatch.setattr(proactive, "_get_clients", lambda: (client, object()))
+    @pytest.mark.parametrize("src,reply,expect", [
+        ("晚安💤", "睡了，你也早点睡", "睡了，你也早点睡💤"),
+        ("晚安🌙 （又熬夜了…", "又熬夜了，明天见", "又熬夜了，明天见🌙"),
+        ("上午好 今天学校事情临时有点多📑 应该是不播了", "今天有点事，应该不播了", "今天有点事，应该不播了📑"),
+        ("好了提前晚安大家😭", "这就去躺着了", "这就去躺着了😭"),
+    ])
+    def test_emoji_goes_to_the_end(self, src, reply, expect):
+        assert proactive.ensure_trailing_emoji(reply, src) == expect
 
-        async def _emb(*a, **k):
-            return [0.0]
-        monkeypatch.setattr(core, "embed_query", _emb)
-        monkeypatch.setattr(core, "retrieve_voice_samples", lambda *a, **k: items)
+    def test_no_emoji_no_change(self):
+        assert proactive.ensure_trailing_emoji("睡了", "晚安，明天见") == "睡了"
 
-    async def test_samples_requested_without_threshold(self, monkeypatch):
-        seen = {}
+    def test_already_used_not_duplicated(self):
+        assert proactive.ensure_trailing_emoji("睡了💤明天见", "晚安💤") == "睡了💤明天见"
 
-        def fake_retrieve(text, vector, threshold=None, top_n=None):
-            seen["threshold"], seen["top_n"] = threshold, top_n
-            return []
-        client = _RecordingClient()
-        self._patch(monkeypatch, client, [])
-        monkeypatch.setattr(core, "retrieve_voice_samples", fake_retrieve)
+    def test_arrow_is_not_an_emoji(self):
+        # "到这个⬇️里面鲨会儿人" 的箭头是**指代配图的标记**，带进她的话里就是乱码
+        assert proactive.ensure_trailing_emoji("去图里鲨会儿人", "写到累了会到这个⬇️里面鲨会儿人") == "去图里鲨会儿人"
 
-        await compose_proactive("下午出去逛了逛", "B站")
-        assert seen["threshold"] == KEEP_ALL     # 不设阈值（她自己的陈述句跟样本不同构）
-        assert seen["top_n"] == SAMPLE_TOP_N
+    def test_first_emoji_wins_over_trailing_tag(self):
+        # "📦…🔗"：结尾那个往往属于链接/标签，取第一个跟主句绑的
+        src = "刚收到一个快递📦里面是草本肥皂（怎么还没收到砍一刀链接🔗）"
+        assert proactive.ensure_trailing_emoji("收到个怪肥皂", src) == "收到个怪肥皂📦"
 
-    async def test_framing_message_keeps_samples_as_style_only(self, monkeypatch):
-        # 不框一句的话，模型会把样本当成"最近说过的话"去接，甚至搬示例里的内容
-        item = RetrievalItem(source="voice_sample", item_id="s1", score=0.5, text="",
-                             extra={"user": "粉丝问：你忙吗", "reply": "灰泽满忙得很"})
-        client = _RecordingClient()
-        self._patch(monkeypatch, client, [item])
-
-        await compose_proactive("今天好累", "B站")
-        gen_msgs = client.calls[-1]
-        assert any("说话方式参考" in m["content"] for m in gen_msgs)
-        assert any(m["content"] == "灰泽满忙得很" for m in gen_msgs)
-
-    async def test_no_samples_no_framing(self, monkeypatch):
-        client = _RecordingClient()
-        self._patch(monkeypatch, client, [])
-        await compose_proactive("今天好累", "B站")
-        assert not any("说话方式参考" in m["content"] for m in client.calls[-1])
+    async def test_applied_in_compose(self, monkeypatch):
+        class _C(_TwoStepClient):
+            pass
+        monkeypatch.setattr(proactive, "_get_clients",
+                            lambda: (_C(gen="又熬夜了，明天见"), object()))
+        out = await compose_proactive("晚安🌙 （又熬夜了…", "B站")
+        assert out == "又熬夜了，明天见🌙"

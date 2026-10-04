@@ -49,10 +49,10 @@ import retrieval_eval as RE           # noqa: E402
 from src.plugins.chatbot import retrieval as R      # noqa: E402
 from src.plugins.chatbot.persona import load_persona_rules  # noqa: E402
 from src.plugins.chatbot.constants import (         # noqa: E402
-    SOURCE_WEIGHTS, RETRIEVAL_TOPK, VOICE_SAMPLE_PREFER_SHORT, RRF_K)
+    SOURCE_WEIGHTS, RETRIEVAL_TOPK, RRF_K)   # VOICE_SAMPLE_PREFER_SHORT 已删（2026-10-04）
 
 DUMP = _common.OUTPUTS_DIR / "eval" / "weights_dump.json"
-ROUTES = ("corpus", "voice_sample", "behavior", "phrase")
+ROUTES = ("corpus", "behavior", "phrase")   # voice_sample 已删（2026-10-04）
 
 
 def _item_to_dict(it) -> dict:
@@ -105,8 +105,11 @@ async def do_dump() -> int:
     return 0
 
 
-def _score_combo(dump: list, weights: dict, prefer_short: bool) -> tuple:
-    """用给定权重重新融合 + 截断，再按**同一份期望**判分。→ (通过数, 总条数)"""
+def _score_combo(dump: list, weights: dict) -> tuple:
+    """用给定权重重新融合 + 截断，再按**同一份期望**判分。→ (通过数, 总条数)
+
+    voice_sample 那一路已删（2026-10-04），原来的 prefer_short 加权一并去掉。
+    """
     passed = 0
     for rec in dump:
         lists = []
@@ -114,14 +117,9 @@ def _score_combo(dump: list, weights: dict, prefer_short: bool) -> tuple:
             items = [_dict_to_item(d) for d in rec["routes"].get(s, [])]
             lists.append(items)
         w = dict(weights)
-        if prefer_short:
-            for it in lists[1]:                      # voice_sample
-                if it.extra.get("length", "short") == "short":
-                    w["voice_sample"] = w.get("voice_sample", 1.0) + 0.3
-                    break
         fused = R.rrf_fuse(lists, k=RRF_K, weights=w)[:RETRIEVAL_TOPK]
         fused = R.truncate_by_budget(fused)
-        got = {s: [] for s in ("corpus", "voice_sample", "behavior", "phrase",
+        got = {s: [] for s in ("corpus", "behavior", "phrase",
                                "preference", "core_story")}
         for it in fused:
             got.setdefault(it.source, []).append(it)
@@ -141,7 +139,7 @@ def do_sweep() -> int:
     dump = json.loads(DUMP.read_text(encoding="utf-8"))
     print(f"离线扫描：{len(dump)} 条 case，判据 = 「融合+截断后期望条目还在」\n")
 
-    base_passed, n = _score_combo(dump, SOURCE_WEIGHTS, VOICE_SAMPLE_PREFER_SHORT)
+    base_passed, n = _score_combo(dump, SOURCE_WEIGHTS)
     print(f"现状 SOURCE_WEIGHTS = {SOURCE_WEIGHTS}")
     print(f"  → 通过 {base_passed}/{n} = {base_passed/n*100:.0f}%\n")
 
@@ -151,7 +149,7 @@ def do_sweep() -> int:
     for b, c, v, p in itertools.product(grid["behavior"], grid["corpus"],
                                         grid["voice_sample"], grid["phrase"]):
         w = {"behavior": b, "corpus": c, "voice_sample": v, "phrase": p}
-        ps, _ = _score_combo(dump, w, VOICE_SAMPLE_PREFER_SHORT)
+        ps, _ = _score_combo(dump, w)
         rows.append((ps, w))
     rows.sort(key=lambda x: -x[0])
     print(f"{'通过':>5}  {'behavior':>9}{'corpus':>8}{'voice_sample':>13}{'phrase':>8}")
@@ -174,7 +172,7 @@ def do_sweep() -> int:
         for val in vals:
             w = dict(SOURCE_WEIGHTS)
             w[route] = val
-            ps, _ = _score_combo(dump, w, VOICE_SAMPLE_PREFER_SHORT)
+            ps, _ = _score_combo(dump, w)
             line.append(f"{val}→{ps}")
         print(f"  {route:<14}" + "　".join(line))
 

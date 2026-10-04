@@ -105,7 +105,7 @@ def install_traps():
     # core 不再调它，那层**永远不会出现**，看 trace 的人会误以为"corpus 没跑"。已删。
     _wrap(core, "retrieve_corpus_candidates", "corpus·候选", _items)
     _wrap(core, "judge_corpus", "corpus·LLM判", _items)
-    _wrap(core, "retrieve_voice_samples", "voice_sample", _items)
+    # voice_sample 那一路已删（2026-10-04），core 上已没有这个属性 → 不能包
     _wrap(core, "select_phrase_groups", "phrase", _items)
     _wrap(core, "retrieve_preferences", "preference",
           lambda v: [{"id": x.get("id"), "text": (x.get("text") or "")[:50]} for x in (v or [])])

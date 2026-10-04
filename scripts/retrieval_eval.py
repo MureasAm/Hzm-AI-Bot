@@ -152,7 +152,6 @@ async def snapshot(query: str, client, ds_client, behaviors) -> tuple:
           if ds_client else {"behavior": "", "phrases": []})
     got = {
         "corpus": await corpus_items(query, qv, ds_client),
-        "voice_sample": retrieval.retrieve_voice_samples(query, qv),
         "phrase": retrieval.select_phrase_groups(l3["phrases"], phrase_groups),
         "preference": retrieval.retrieve_preferences(query),
         "core_story": retrieval.retrieve_core_stories(query, qv),
@@ -224,7 +223,7 @@ async def run(cases, verbose: bool, only_id: str = None):
                     print(f"      · 实际 {source}: {items}")
 
     # ---- 汇总：按 source 的命中率 ----
-    total = {"behavior": [0, 0], "corpus": [0, 0], "voice_sample": [0, 0], "phrase": [0, 0],
+    total = {"behavior": [0, 0], "corpus": [0, 0], "phrase": [0, 0],
              "preference": [0, 0], "core_story": [0, 0]}
     for r in results:
         for c in r["checks"]:

@@ -39,10 +39,12 @@ GROUP_EVENT_REPLY_PROB = 0.3
 # （qq-bridge 那边的经验值也是"普通闲聊每 3~5 轮一张"）。
 # 注意这只是**冷却**，不是频率——真正决定发不发的是"表情与这句话是否十分对应"。
 STICKER_COOLDOWN_TURNS = 3
-# 最近发过的表情记多少个（这些都会被排除）。
-# 光防"连着发"不够——用户报的是"**同类**太频繁"：换个话题回来还会撞上同一张。
-# 记 8 个 ≈ 同一张至少隔 8 次表情包才会再出现。
-STICKER_RECENT_KEEP = 8
+# 最近发过的**类别**记几个（这些类别里的图都会被排除）。
+# 用户 2026-10-04：去重按**类别**而不是单张——同一类里可能有好几张
+# （委屈 3 张、无语无奈 4 张），按单张挡不住"换一张还是同一个味道"。
+# ⚠️ 别按"张"来理解这个数字：库里有 18 类，记 8 类等于把近一半锁死，
+# 所以从 8 降到 3（≈ 最近三次表情包不重类）。
+STICKER_RECENT_KEEP = 3
 SCHEDULE_FILE = PROJECT_ROOT / "persona" / "world" / "schedule.json"          # 她的周表(手动维护,注入地面真值)
 
 # ==================== 已删除：schedule 的「近况」====================
@@ -54,7 +56,6 @@ SCHEDULE_FILE = PROJECT_ROOT / "persona" / "world" / "schedule.json"          # 
 # 远强于任何 system 说明。且这个字段手动维护必烂（实测烂了 20 天）。
 # **别再把它加回来**：真正该做的是保持样本库/corpus 与直播内容同步，而不是再设一个会烂的字段。
 VECTOR_FILE = PROJECT_ROOT / "persona" / "world" / "corpus_vectors.json"         # 直播记忆向量库（灰泽满的人物记忆，归 world/）
-VOICE_SAMPLE_VECTOR_FILE = PROJECT_ROOT / "persona" / "speech" / "voice_sample_vectors.json"  # 声音样本向量缓存（跟 voice_samples.json）
 # 措辞指纹 / 偏好：**已不用向量**（2026-09-26 改判据，见 retrieval.py 顶部）。
 # 现在读源文件；`phrase_vectors.json` / `preference_vectors.json` 与对应的 precompute 已停用（留着以防回退）。
 PHRASES_FILE = PROJECT_ROOT / "persona" / "speech" / "phrases.json"
@@ -121,23 +122,11 @@ CORPUS_LEXICAL_EXTRA_N = 6    # 除语义 top-N 外，**按词面沾边**再补�
 #   ——§2.3 的判据对比实验量过"候选给多了反而更差"。按 ov 从高到低取。
 CORPUS_JUDGE_MAX_KEEP = 2     # 判定最多保留几条（限制爆破半径：判错也只是多说一句，不是灌一堆）
 
-VOICE_SAMPLE_TOP_N = 3        # 风格样本每路取 top
-# 阈值不是拍的：跑 `python scripts/threshold_scan.py` 量「噪声地板」
-# （15 条明确无关的输入打到每路上的最高分），阈值必须在地板之上，否则等于没有阈值。
-# 2026-09-25 体检：voice_sample 地板 0.610 → 原 0.60 压在 Threshold 上，提到 0.66。
-VOICE_SAMPLE_THRESHOLD = 0.66 # 风格样本阈值（噪声地板 0.610 + 余量）
-VOICE_SAMPLE_KEEPALIVE = True # 样本全低于阈值时保底注入 1 条（保住口癖）
-VOICE_SAMPLE_KEEPALIVE_MIN_SIM = 0.66  # 保底注入的最低相关度：与主阈值一致，低于则不注入（宁断档不错话题，防"日常聊时间"被塞直播样本）
-VOICE_SAMPLE_MIN_K = 1        # 保底注入条数
-# ---- 主动发言（动态/微博）取样本：**不设阈值**，见 PROACTIVE_SAMPLE_TOP_N ----
-# 那套阈值是按"用户问句 vs 弹幕问答样本"标定的，而她自己的动态是**陈述句**，天然不同构：
-# 实测 5 条真实动态——「晚安，明天见」0.736 进得来，但「新视频发出来了…」0.532、
-# 「下午出去逛了逛」0.543 全部低于阈值和保底门槛 → **一条样本都进不来** →
-# 只剩人设骨架干说（用户反馈"没有聊天生活感"的直接原因）。
-# 主动发言要的是"她的声音锚"（内容本来就由那条动态给定），所以取 top-N 不设门槛。
-PROACTIVE_SAMPLE_TOP_N = 2
-PROACTIVE_SAMPLE_KEEP_ALL = -1.0   # 余弦范围 -1~1，取 -1 = 全收
-VOICE_SAMPLE_PREFER_SHORT = True  # 注入时优先 short 档样本（控制回复长度）
+# ==================== 声音样本通道：2026-10-04 已停用 ====================
+# 原来这里有一组 VOICE_SAMPLE_*（TOP_N / THRESHOLD / KEEPALIVE / PREFER_SHORT / REPLY_TRIM_CHARS）
+# 和 PROACTIVE_SAMPLE_*。整套已删，原因见 retrieval.py 顶部「声音样本通道已停用」。
+# 一句话：它按【话题】检索 → 必然把同话题的**事实**灌进对话 → 自相矛盾/编事实/逐字搬；
+# 而 behaviors 按【情景】检索，话题天然不同，只带走形态。该留的 18 条已并入 behaviors。
 
 # ==================== V3 措辞指纹 ====================
 PHRASE_TOP_N = 2              # 一轮最多注入几组措辞（组由 L3 分类给出，不再有相似度阈值）
@@ -149,13 +138,12 @@ PHRASE_PHASES_MAX = 3         # 每个措辞组注入的短语条数上限
 
 # ==================== V3 RRF 融合 ====================
 RRF_K = 60                    # RRF 平滑常数
-SOURCE_WEIGHTS = {"behavior": 1.5, "corpus": 1.0, "voice_sample": 1.0, "phrase": 1.2}
+SOURCE_WEIGHTS = {"behavior": 1.5, "corpus": 1.0, "phrase": 1.2}   # voice_sample 已删（2026-10-04）
 RETRIEVAL_TOPK = 6            # 融合后条数硬上限
 
 # ==================== V3 预算控制 ====================
 RETRIEVAL_BUDGET_CHARS = 1200      # 融合检索注入字符预算（corpus+samples）
 MAX_RETRIEVAL_ITEM_CHARS = 300     # 单条检索结果字符上限
-VOICE_SAMPLE_REPLY_TRIM_CHARS = 60   # 长样本回复裁剪到该字数（引导短句）
 
 # ==================== 短期记忆 ====================
 SHORT_MEMORY_LINES = 10  # 最近 5 轮，每轮 2 条（用户 + AI）；>3 轮可缓解承诺/借口遗忘

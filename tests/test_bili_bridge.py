@@ -2,6 +2,8 @@
 
 所有外部调用（B站接口、好友列表、私聊、状态写入）全部 mock/打桩。
 """
+import asyncio
+
 import pytest
 
 from src.plugins.chatbot import _bridge_common as _bc
@@ -663,3 +665,68 @@ class TestNoticeOnlyRecordedWhenNoProactive:
         await m._check_live(FakeBot(friends=("111",)))
         assert self.recorded and self.recorded[0][0] == "111"
         assert "开播" in self.recorded[0][1]
+
+
+class TestRepostDynamicSkipped:
+    """转发别人的动态：**整条不推**（用户 2026-09-29 决定）。
+
+    原因：转一条视频时原动态的标题/封面在接口层取不全，正文只剩她自己那半句
+    （实测：`_extract_dynamic_text` 给 '看这个'），粉丝看不懂；
+    转出来的主动发言也容易张冠李戴。
+    """
+
+    def test_is_repost_flag(self, monkeypatch):
+        from types import SimpleNamespace
+        m = _make_monitor(uid="1", sessdata="sess", state={})
+        monkeypatch.setattr(bb, "_get_emote_map", lambda: _async({}))
+
+        async def _page(*a, **k):
+            return {"items": [{"id_str": "9", "orig": {"id_str": "1"},
+                               "modules": {"module_dynamic": {"desc": {"text": "看这个"}}}}]}
+        import bilibili_api.dynamic as _dyn
+        monkeypatch.setattr(_dyn, "get_dynamic_page_info", _page)
+        import bilibili_api.utils.network as _net
+        monkeypatch.setattr(_net, "Credential", lambda **k: object())
+        dyn = asyncio.get_event_loop_policy().new_event_loop().run_until_complete(
+            m._fetch_latest_dynamic())
+        assert dyn["is_repost"] is True
+        assert dyn["text"] == "看这个"
+
+    async def test_repost_not_pushed_but_watermark_advances(self, monkeypatch):
+        m = _make_monitor(uid="1", sessdata="sess", state={"last_dynamic_id": "old"})
+        pushed = []
+
+        async def fake_push(bot, content, image_paths=None, record=True):
+            pushed.append(content)
+        monkeypatch.setattr(m, "_push", fake_push)
+        monkeypatch.setattr(bb, "_save_state", lambda s: None)
+        monkeypatch.setattr(m, "_format_dynamic_push", lambda t: f"通知:{t}")
+
+        async def _dyn():
+            return {"id": "new", "text": "看这个", "image_urls": [], "is_repost": True}
+        monkeypatch.setattr(m, "_fetch_latest_dynamic", _dyn)
+
+        await m._check_dynamic(FakeBot())
+        assert pushed == []                              # 一条都不发
+        assert m.state["last_dynamic_id"] == "new"       # 但水位线要前进，否则每轮重判
+
+    async def test_normal_dynamic_still_pushed(self, monkeypatch):
+        m = _make_monitor(uid="1", sessdata="sess", state={"last_dynamic_id": "old"})
+        pushed = []
+
+        async def fake_push(bot, content, image_paths=None, record=True):
+            pushed.append(content)
+        monkeypatch.setattr(m, "_push", fake_push)
+        monkeypatch.setattr(bb, "_save_state", lambda s: None)
+        monkeypatch.setattr(m, "_format_dynamic_push", lambda t: f"通知:{t}")
+
+        async def _dyn():
+            return {"id": "new", "text": "正文", "image_urls": [], "is_repost": False}
+        monkeypatch.setattr(m, "_fetch_latest_dynamic", _dyn)
+
+        await m._check_dynamic(FakeBot())
+        assert pushed == ["通知:正文"]
+
+
+async def _async(v):
+    return v

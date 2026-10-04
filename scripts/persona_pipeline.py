@@ -30,7 +30,7 @@ from pathlib import Path
 import _common
 
 
-TARGETS = ("corpus", "voice-samples", "phrases", "behaviors")
+TARGETS = ("corpus", "behaviors")   # voice-samples / phrases 已下线（2026-10-04：并入 behaviors）
 PIPELINE_DIR = _common.OUTPUTS_DIR / "persona_pipeline"
 STATEMENT_FILE = _common.WORLD_DIR / "statement_final.json"
 _SELF_PRONOUN_RE = re.compile(r"(?<!其)[她他](?!们|俩)")
@@ -437,12 +437,6 @@ def _review_markdown(target: str, candidates: list, stage: Path) -> str:
     if target == "corpus":
         for item in candidates[:30]:
             lines += [f"## {item['statement']}", ""]
-    elif target == "voice-samples":
-        for item in candidates[:30]:
-            lines += [f"## {item['id']}", "",
-                      f"- user: {item['user']}",
-                      f"- reply: {item['reply']}",
-                      f"- length: {item['length']}", ""]
     elif target == "phrases":
         for item in candidates[:30]:
             lines += [f"## {item['meaning']}", "",
@@ -637,14 +631,10 @@ async def _apply_target(target: str, candidates, session: str, stage: Path,
                         no_vectorize: bool, build_hooks: bool):
     paths = {
         "corpus": STATEMENT_FILE,
-        "voice-samples": _common.VOICE_SAMPLES_FILE,
-        "phrases": _common.PHRASES_FILE,
         "behaviors": _common.BEHAVIORS_FILE,
     }
     keys = {
         "corpus": "statements",
-        "voice-samples": "samples",
-        "phrases": "phrase_groups",
         "behaviors": "behaviors",
     }
     path = paths[target]
@@ -653,8 +643,6 @@ async def _apply_target(target: str, candidates, session: str, stage: Path,
 
     if target == "corpus":
         merged, added = _merge_corpus(before, candidates)
-    elif target == "voice-samples":
-        merged, added = _merge_voice(before, candidates, session)
     elif target == "phrases":
         merged, added = _merge_phrases(before, candidates)
     else:
@@ -676,17 +664,7 @@ async def _apply_target(target: str, candidates, session: str, stage: Path,
         return
     if target == "corpus":
         await _refresh_corpus_vectors()
-    elif target == "voice-samples":
-        import precompute_voice_sample_vectors
-        vector_path = _common.VOICE_SAMPLE_VECTOR_FILE
-        before_mtime = vector_path.stat().st_mtime if vector_path.exists() else None
-        await precompute_voice_sample_vectors.run(
-            input_file=str(_common.VOICE_SAMPLES_FILE),
-            output_file=str(vector_path),
-        )
-        after_mtime = vector_path.stat().st_mtime if vector_path.exists() else None
-        if after_mtime is None or after_mtime == before_mtime:
-            raise RuntimeError("voice_samples 已写回，但向量缓存没有更新；请检查 embedding 配置")
+    # voice-samples 分支已删（2026-10-04：该通道停用，样本已并入 behaviors）
 
 
 async def run(args):
@@ -714,8 +692,6 @@ async def run(args):
         candidate_data = _read_json(candidate_path)
         key = {
             "corpus": "statements",
-            "voice-samples": "samples",
-            "phrases": "phrase_groups",
             "behaviors": "behaviors",
         }[args.target]
         candidates = _items(candidate_data, key)
@@ -740,8 +716,6 @@ async def run(args):
 
     if args.target == "corpus":
         candidates = await _prepare_corpus(cleaned_paths, stage, args.batch_size or 50)
-    elif args.target == "voice-samples":
-        candidates = await _prepare_voice(cleaned_paths, stage, session_name)
     elif args.target == "phrases":
         candidates = await _prepare_phrases(cleaned_paths, stage, args.batch_size or 60)
     else:

@@ -672,7 +672,8 @@ class TestClassifyL3Phrases:
     async def test_phrase_ids_returned(self):
         out = await routing.classify_l3(self._fake('{"behavior": null, "phrases": ["brag_deny"]}'),
                                         "你唱歌好好听", "", self._behaviors(), self._phrases())
-        assert out == {"behavior": "", "phrases": ["brag_deny"]}
+        assert out == {"behavior": "", "phrases": ["brag_deny"],
+                       "same_request": {"what": "", "count": 1}}
 
     async def test_behavior_and_phrases_together(self):
         out = await routing.classify_l3(
@@ -700,18 +701,19 @@ class TestClassifyL3Phrases:
     async def test_no_phrase_groups_keeps_behavior(self):
         out = await routing.classify_l3(self._fake('{"behavior": "被夸时嘴硬否认", "phrases": ["x"]}'),
                                         "你唱歌好好听", "", self._behaviors(), [])
-        assert out == {"behavior": "被夸时嘴硬否认", "phrases": []}
+        assert out == {"behavior": "被夸时嘴硬否认", "phrases": [],
+                       "same_request": {"what": "", "count": 1}}
 
     async def test_failure_returns_empty_both(self):
         def _raise(*a, **k):
             raise RuntimeError("api down")
         fake = type("C", (), {"chat": type("Chat", (), {"completions": type("C2", (), {"create": _raise})()})()})
         assert await routing.classify_l3(fake, "你好", "", self._behaviors(), self._phrases()) == {
-            "behavior": "", "phrases": []}
+            "behavior": "", "phrases": [], "same_request": {"what": "", "count": 1}}
 
     async def test_empty_msg_short_circuits(self):
         assert await routing.classify_l3(self._fake('{"behavior": "x"}'), "", "", self._behaviors()) == {
-            "behavior": "", "phrases": []}
+            "behavior": "", "phrases": [], "same_request": {"what": "", "count": 1}}
 
 
 class TestRepairLlmJson:
@@ -789,21 +791,6 @@ class TestUpdateMemoryTaskRetry:
         monkeypatch.setattr(core, "update_user_memory", lambda uid, updates: called.append(updates))
         await core.update_memory_task("u", "今天天气不错", "是啊", {})
         assert called == []  # 无新信息，不写卡
-
-
-class TestVoiceSampleLabel:
-    """few-shot 标签要防'内容抄袭'（模型把样本里的礼物/衣服/人物抄进回复）。"""
-
-    def test_label_guards_against_content_copy(self, monkeypatch):
-        from types import SimpleNamespace
-        monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
-        sample = SimpleNamespace(
-            source="voice_sample", item_id="peer_5",
-            extra={"user": "粉丝问贺图", "reply": "是小雨前辈送的", "type": "daily"},
-        )
-        msgs = core.build_message_list("在吗", "p", [sample], "", [])
-        label = [m["content"] for m in msgs if "灰泽满的说话方式参考" in m["content"]]
-        assert label and "不要套用示例里的具体内容" in label[0]
 
 
 class TestEmotionOnlyQuery:
@@ -888,7 +875,6 @@ class TestHandleChatEmotionOnly:
 
         monkeypatch.setattr(core, "embed_query", _fail)
         monkeypatch.setattr(core, "retrieve_corpus_candidates", _fail)
-        monkeypatch.setattr(core, "retrieve_voice_samples", _fail)
         monkeypatch.setattr(core, "select_phrase_groups", _fail)
         monkeypatch.setattr(core, "classify_l3", _fail)
 
@@ -925,7 +911,6 @@ class TestHandleChatImageOnly:
 
         monkeypatch.setattr(core, "embed_query", fake_embed)
         monkeypatch.setattr(core, "retrieve_corpus_candidates", _fail)
-        monkeypatch.setattr(core, "retrieve_voice_samples", _fail)
         monkeypatch.setattr(core, "classify_l3", _fail)  # L3：图片-only 也不做行为/措辞分类
         monkeypatch.setattr(core, "select_phrase_groups", _fail)
         monkeypatch.setattr(core, "fuse_and_truncate", _fail)

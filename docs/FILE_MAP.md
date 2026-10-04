@@ -19,7 +19,7 @@
 | `src/` | **跑起来要用的代码**（`src/plugins/chatbot/` 是核心，见第二、三节） | ✅ |
 | `persona/` | **她是谁/懂什么/怎么说**——所有素材（见第三节，**你会改的主要是这里**） | ✅ |
 | `scripts/` | **离线工具**：蒸馏素材、跑评测、做实验（56 个，见第四节 + `脚本清单.md`） | ✅ |
-| `tests/` | 单元测试（795 个，`pytest -q`） | ✅ |
+| `tests/` | 单元测试（800 个，`pytest -q`） | ✅ |
 | `docs/` | 全部说明文档，索引在 `docs/README.md` | ✅ |
 | `video/` | **Remotion 注入链路说明视频**：场景、旁白时间轴、字幕和渲染脚本；成片在 `video/out/` | ✅ |
 | `assets/` | 素材文件：`audio/` 原始音频、`transcripts/` 转写、`stickers/` 表情包、`voice_refs/` 语音参考、`emotes/` `img/` | ⚠️ 部分（`audio/` 不入库，太大） |
@@ -55,17 +55,17 @@
 | 文件 | 作用 | 关键点 |
 |---|---|---|
 | `__init__.py` | 事件入口 | 收消息→进读秒窗口；心跳/在线信号(data/heartbeat\|qq_alive\|qq_offline)；自动通过好友 |
-| `core.py` | 主循环 | 十层提示注入、四路 RRF + 两路直达、生成、记忆提取、防复读、梗/行为路由落地。**`gather_retrieval()` = 取素材的唯一入口**（聊天与主动发言共用；内含"检索层炸了按没检索到继续"的兜底）|
+| `core.py` | 主循环 | 分层提示注入、两路 RRF + 两路直达、生成、记忆提取、防复读、梗/行为路由落地。**`gather_retrieval()` = 取素材的唯一入口**（聊天与主动发言共用；内含"检索层炸了按没检索到继续"的兜底）|
 | `chat_window.py` | 读秒攒批窗口 | 群=整群一窗；回复前读图+归纳；**群聊先过接话门**（私聊不过）；语音优先；`split_reply` 分批发（打字感） |
 | `group_gate.py` | **群聊接话门** | 攒批安静下来时判"这批要不要开口"（判据=用户标定：点名/情绪/经历才接，纯事务附和收尾不接，**纯事件按概率**）。**点名（手打名字 / @她）确定性放行、不调 LLM**。失败按"接"放行。`GROUP_GATE=0` 可关 |
 | `corpus_judge.py` | **corpus 语义判** | **只判不筛**：候选由 `retrieval.py` 给（`retrieve_corpus_candidates`），它只回答"这段经历和用户刚说的话是不是一回事"（填平"口语问句 vs 第三人称陈述"的鸿沟——「你多高啊」靠余弦只有 0.443，永远进不来）。失败**不带经历**（与接话门相反：宁可漏不可错）。⚠️ 2026-09-29 起**它成了 corpus 唯一的判据**（原先"门放行的直通"已取消）。`CORPUS_JUDGE=0` = **整路关掉** |
 | `proactive.py` | **主动发言** | 抓到动态/微博 → 转成「她会主动说的那句话」。**素材走主链路**（`core.gather_retrieval` + `build_message_list`，与聊天共用同一份人格数据；`is_user_msg=False` 跳过"用户说的话"才成立的两层：L3 行为/措辞、corpus 判）。**开口前先过一道判**：内容缺关键信息、单独看不懂（"写不完了"）→ 这句不发；她指了配图（⬇️）才去读图。**原文通知照发**，返回 None 只是少她那句（两个桥都是「原文 + 她那句」两条）。`PROACTIVE=0` 全关 / `PROACTIVE_JUDGE=0` 只关那道判 |
 | `chatlog.py` | **聊天落盘** | 每轮追加 JSONL（`data/chat_log/`，**gitignore**）供事后分析——短时记忆只有 10 条滚动窗口，超出就没了。`CHATLOG=0` 可关 |
-| `stickers.py` | **表情包** | 判「她这句话配哪张表情」，十分对应才发（失败**不发**，与接话门相反）。标注在 `persona/media/stickers.json`，图在 `assets/stickers/`。`STICKER=0` 可关 |
+| `stickers.py` | **表情包** | 判「她这句话配哪张表情」，十分对应才发（失败**不发**，与接话门相反）。标注在 `persona/media/stickers.json`（31 张 / 18 类），图在 `assets/stickers/`。**去重按 `group`（类别）不按单张**——同一类里好几张（委屈 3、无语无奈 4），按单张挡不住「换个还是同味道」；窗口 = 最近 3 类。`STICKER=0` 可关 |
 | `reply_style.py` | 纯函数后处理 | 拆句/分批延迟/`clean_reply`（换行归一、去括号、省略号纪律、自指兜底）/防复读检测 |
-| `retrieval.py` | 素材获取与融合 | 四路 RRF（corpus/voice_sample/behavior/phrase）；preference 走 keywords 子串、core_story 命中后直达。另有预算控制。**判据怎么选见文件头**（三种任务三种工具，别再给 phrase/preference 上向量） |
-| `routing.py` | 硬路由 | legendary 梗库（含 LLM 语境确认）+ 行为意图分类 L3 |
-| `persona.py` | 人格加载 | traits/styles/behaviors、terms、schedule 的读取与拼装 |
+| `retrieval.py` | 素材获取与融合 | 两路 RRF（corpus/behavior）+ preference 关键词子串、core_story 命中直达。另有预算控制。**判据怎么选见文件头**（三种任务三种工具，别再给 preference 上向量）。`voice_sample` 那路已于 2026-10-04 停用（见函数头） |
+| `routing.py` | 硬路由 | legendary 梗库（含 LLM 语境确认）+ 行为意图分类 L3（**同时判行为 + 措辞组 + 连续索要**） |
+| `persona.py` | 人格加载 | 骨架、behaviors、terms、schedule 的读取与拼装（traits/styles 已拆，函数保留返回空表） |
 | `rag.py` | 向量工具 | embedding 客户端封装（`embed_query` 等），检索层的底座 |
 | `qq_faces.py` | QQ 表情表 | face id → 中文名（248 条）。NapCat 拿不到 `faceText` 时兜底，免得消息变成"QQ表情6"。**别手改**，来源与提取规则见文件头 |
 | `memory.py` | 短期记忆 | short_term.json 带锁读写；并加载根 memory_manager 供长期 |
@@ -73,8 +73,8 @@
 | `group_memory.py` | 群记忆 | groups.json：成员 id→昵称 + 群近况 events |
 | `context_probe.py` | 感知 | 时间/农历/天气/直播状态 →【当前时间】（天气异步预热，不卡主循环） |
 | `vision.py` | 看图 | glm-4.6v 把图片描述成文字注入 |
-| `bili_bridge.py` | B站联动 | 开播/动态变化 → 私聊广播（含表情本地化/压小） |
-| `weibo_bridge.py` | 微博联动 | 新微博 → 私聊广播（cookie jar 会话续期） |
+| `bili_bridge.py` | B站联动 | 开播/动态变化 → 私聊广播（含表情本地化/压小）。**转发别人的动态整条不推**（原文取不全） |
+| `weibo_bridge.py` | 微博联动 | 新微博 → 私聊广播（cookie jar 会话续期）。**转发微博整条不推** |
 | `voice.py` | 语音 | GPT-SoVITS 合成→QQ 语音（静音裁剪、达标重试、截断兜底） |
 | `_bridge_common.py` | 公共小件 | bili/weibo 共用的状态读写 + 图片下载 |
 | `config.py` | 配置 | NoneBot 配置读取 + DeepSeek/智谱客户端工厂 |
@@ -82,36 +82,50 @@
 
 ## 三、人格数据（`persona/` —— 她是谁/懂什么/怎么说）
 
-按职责分层，**源文件（人肉维护）+ 向量缓存**放一起；改了源要重跑对应 `precompute`/`generate-vectors`。
+> ⚠️ **2026-10-04 重构**：`traits.json` / `styles.json` / `phrases.json` / `voice_samples.json`
+> **四个文件已拆掉**（内容并进 `core/system_prompt.txt` 与 `behavior/behaviors.json`，
+> 原因见 `注入链路.md` 第六节）。**现在只有两层**：
+> **人格层（2 个文件）+ 事实层（其余）**。分类口径见 `注入链路.md` 第二节。
 
-| 目录/文件 | 装什么 | 谁读 |
+### 3.1 人格层（就这两个）
+
+| 文件 | 装什么 | 注入方式 |
 |---|---|---|
-| `core/system_prompt.txt` | 核心人格提示词（骨架：身份框架/自我称呼/说话节奏/括号语义） | 每轮 base system |
-| `core/traits.json` · `styles.json` | 性格基底 / 语言风格（name+desc+evidence） | →【性格基底】/【语言风格】 |
-| `behavior/behaviors.json` | 情境→反应示范（11 条，含真人 samples） | L3 分类命中才注入 |
+| `core/system_prompt.txt` | 骨架：身份框架/自我称呼/说话节奏/括号语义/篇幅纪律 | **每轮常驻**（3452 字，占输入 91%） |
+| `behavior/behaviors.json` | **16 条情景 → 反应 + 真实原句 samples**（74 条样本） | L3 命中哪条注哪条 |
 | `behavior/behavior_keywords.json` | 行为判别词（确定性兜底，跳 LLM） | retrieval |
-| `speech/voice_samples.json(+_vectors)` | 她说话原话 few-shot（86 条，风格来源） | RRF 注入"说话方式参考" |
-| `speech/phrases.json(+_vectors)` | 措辞指纹（同意思→她真实原话） | 命中注入"固定说法" |
-| `world/terms.json` | 名词库 lorebook（人物/梗/黑话 + meaning/reaction/aliases/pattern） | 命中注入"世界" |
-| `world/preferences.json(+_vectors)` | 偏好档案 | 命中注入"偏好" |
-| `world/core_stories.json(+_vectors)` | 印象最深的经历 | 低阈值浮现"核心记忆" |
-| `world/legendary.json` | 经典梗固定应答（含确认） | 硬路由直回 |
-| `world/schedule.json` | 周表（根目录 `更新周表.bat` 拖图 OCR 更新） | 每轮注入"周表" |
-| `world/statement_final.json → corpus_vectors.json` | 直播记忆语料源(421) → 向量 | 机器人只读向量 |
-| `world/corpus_keywords.json` | corpus 召回钩子：用户换个说法时决定谁能进候选池；**不直接注入 messages** | retrieval 候选门 |
+
+### 3.2 事实层（其余全部）
+
+| 文件 | 装什么 | 判定方式 |
+|---|---|---|
+| `world/terms.json` | 名词库 lorebook（人物/梗/黑话 + meaning/reaction/aliases/pattern） | 关键词/正则（`always` 的常驻） |
+| `world/legendary.json` | 经典梗固定应答（含 LLM 语境确认） | 关键词/正则 → 硬路由 |
+| `world/schedule.json` | 周表（根目录 `更新周表.bat` 拖图 OCR 更新） | **常驻**（只注 weekly） |
+| `world/preferences.json` | 偏好档案 | 关键词子串（**不走向量**） |
+| `world/core_stories.json(+_vectors)` | 印象最深的经历 | 向量 |
+| `world/statement_final.json → corpus_vectors.json` | 直播记忆语料源(421) → 向量 | **向量初筛 + LLM 再审** |
+| `world/corpus_keywords.json` | corpus 召回钩子：用户换个说法时决定谁能进候选池；**不直接注入 messages** | 候选门（关键词） |
+| `world/corpus_asks.json` | 语料自指代词审计表 | 辅助 |
+| `media/stickers.json` | 表情包标注（31 张 / 18 类） | 关键词/判定 |
+| `speech/phrase_vectors.json` | ⚠️ **孤儿缓存**（源文件 `phrases.json` 已删）——可删，没有代码读它 |
+
+**向量缓存**（`*_vectors.json`）跟源文件放一起，改了源要重跑对应
+`precompute core-stories` / `generate-vectors`。**behaviors 不用重算**（不走向量）。
 
 ## 四、离线工具（`scripts/`）
 
 统一入口 `python scripts/run_tool.py <工具>`。分组：
 
-- **人格流水线**：`persona-pipeline corpus|voice-samples|phrases|behaviors`
+- **人格流水线**：`persona-pipeline corpus|behaviors`
   （可选从音频开始，`--whisper-python` 可指定 faster-whisper 环境；默认只产候选和 review，
-  `--apply` 才写回并备份；corpus 自动补 `corpus_keywords` 钩子、审计自指代词并重建向量，
-  voice 自动重建向量；`--sanitize-existing --from-index N` 可定向清理存量语料）
+  `--apply` 才写回并备份；corpus 自动补 `corpus_keywords` 钩子、审计自指代词并重建向量；
+  `--sanitize-existing --from-index N` 可定向清理存量语料）
+  > ⚠️ `voice-samples` / `phrases` 两个子命令**已于 2026-10-04 下线**（对应文件已拆）。
 - **蒸馏**：transcribe → clean-transcript → analyze-pace → convert-to-chat
 - **生成**：extract-persona、mine-phrases、mine-theme；`generate-statements` 作为 corpus 流水线内部步骤
 - **向量**：`generate-vectors -i persona/world/statement_final.json`
-  （`--only-index 335,410,420` 只重算指定索引）；`precompute voice-samples|core-stories`
+  （`--only-index 335,410,420` 只重算指定索引）；`precompute core-stories`
   （⚠️ `precompute phrases|preferences` 与产出的 `*_vectors.json` **已停用**——2026-09-26 这两路改判据，不再走向量）
 - **评测**：regression / persona-eval / retrieval-eval / **problems**（★问题驱动：看到的问题 → 回归用例）
   / **style-annotate**（⚠️ 已停用；保留作历史实验工具）
@@ -163,11 +177,11 @@
 > ⚠️ 上表里 `python scripts/xxx.py` 那几个是**独立脚本**（没进 `run_tool` 统一入口）——
 > 因为它们是"改链路时才跑的实验/诊断"，不是日常流程。
 > **日常那些都在 `run_tool.py` 里**（`python scripts/run_tool.py --help` 能列全）。
-| **加新的直播素材** | `persona-pipeline <corpus/voice-samples/phrases/behaviors>`；可直接给 `--audio`，也可先 `transcribe` + `clean-transcript` | `outputs/persona_pipeline/<session>/` |
-| 加了新表情包 | 丢进 `assets/stickers/` 再跑 `label_stickers.py` | `persona/media/stickers.json` |
+| **加新的直播素材** | `persona-pipeline <corpus/behaviors>`；可直接给 `--audio`，也可先 `transcribe` + `clean-transcript` | `outputs/persona_pipeline/<session>/` |
+| 加了新表情包 | 丢进 `assets/stickers/` 再跑 `label_stickers.py`，**再人工补 `group`**（类别；缺了它拦不住同类） | `persona/media/stickers.json` |
 | 更新周表 | 把图拖到根目录 `更新周表.bat` | `persona/world/schedule.json` |
 | 检查 B站/微博能不能连上 | `run_tool.py bili-check` | 打印 |
-| 想知道**测试**过不过 | `.venv\Scripts\python.exe -m pytest -q` | 打印（795 个） |
+| 想知道**测试**过不过 | `.venv\Scripts\python.exe -m pytest -q` | 打印（800 个） |
 
 ### 4.2 ⭐ 评测/标注在哪、怎么用（**新合并的那份**）
 
@@ -180,7 +194,7 @@
 | 问题驱动入口 | `scripts/problem_cases.py` | `run_tool.py problems`——看到问题 → 摆出检索实况 → 变成用例。**怎么用看 `docs/问题驱动.md`**（含 `--audit` 复核老用例） |
 | **风格层标注**（第三份，2026-09-30 已停用） | `scripts/style_eval_cases.json` | 保留作历史资产；路线已停用。不要再让 `style-annotate` 决定人格文件去留 |
 
-## 五、测试（`tests/`，795 个）
+## 五、测试（`tests/`，800 个）
 `conftest.py` 初始化 NoneBot 并加载插件。核心逻辑（reply_style/retrieval/session/voice/chat_window/bili/group_memory/weibo/short_memory 纯函数）覆盖较全；weibo 推送、config、`__init__` 心跳、watchdog/notifier 覆盖少。
 
 ## 六、产物 / 状态（**全部不入库**）

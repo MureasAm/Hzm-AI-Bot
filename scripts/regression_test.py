@@ -88,12 +88,6 @@ async def run_batch(core, user_id: str, danmaku: list = None) -> dict:
     return results
 
 
-def _reset_sample_cache():
-    """清空检索模块的样本缓存，让环境变量开关生效。"""
-    import src.plugins.chatbot.retrieval as ret
-    ret._sample_vectors = None
-
-
 def _load_danmaku(danmaku_file=None) -> list:
     """加载弹幕列表。缺省用内置虚构弹幕。支持 JSON 数组或每行一条的文本。"""
     global DANMAKU
@@ -309,7 +303,12 @@ def check(case_id=None, cases_file=None, out_dir=None) -> int:
 
 
 def run(ab_mode=False, danmaku_file=None, out_dir=None):
-    """参数化入口（供 run_tool 调用）。"""
+    """参数化入口（供 run_tool 调用）。
+
+    ⚠️ `ab_mode` 已于 2026-10-04 失效：它原来是"关掉声音样本 vs 有样本"的 A/B，
+    而声音样本通道已整体删除（见 retrieval.py 顶部说明）——没有可关的东西了。
+    现在传 ab_mode=True 会直接报错退出，而不是给出一份假的对比。
+    """
     global DANMAKU
     danmaku = _load_danmaku(danmaku_file)
     out = Path(out_dir) if out_dir else Path("outputs/eval/regression")
@@ -317,33 +316,21 @@ def run(ab_mode=False, danmaku_file=None, out_dir=None):
 
     core = _init()
 
-    # 先跑"有样本"（当前状态）
+    if ab_mode:
+        raise SystemExit(
+            "regression --ab 已失效：它对比的是'有/无声音样本'，"
+            "而 voice_samples 通道已于 2026-10-04 删除。请直接跑 --check。")
+
     v1 = asyncio.run(run_batch(core, "test_user", danmaku))
 
-    if not ab_mode:
-        lines = ["========== 当前版本（有声音样本 + 融合检索）=========="]
-        for msg, reply in v1.items():
-            lines.append(f"\n💬 {msg}\n↪ {reply}")
-        text = "\n".join(lines)
-        print(text)
-        (out / "full.txt").write_text(text, encoding="utf-8")
-        print(f"\n✅ 输出已保存: {out / 'full.txt'}")
-        return
-
-    # A/B：V0 关闭样本（环境变量 + 清缓存）
-    os.environ["VOICE_SAMPLES"] = "0"
-    _reset_sample_cache()
-    v0 = asyncio.run(run_batch(core, "test_user", danmaku))
-
-    lines = ["========== A/B 对比（V0 无样本 vs 当前有样本）=========="]
-    for msg in danmaku:
-        lines.append(f"\n💬 {msg}")
-        lines.append(f"  V0（无样本）: {v0[msg]}")
-        lines.append(f"  当前（有样本）: {v1[msg]}")
+    lines = ["========== 当前版本（骨架 + 情景样本 + 融合检索）=========="]
+    for msg, reply in v1.items():
+        lines.append(f"\n💬 {msg}\n↪ {reply}")
     text = "\n".join(lines)
     print(text)
-    (out / "ab.txt").write_text(text, encoding="utf-8")
-    print(f"\n✅ 输出已保存: {out / 'ab.txt'}")
+    (out / "full.txt").write_text(text, encoding="utf-8")
+    print(f"\n✅ 输出已保存: {out / 'full.txt'}")
+    return
 
 
 def main():

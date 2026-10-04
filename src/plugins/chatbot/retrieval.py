@@ -23,12 +23,10 @@ from dataclasses import dataclass, field
 
 from .constants import (
     PROJECT_ROOT,
-    VOICE_SAMPLE_VECTOR_FILE, CORE_STORY_VECTOR_FILE,
+    CORE_STORY_VECTOR_FILE,
     PHRASES_FILE, PREFERENCES_FILE, CORPUS_KEYWORDS_FILE,
     RAG_THRESHOLD, CORPUS_TOP_N, CORPUS_CANDIDATE_N, CORPUS_LEXICAL_EXTRA_N,
     CORPUS_KEYWORD_FLOOR, CORPUS_STRONG_KEYWORD,
-    VOICE_SAMPLE_THRESHOLD, VOICE_SAMPLE_TOP_N, VOICE_SAMPLE_KEEPALIVE, VOICE_SAMPLE_MIN_K,
-    VOICE_SAMPLE_KEEPALIVE_MIN_SIM,
     PHRASE_TOP_N, PHRASE_PHASES_MAX,
     PREFERENCE_TOP_N,
     CORE_STORY_THRESHOLD, CORE_STORY_TOP_N,
@@ -231,75 +229,29 @@ def retrieve_corpus_candidates(user_query: str, query_vector,
     return top
 
 
-# 声音样本向量缓存（模块级，一次性加载）
-_sample_vectors = None
+# ==================== 声音样本通道（2026-10-04 已停用） ====================
+# 为什么不做了（实测 n=32 + 真实链路观测）：
+#   ① 它按【话题】检索，必然捞到"同话题的完整回答" → 把**事实**灌进对话：
+#      "你今天吃什么了"→捞到"今天怎么没吃饭"→她答"还没吃呢"→下一轮自相矛盾；
+#      "外面下雨了"→她答"刚淋着跑回来的"（编的）；"最近怎么样"→"要写出百年孤独了"（近乎逐字搬）
+#   ② assistant 通道注入时样本与真实历史混在一起（样本 user 与真实 user 相邻）→
+#      与【当前时间】"正在直播中"冲突 13/32（system 一行只 2/32）、样本词泄漏 4/32（1/32）、
+#      反问率 38%（50%）
+#   ③ behaviors 按【情景】选，话题天然不同 → 只带走形态不带走内容。**这才是对的做法。**
+# 那批原句里该留的 18 条已并入 behaviors 的 samples。
+#
+# 保留这个函数只为兼容**诊断脚本**（retrieval_eval / trace_chain 会调它）：
+# 数据文件已删，所以它恒返回空。
 
 
 def load_voice_sample_vectors() -> list:
-    """读 persona/speech/voice_sample_vectors.json（缓存）。环境变量 VOICE_SAMPLES=0 时返回 []。"""
-    global _sample_vectors
-    if _sample_vectors is not None:
-        return _sample_vectors
-    if os.environ.get("VOICE_SAMPLES", "1") == "0" or not VOICE_SAMPLE_VECTOR_FILE.exists():
-        _sample_vectors = []
-        return _sample_vectors
-    try:
-        with open(VOICE_SAMPLE_VECTOR_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        samples = data.get("samples", []) if isinstance(data, dict) else []
-        _sample_vectors = [s for s in samples
-                           if isinstance(s, dict) and s.get("vector") and s.get("reply")]
-    except (json.JSONDecodeError, OSError):
-        _sample_vectors = []
-    return _sample_vectors
+    """【已停用】以前读 persona/speech/voice_sample_vectors.json。现在恒返回 []。"""
+    return []
 
 
-def _ensure_min_samples(items: list, samples: list, query_vector) -> list:
-    """保底：阈值过滤后为空时，注入全体最高分 1 条，保住声音风格不断档。
-
-    但保底也要设门槛（VOICE_SAMPLE_KEEPALIVE_MIN_SIM）：如果最高分样本
-    相关度太低（日常短句 vs 直播时间样本 ≈ 0.55），宁可风格断档也不注入
-    无关样本——否则会像"9点是你那边"那样，把直播时间样本硬塞给日常话题。
-    """
-    if items or not VOICE_SAMPLE_KEEPALIVE or not samples:
-        return items
-    entries = [{"vector": s["vector"], "id": s["id"],
-                "text": "", "extra": {"user": s["user"], "reply": s["reply"], "type": s.get("type", ""), "length": s.get("length", "short")}}
-               for s in samples]
-    # 找全体最高分，若低于保底门槛则不注入（宁缺毋滥）
-    best = max((cosine_similarity(query_vector, s["vector"]) for s in entries), default=-1.0)
-    if best < VOICE_SAMPLE_KEEPALIVE_MIN_SIM:
-        return []
-    return _score_candidates(query_vector, entries, -1.0, VOICE_SAMPLE_MIN_K,
-                             "voice_sample", lambda e: e["id"], lambda e: e["text"],
-                             lambda e: e["extra"])
-
-
-def retrieve_voice_samples(user_query: str, query_vector,
-                           threshold: float = VOICE_SAMPLE_THRESHOLD,
-                           top_n: int = VOICE_SAMPLE_TOP_N) -> list:
-    """风格样本检索。extra 含 user/reply，供 few-shot 注入。
-
-    ⚠️ `not query_vector` 这个早退**不能省**：embedding 服务挂掉时
-    `rag.embed_query` 会返回 None（它自己吞异常），而保底注入那条路
-    （`_ensure_min_samples` 算全体最高分）没判 None —— `cosine_similarity(None, …)`
-    里的 `zip(None, …)` 直接抛 TypeError。
-    实测踩坑（2026-09-27）：用户智谱 embedding key 过期 → 每次带文字的消息
-    都在这里抛异常，而 core.handle_chat 那一段**没有 try 兜底** → 整条回复任务死掉，
-    **她一个字都不回**（不只主动发言）。
-    另外两路（retrieve_corpus / retrieve_core_stories）开头都有同样的判断，
-    就这路漏了——这里的写法是为了跟它们对齐：拿不到向量就当作"没检索到"，不是崩。
-    """
-    samples = load_voice_sample_vectors()
-    if not samples or not query_vector:
-        return []
-    entries = [{"vector": s["vector"], "id": s["id"], "text": "",
-                "extra": {"user": s["user"], "reply": s["reply"], "type": s.get("type", ""), "length": s.get("length", "short")}}
-               for s in samples]
-    items = _score_candidates(query_vector, entries, threshold, top_n,
-                              "voice_sample", lambda e: e["id"], lambda e: e["text"],
-                              lambda e: e["extra"])
-    return _ensure_min_samples(items, samples, query_vector)
+def retrieve_voice_samples(user_query: str, query_vector, **kwargs) -> list:
+    """【已停用】声音样本检索。恒返回 [] —— 见文件上方「声音样本通道已停用」的说明。"""
+    return []
 
 
 # 行为判别词 → 强制命中行为（语义检索对"敷衍/鸽/迟到"这类口语有~0.55天花板且易错配，
@@ -535,8 +487,6 @@ def rrf_fuse(ranked_lists: list, k: int = RRF_K,
 # ==================== 预算控制 ====================
 
 def _item_cost(it: RetrievalItem) -> int:
-    if it.source == "voice_sample":
-        return len(it.extra.get("user", "")) + len(it.extra.get("reply", ""))
     if it.source == "phrase":
         # 措辞组成本 = 注入的短语总长（按 PHRASE_PHASES_MAX 裁剪后）
         return sum(len(p) for p in it.extra.get("phrases", [])[:PHRASE_PHASES_MAX])
@@ -561,22 +511,14 @@ def truncate_by_budget(items: list, budget_chars: int = RETRIEVAL_BUDGET_CHARS,
 def fuse_and_truncate(corpus_items, sample_items, behavior_items, phrase_items=None) -> list:
     """完整融合流程：RRF → 条数截断 → 字符预算截断。
 
-    当 VOICE_SAMPLE_PREFER_SHORT=True 时，short 档声音样本获得权重加成，
-    让模型优先看到短句范例（控制回复长度）。
+    `sample_items` 保留在签名里只为兼容旧调用方——声音样本通道已停用（恒空），
+    RRF 权重表里也已没有 voice_sample 这一路。
     """
-    from .constants import VOICE_SAMPLE_PREFER_SHORT, SOURCE_WEIGHTS as _W
+    from .constants import SOURCE_WEIGHTS as _W
 
     if phrase_items is None:
         phrase_items = []
 
-    weights = dict(_W)
-    if VOICE_SAMPLE_PREFER_SHORT:
-        # 给 short 样本额外权重，让短句范例更可能进入 top-k
-        for it in sample_items:
-            if it.extra.get("length", "short") == "short":
-                weights["voice_sample"] = weights.get("voice_sample", 1.0) + 0.3
-                break  # 任一 short 存在即加权整路
-
-    fused = rrf_fuse([corpus_items, sample_items, behavior_items, phrase_items], weights=weights)
+    fused = rrf_fuse([corpus_items, sample_items, behavior_items, phrase_items], weights=dict(_W))
     fused = fused[:RETRIEVAL_TOPK]
     return truncate_by_budget(fused)

@@ -287,7 +287,9 @@ async def _flush(win: _UserWindow) -> None:
 # 踩坑：放在 _UserWindow 上时，窗口一空闲就被销毁（_windows.pop），下次重建
 # 两个字段都回到初始值 —— 而私聊里每轮之间**必然有静默**，所以每次都重建，
 # **冷却形同虚设**。表现成"睡觉话题每次都会发那张眠了"。
-# （同一个坑还让 avoid_ids 永远是空 —— 跨轮防重复也一起失效。）
+# （同一个坑还让 recent 永远是空 —— 跨轮防重复也一起失效。）
+# `recent` 里存的是**类别**（不是单张）：同一类可能有好几张图（委屈 3 张、
+# 无语无奈 4 张），按单张去重挡不住"换一张还是同一个味道"（用户 2026-10-04 定）。
 _sticker_state: dict[str, dict] = {}
 
 
@@ -303,9 +305,9 @@ async def _maybe_send_sticker(win: _UserWindow, reply: str) -> None:
         st["turns"] += 1
         return
     deepseek_client, _ = _get_clients()
-    # avoid 传**全部**最近发过的（不只最近 3 条）：光防"连着发"不够，
-    # 用户报的是"同类"太频繁 —— 换个话题回来还会撞上同一张，那要更长的冷却池。
-    hit = await pick_sticker(deepseek_client, reply, avoid_ids=st["recent"])
+    # avoid 传**全部**最近发过的**类别**（不只最近 1 个）：光防"连着发"不够，
+    # 用户报的是"同类"太频繁 —— 换个话题回来还会撞上同一类。
+    hit = await pick_sticker(deepseek_client, reply, avoid_groups=st["recent"])
     if not hit:
         st["turns"] += 1
         return
@@ -315,11 +317,11 @@ async def _maybe_send_sticker(win: _UserWindow, reply: str) -> None:
             await win.bot.send_private_msg(user_id=win.target_id, message=img)
         else:
             await win.bot.send_group_msg(group_id=win.target_id, message=img)
-        print(f"[表情包] 已发送 {hit['id']}")
+        print(f"[表情包] 已发送 {hit['id']}［{hit.get('group', '')}］")
     except Exception as e:
         print(f"⚠️ 表情包发送失败（忽略）: {e}")
     st["turns"] = 0
-    st["recent"] = ([hit["id"]] + st["recent"])[:STICKER_RECENT_KEEP]
+    st["recent"] = ([hit.get("group") or hit["id"]] + st["recent"])[:STICKER_RECENT_KEEP]
 
 
 def _to_qq_image(rel_path: str) -> str:

@@ -8,10 +8,16 @@ from src.plugins.chatbot.persona import (
 
 
 class TestLoadPersonaRules:
-    def test_loads_all_three_files(self):
+    """traits / styles 已于 2026-10-04 拆掉（内容分进了 behaviors 与骨架）。
+
+    保存的期望：这两个来源可以**为空**（文件不存在 → 空列表，不报错）；
+    behaviors 必须存在。旧断言"三个都非空"已废。
+    """
+
+    def test_traits_and_styles_may_be_empty(self):
         traits, styles, behaviors = load_persona_rules()
-        assert isinstance(traits, list) and len(traits) >= 1
-        assert isinstance(styles, list) and len(styles) >= 1
+        assert isinstance(traits, list)
+        assert isinstance(styles, list)
         assert isinstance(behaviors, list) and len(behaviors) >= 1
 
     def test_behaviors_have_trigger_and_response(self):

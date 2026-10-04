@@ -45,6 +45,30 @@ PROACTIVE_REPLY_TRIM = 60
 # 有实义字符（字母/数字/汉字；标点、符号、emoji 都不算）——用来确定性地挡掉"..."这类空内容
 _CONTENT_CHAR_RE = re.compile(r"\w")
 
+# 原文里的 emoji（她发动态爱带：🌙💤📑🥺😭…）。**不含箭头 2B00-2BFF**——
+# "到这个⬇️里面"那种箭头是**指代配图的标记**，不是表情，带进她的话里就成了乱码。
+_EMOJI_PAT = re.compile(
+    "[\U0001F000-\U0001FAFF☀-➿]"                  # 基础 emoji（1F000+ 表情 / 2600-27BF 杂项符）
+    "(?:[️‍][\U0001F000-\U0001FAFF☀-➿]?)*"   # 跟在后面的变体选择符/零宽连接（如 🌡️）
+)
+
+
+def ensure_trailing_emoji(reply: str, source: str) -> str:
+    """把她原文里的 emoji 放到这句话**结尾**（原文有才加）。
+
+    **确定性做法，不走提示词**：她的聊天样本里一个 emoji 都没有（那批是直播口语
+    转写，说话打不出 emoji），光靠提示词她基本不会主动用；而"照抄原文那一个"
+    本来就是确定的，不需要模型判断。取原文**第一个** emoji（通常跟主句绑在一起；
+    结尾那个往往是链接/标签的符号，如 "📦…🔗"）。已经出现过就不重复加。
+    """
+    emojis = _EMOJI_PAT.findall(source or "")
+    if not emojis:
+        return reply
+    tail = emojis[0]
+    if not reply or tail in reply:
+        return reply
+    return f"{reply}{tail}"
+
 # 内容里**指向配图**的说法（"到这个⬇️里面"、"图里那个"）。
 # 只有出现这些才去读配图：① 别的动态里图片跟正文没关系，描述它等于往上下文里塞噪声
 # （实测会干扰：条件2 有 2/8 把点名的游戏名泛化成了"游戏"）；
@@ -251,7 +275,10 @@ async def compose_proactive(content: str, source: str = "B站",
             return None
         # 只取第一行：模型偶尔会多写一句
         out = out.split("\n")[0].strip()
-        return out or None
+        if not out:
+            return None
+        # 原文带 emoji → 这句话结尾也带一个（照抄原文的，不是自造）
+        return ensure_trailing_emoji(out, text)
     except Exception as e:
         print(f"⚠️ 主动发言生成失败（返回 None）: {e}")
         return None

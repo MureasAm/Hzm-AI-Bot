@@ -67,14 +67,18 @@ def _options_text(items: list) -> str:
     lines = []
     for s in items:
         tag = "/".join(s.get("tags") or [])
-        lines.append(f"- {s['id']}：{s.get('desc', '')}（{tag}）适合：{s.get('use_when', '')}")
+        grp = s.get("group") or ""
+        lines.append(f"- {s['id']}［{grp}］：{s.get('desc', '')}（{tag}）适合：{s.get('use_when', '')}")
     return "\n".join(lines)
 
 
-async def pick_sticker(deepseek_client, reply: str, avoid_ids: list | None = None) -> dict | None:
+async def pick_sticker(deepseek_client, reply: str, avoid_groups: list | None = None) -> dict | None:
     """给这句话挑一张表情；没有十分对应的返回 None。
 
-    avoid_ids：最近发过的，提示模型别连着用同一张。
+    `avoid_groups`：**最近发过的类别**（不是单张）——别连着发观感相近的图。
+    用户 2026-10-04 定：同一类里可能有好几张（委屈 3 张、无语无奈 4 张），
+    按单张去重挡不住"换一张还是同一个味道"。
+
     失败一律返回 None（**不发**）——发错表情比不发难看得多，这里和接话门相反，
     宁可少发不可发错。
     """
@@ -85,9 +89,9 @@ async def pick_sticker(deepseek_client, reply: str, avoid_ids: list | None = Non
         return None
 
     avoid = ""
-    if avoid_ids:
-        names = "、".join(avoid_ids)
-        avoid = f"\n\n【最近已经发过的，别再选】{names}"
+    if avoid_groups:
+        names = "、".join(dict.fromkeys(avoid_groups))
+        avoid = f"\n\n【最近已经发过的类别，别再选这些类别里的】{names}"
 
     try:
         resp = await deepseek_client.chat.completions.create(
@@ -114,12 +118,12 @@ async def pick_sticker(deepseek_client, reply: str, avoid_ids: list | None = Non
         if hit is None:
             print(f"⚠️ 表情判定给了不存在的 id={sid!r}，忽略")
             return None
-        # 「最近发过的」在提示词里也说了，但**模型不一定听**（实测 2 次里 1 次照选）。
-        # 所以这里再用代码拦一道：宁可这轮不发，也不连着甩同一张。
-        if sid in (avoid_ids or []):
-            print(f"[表情包] 判定选了最近刚发过的 {sid}，这轮不发")
+        # 「最近发过的类别」在提示词里也说了，但**模型不一定听**（实测 2 次里 1 次照选）。
+        # 所以这里再用代码拦一道：宁可这轮不发，也不连着甩同一类的。
+        if hit.get("group") and hit["group"] in (avoid_groups or []):
+            print(f"[表情包] 判定选了最近发过的类别「{hit['group']}」，这轮不发")
             return None
-        print(f"[表情包] 选 {sid}（{str(data.get('why') or '')[:20]}）")
+        print(f"[表情包] 选 {sid}［{hit.get('group', '')}］（{str(data.get('why') or '')[:20]}）")
         return hit
     except Exception as e:
         print(f"⚠️ 表情包判定失败（不发）: {e}")

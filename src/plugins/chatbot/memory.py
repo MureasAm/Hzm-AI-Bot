@@ -8,6 +8,7 @@ NoneBot 单进程运行，同一时刻可能有多条消息触发写入，
 """
 import importlib.util
 import json
+import re
 import threading
 import time
 
@@ -115,6 +116,52 @@ def append_user_history(user_id: str, user_msg: str, reply: str) -> None:
     _append_lines(user_id, [f"用户：{user_msg}", f"灰泽满：{reply}" if reply else ""])
 
 
+def count_consecutive_requests(user_id: str, current_msg: str, max_look: int = 10,
+                               threshold: float = 0.6) -> int:
+    """用户是不是在**连续第几次**要同一件事？返回"连上当前这条共几轮"（1 = 不是重复）。
+
+    为什么需要它（2026-10-04 从真实聊天记录里发现）：
+      她的招牌动作是「数遍数」（"第六遍""你今晚把'永远'用了三遍了"），
+      但那只能数**同一条消息内**的重复；**跨轮的连续索要她完全看不见**——
+      上下文只带最近 10 条，每轮她都当成"第一次被要"。
+      后果：同一条弧线里她换着理由挡了 5 轮，然后在第 12 轮突然松口
+      （3076669330 要"宝宝"、要语音那两段都是这样），
+      松口之后又失去"我从没答应过"的立场。
+
+    做法：拿当前消息和最近的历史里**用户侧**的每一条比（字符 bigram 重合），
+          从最近往回数，连续相似的算一轮；一旦掉下阈值就停。
+          **纯本地计算，不调 API。**
+
+    ⚠️ 只回答"第几次"，**不回答"该不该答应"**——那是 behaviors 的事。
+    """
+    hist = get_user_history(user_id)
+    if not hist or not (current_msg or "").strip():
+        return 1
+    prev = []
+    for ln in hist:
+        if ln.startswith("用户："):
+            prev.append(ln[3:])
+    if not prev:
+        return 1
+
+    def bg(s: str) -> set:
+        s = re.sub(r"[^\u4e00-\u9fa5A-Za-z0-9]", "", s)
+        return {s[i:i + 2] for i in range(len(s) - 1)}
+
+    cur = bg(current_msg)
+    if not cur:
+        return 1
+    n = 1
+    for line in reversed(prev[-max_look:]):
+        other = bg(line)
+        if not other:
+            break
+        if len(cur & other) / min(len(cur), len(other)) < threshold:
+            break
+        n += 1
+    return n
+
+
 def append_bot_message(user_id: str, text: str) -> None:
     """只追加一条「她主动说的话」——**没有对应的用户消息**（主动发言/动态推送用）。
 
@@ -133,6 +180,7 @@ __all__ = [
     "load_short_memory",
     "get_user_history",
     "get_last_turn_gap_seconds",
+    "count_consecutive_requests",
     "append_user_history",
     "append_bot_message",
     "humanize_gap",

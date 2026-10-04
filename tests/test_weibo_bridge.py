@@ -528,3 +528,47 @@ class TestPushRecordsIntoMemory:
                       "灰泽满刚刚发了微博哦！\n\n微博内容：测试内容")
         assert self.recorded == [("111", "（刚发了条微博：测试内容）"),
                                  ("222", "（刚发了条微博：测试内容）")]
+
+
+class TestRepostSkipped:
+    """转发别人的微博：整条不推（同 B站）。"""
+
+    async def test_repost_not_pushed_but_watermark_advances(self, monkeypatch):
+        m = _make_monitor(uid="1", state={"last_post_id": "old"}, _primed=True)
+        monkeypatch.setattr(wb, "get_weibo_cookie", lambda: "SUB=x")
+        monkeypatch.setattr(wb, "_save_state", lambda s: None)
+        monkeypatch.setattr(wb, "get_notify_whitelist", lambda: None)
+
+        async def fake_fetch():
+            return {"id": "new", "text": "转发微博", "image_urls": [],
+                    "url": "https://weibo.com/u/1/x", "is_repost": True}
+        monkeypatch.setattr(m, "_fetch_latest_post", fake_fetch)
+
+        bot = FakeBot(friends=("111",))
+        await m._check_posts(bot)
+        assert bot.sent == []                            # 一条都不发
+        assert m.state["last_post_id"] == "new"          # 水位线要前进
+
+    def test_is_repost_from_retweeted_status(self, monkeypatch):
+        """接口里 `retweeted_status` 就是被转的那条 → 判为转发。"""
+        import asyncio
+        m = _make_monitor(uid="1", state={}, _primed=True)
+        item = {"id": "9", "mblogid": "abc", "raw_text": "转发微博",
+                "retweeted_status": {"id": "1", "text": "别人的原博"}}
+
+        class _Resp:
+            status_code, headers = 200, {"content-type": "application/json"}
+            cookies = {}
+            def json(self): return {"ok": 1, "data": {"list": [item]}}
+
+        class _Client:
+            def __init__(self, **k): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): return False
+            async def get(self, *a, **k): return _Resp()
+
+        monkeypatch.setattr(wb.httpx, "AsyncClient", _Client)
+        monkeypatch.setattr(wb, "get_weibo_cookie", lambda: "SUB=x")
+        post = asyncio.get_event_loop_policy().new_event_loop().run_until_complete(
+            m._fetch_post_once())
+        assert post["is_repost"] is True

@@ -346,6 +346,8 @@ class BiliMonitor:
             "image_urls": _extract_dynamic_images(item),
             "emote_urls": emote_urls,
             "local_emotes": local_emotes,
+            # 转发别人的动态：顶层 `orig` 有东西就是转发（接口层取不全原文，所以整条不推）
+            "is_repost": isinstance(item.get("orig"), dict),
         }
 
     async def _check_dynamic(self, bot) -> None:
@@ -364,6 +366,16 @@ class BiliMonitor:
         if not _bridge_common.is_newer_id(dyn["id"], self.state.get("last_dynamic_id", "")):
             # 不是"更新"的动态：已推过的、或比她已发过的更旧（她撤回/置顶后
             # 接口的"最新"会退回旧动态，只判"和上一条不同"会把旧的又推一遍）
+            return
+
+        # **转发别人的动态：整条不推**（用户 2026-09-29 决定）。
+        # 原因：原动态的标题/封面在接口层取不全（转一条视频时正文只剩她自己那半句），
+        # 推出来粉丝看不懂；转出来的主动发言也容易张冠李戴。
+        # ⚠️ 仍要**更新水位线**，否则每轮轮询都会重新"发现"它、日志刷屏。
+        if dyn.get("is_repost"):
+            print("[B站] 这条是转发动态 → 不推送（已记水位线，避免每轮重复判定）")
+            self.state["last_dynamic_id"] = dyn["id"]
+            _save_state(self.state)
             return
 
         # B站表情在 QQ 无法内联变小（发出去就是一张独立大图），所以取舍：

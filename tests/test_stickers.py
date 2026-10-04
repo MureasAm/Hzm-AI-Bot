@@ -41,16 +41,25 @@ def two_stickers(tmp_path, monkeypatch):
     d = tmp_path / "assets" / "stickers"
     d.mkdir(parents=True)
     items = []
-    for sid in ("st_aaa", "st_bbb"):
+    for sid, grp in (("st_aaa", "无语无奈"), ("st_bbb", "夸赞")):
         f = d / f"{sid}.png"
         f.write_bytes(b"\x89PNG\r\n\x1a\n")
-        items.append({"id": sid, "file": f"assets/stickers/{sid}.png",
+        items.append({"id": sid, "file": f"assets/stickers/{sid}.png", "group": grp,
                       "desc": f"描述{sid}", "tags": ["无语"], "use_when": "无语时"})
     f = tmp_path / "stickers.json"
     f.write_text(json.dumps({"stickers": items}, ensure_ascii=False), encoding="utf-8")
     monkeypatch.setattr(stickers, "STICKER_FILE", f)
     monkeypatch.setattr(stickers, "PROJECT_ROOT", tmp_path)
     return items
+
+
+class TestCatalogInvariant:
+    def test_every_real_sticker_has_group(self):
+        """去重按 group；缺了这一栏，这张就永远拦不住（同类的会被反复发）。"""
+        items = load_stickers()
+        assert items, "表情库读不出来"
+        missing = [s["id"] for s in items if not s.get("group")]
+        assert not missing, f"这些表情缺 group：{missing}"
 
 
 class TestToggle:
@@ -129,22 +138,24 @@ class TestPick:
         assert await pick_sticker(c, "   ") is None
 
     @pytest.mark.asyncio
-    async def test_avoid_ids_are_enforced_in_code(self, two_stickers):
-        """提示词里说了"别再选"，但**模型不一定听**（实测 2 次里 1 次照选）。
+    async def test_avoid_group_blocks_same_group(self, two_stickers):
+        """去重按**类别**，不是单张（用户 2026-10-04 定）。
 
-        所以还要代码拦一道：宁可这轮不发，也不连着甩同一张。
+        提示词里说了"别再选这些类别"，但**模型不一定听**（实测 2 次里 1 次照选），
+        所以代码再拦一道：宁可这轮不发，也不连着甩同一类。
         """
         c = _StubClient(content='{"id": "st_aaa", "why": "又选它"}')
-        assert await pick_sticker(c, "无语", avoid_ids=["st_aaa"]) is None
+        assert await pick_sticker(c, "无语", avoid_groups=["无语无奈"]) is None
 
     @pytest.mark.asyncio
-    async def test_avoid_ids_lets_other_stickers_through(self, two_stickers):
+    async def test_avoid_group_lets_other_groups_through(self, two_stickers):
+        # 只拦那一类：别类的照发
         c = _StubClient(content='{"id": "st_bbb"}')
-        hit = await pick_sticker(c, "无语", avoid_ids=["st_aaa"])
+        hit = await pick_sticker(c, "无语", avoid_groups=["无语无奈"])
         assert hit and hit["id"] == "st_bbb"
 
     @pytest.mark.asyncio
-    async def test_avoid_ids_reaches_prompt(self, two_stickers):
+    async def test_avoid_groups_reach_prompt(self, two_stickers):
         seen = {}
 
         class _Capture(_StubClient):
@@ -152,6 +163,54 @@ class TestPick:
                 seen["prompt"] = kw["messages"][0]["content"]
                 return await super().create(**kw)
 
-        await pick_sticker(_Capture(content='{"id": null}'), "无语", avoid_ids=["st_aaa"])
-        assert "st_aaa" in seen["prompt"]
+        await pick_sticker(_Capture(content='{"id": null}'), "无语",
+                           avoid_groups=["无语无奈"])
+        assert "无语无奈" in seen["prompt"]
         assert "别再选" in seen["prompt"]
+
+    @pytest.mark.asyncio
+    async def test_group_shown_in_options(self, two_stickers):
+        # 候选里要带类别，模型才知道自己在选哪一类
+        seen = {}
+
+        class _Capture(_StubClient):
+            async def create(self, **kw):
+                seen["prompt"] = kw["messages"][0]["content"]
+                return await super().create(**kw)
+
+        await pick_sticker(_Capture(content='{"id": null}'), "无语")
+        assert "［无语无奈］" in seen["prompt"]
+
+
+class TestRecentStoresGroup:
+    """`_maybe_send_sticker` 记进 recent 的是**类别**，下一轮拿它去拦（用户 2026-10-04 定）。"""
+
+    @pytest.mark.asyncio
+    async def test_records_group_and_passes_it_back(self, monkeypatch):
+        from types import SimpleNamespace
+
+        from src.plugins.chatbot import chat_window as cw
+
+        monkeypatch.setattr(cw, "STICKER_COOLDOWN_TURNS", 0)
+        monkeypatch.setattr(cw, "_sticker_state", {})
+        monkeypatch.setattr(cw, "_get_clients", lambda: (object(), object()))
+        monkeypatch.setattr(cw, "_to_qq_image", lambda rel: "file:///x.png")
+        hit = {"id": "st_x", "file": "assets/stickers/st_x.png", "group": "吐槽"}
+        seen = {}
+
+        async def fake_pick(client, reply, avoid_groups=None):
+            seen["avoid"] = avoid_groups
+            return hit
+        monkeypatch.setattr(cw, "pick_sticker", fake_pick)
+
+        class _Bot:
+            async def send_private_msg(self, user_id=None, message=None):
+                seen["sent"] = True
+
+        win = SimpleNamespace(target_id="u1", is_private=True, bot=_Bot())
+        await cw._maybe_send_sticker(win, "草")
+        assert seen["sent"]
+        assert cw._sticker_st("u1")["recent"] == ["吐槽"]   # 记的是类别
+
+        await cw._maybe_send_sticker(win, "草")
+        assert seen["avoid"] == ["吐槽"]                    # 下一轮带着它去拦

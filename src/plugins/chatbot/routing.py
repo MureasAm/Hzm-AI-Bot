@@ -112,27 +112,45 @@ async def legendary_confirmed(user_msg: str, prompt_template: str, history: str 
 #   · phrases  回答"该用哪些词"（11 组）
 # 而措辞原本走向量检索，实测 100% 开火（trigger 是 6~13 字的**类别标签**，不是句子，
 # 余弦根本分不开）——用检索工具干分类的活。并进来 = 零额外调用 + 判据统一。
-BEHAVIOR_CLASSIFY_PROMPT = """你是{role_name}的意图分类器。判断用户刚发的这条消息落入哪些"已知情境"。只有明确匹配才选，拿不准一律不放（宁可不触发，不误触发）。
+BEHAVIOR_CLASSIFY_PROMPT = """你是{role_name}的意图分类器。判断用户刚发的这条消息落入哪些「已知情境」。只有明确匹配才选，拿不准一律不放（宁可不触发，不误触发）。
 
 【行为】用户这条消息触发哪个行为场景？**最多选一个**（它决定{role_name}该怎么做）：
 {behavior_defs}
 
 行为判定要点：
 - 只看用户这条消息本身的内容和语气，结合最近对话判断语境。
-- "被夸"：消息确实在夸{role_name}（声音/外貌/才能/表现/生日祝福/唱歌好听等）。
-- "被质疑/失约被催"：用户在质问、戳穿或催问{role_name}（骗人/敷衍/迟到/没播/鸽）。
-- "被越界"：玩笑/幻想触及个人边界——含两类：低俗/黄段子/过度幻想，以及**关系向亲密越界**（求交往、要当女友/男朋友、喊老公/老婆、恋人昵称等）。这类也归"被越界"，别漏判成 null。
-- "冷场"：提及或营造社交尴尬/冷场，要求{role_name}救场。
-- "立Flag/感性流露/主动抛梗"：消息必须明显对应那个情境。
-- 普通闲聊、提问、寒暄、表情、玩梗 → null。
+- **判据以每条 trigger 的描述为准**，下面是容易判错的地方，别再按关键词硬映射：
+- 「被夸」：用户在夸她或认可她本人（声音/表现/才能/用心），**不是随口道贺**。
+  ⚠️ 「生日快乐」「祝你开心」这类纯祝福、以及「我考上了」这类用户自己的好消息，都不要判成被夸。
+- 「被质疑戳穿 / 失约被催」：用户在质问、戳穿、翻旧账、传她没说过的话，或催她没做到的事。
+  如果消息里**既有催问又有质疑**，按哪个更重选一个（拿不准就不选）。
+- 「低俗擦边」与「关系向越界」是**两个不同情景**，别混：
+  · 低俗/擦边/黄段子/XP话题、以及**要她说一句带颜色的话**（用户会这么说：'给我们造个黄桃吧''说句骚话'） → 「被说低俗或擦边时冷脸挡回」
+  · 求交往、要当女友、喊老公老婆、恋人昵称、'我们分手吧'、**要啵啵/摸摸头/叫宝宝这类亲昵动作或称呼** → 「被索要亲密动作或关系时推脱」
+- 「被起哄编故事加码」与「低俗擦边」的**区别在内容的性质，不在谁在起哄**：
+  · 内容是**色情/擦边** → 低俗那条（她冷脸挡回）
+  · 内容是**荒诞编造、往她身上安离谱的假事**（说她怀孕了、说她昨晚没在家、把她口误往歪处带）→ 起哄编故事那条（她顺着玩）
+  两者应对**相反**，判错就很假，拿不准时按「内容是不是色情」来分。
+- 「被真心对待」：用户**很认真地**感谢她、说在意她、关心她的情绪、深夜惦记她——是真心，不是玩笑。
+  随口一句「谢谢」、普通寒暄不算。
+- 「说了真心话就立刻缩回」：判的是**她自己**刚在上一轮说了句真心话，用户这轮顺着接。**用户这轮没提供新信息时也可能是它。**
+- 普通闲聊、提问、寒暄、表情、玩梗、单纯道贺、用户聊自己的事 → null。
 - 拿不准 → null。
+
+★ 另外判一件事：**这是不是「连续第几轮在要同一件事」**（same_request）。
+  · 看【最近对话】里用户那几句：如果**当前这句和前面几句是在要同一样东西**
+    （换个说法也算，如「我要听你的声音」→「那我要听语音」→「发个语音条」），
+    就说出是**同一件事**、以及**从几轮前开始连着**（含当前这轮，最小 1）。
+  · **要的是「诉求」相同，不是「话题」相同**。用户连着问三个不同的生活问题 → 不算。
+  · 只有 1 轮、或前几句是别的事 → `count` 填 1。
+  · `what` 写「在要什么」（如「要语音」「要被叫宝宝」「要一个表态」），不要知道就不写。
 {phrase_section}
 最近对话：
 {history}
 
 用户消息：{user_msg}
 
-只输出 JSON：{{"behavior": "<行为name>" 或 null, "phrases": ["<措辞组id>", …]}}"""
+只输出 JSON：{{"behavior": "<行为name>" 或 null, "phrases": ["<措辞组id>", …], "same_request": {{"what": 「在要什么」, "count": 连续轮数}}}}"""
 
 # 措辞那一节（没有措辞组数据时整节不出现，免得给模型一个空列表）
 PHRASE_SECTION = """
@@ -151,14 +169,14 @@ async def classify_l3(deepseek_client, user_msg: str, history_text: str,
                       behaviors: list, phrase_groups: list = None) -> dict:
     """一次调用判出：行为名（0/1 个）+ 措辞组 id（0~N 个）。
 
-    返回 {"behavior": str, "phrases": [str]}；**失败/拿不准返回空**（不触发任何东西）。
-    返回的名字/id 都必须是数据里的真值（防模型编造）。
+    返回 {"behavior": str, "phrases": [str], "same_request": {"what": str, "count": int}}；
+    **失败/拿不准返回空**（不触发任何东西）。返回的名字/id 都必须是数据里的真值（防模型编造）。
 
     ⚠️ 判据措辞是本模块最要紧的东西（改词=改行为，实测过判据稍动结果就从 0% 跳到 74%）。
     """
     phrase_groups = phrase_groups or []
     if not user_msg:
-        return {"behavior": "", "phrases": []}
+        return {"behavior": "", "phrases": [], "same_request": {"what": "", "count": 1}}
 
     defs = []
     for b in behaviors or []:
@@ -188,7 +206,10 @@ async def classify_l3(deepseek_client, user_msg: str, history_text: str,
             model=_get_model_name(),
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
-            max_tokens=40,
+            # ⚠️ 别调小：加了 same_request 字段后输出变长，40 token 会把 JSON 从中间截断
+            # （实测 raw = '…"same_request": {"what": "要她说带颜色的话（造黄桃）' 断在这儿）
+            # → json.loads 报 "Expecting ',' delimiter"，而**每轮都调**，影响所有消息。
+            max_tokens=200,
             **THINKING_DISABLED,
         )
         content = extract_chat_content(resp)
@@ -196,7 +217,7 @@ async def classify_l3(deepseek_client, user_msg: str, history_text: str,
             content = content.split("```json")[1].split("```")[0].strip()
         elif "```" in content:
             content = content.split("```")[1].split("```")[0].strip()
-        parsed = json.loads(content)
+        parsed = json.loads(_repair_llm_json(content))
         names = {b.get("name") for b in (behaviors or [])}
         behavior = str(parsed.get("behavior") or "").strip()
         ids = {g.get("id") for g in phrase_groups}
@@ -207,10 +228,123 @@ async def classify_l3(deepseek_client, user_msg: str, history_text: str,
             if gid in ids and gid not in seen:      # 拦住模型编的 id
                 seen.add(gid)
                 kept.append(gid)
-        return {"behavior": behavior if behavior in names else "", "phrases": kept}
+        return {"behavior": behavior if behavior in names else "", "phrases": kept,
+                "same_request": _parse_same_request(parsed.get("same_request"))}
     except Exception as e:
         print(f"⚠️ L3 意图分类失败（降级不触发）: {e}")
-        return {"behavior": "", "phrases": []}
+        return {"behavior": "", "phrases": [], "same_request": {"what": "", "count": 1}}
+
+
+def _repair_llm_json(text: str) -> str:
+    """修复 LLM 常见的不规范 JSON（DeepSeek 偶发），尽力让 json.loads 能过。
+
+    常见病：键没加双引号（{name: "x"}）、单引号键/值、尾逗号、markdown 围栏、前后杂质。
+    修不好的原样返回，交给调用方兜底（重试/丢弃）。
+
+    ⚠️ 从 core.py 挪到这里（2026-10-04）：L3 也需要它——
+    实测输入带 emoji（🥺）时模型会输出坏 JSON，L3 整个降级 →
+    **不只丢"连续索要计数"，连行为/措辞一起丢**。
+    放这里的另一个原因：本模块是 JSON 解析器，没有下层依赖，core 反向 import 会循环。
+    """
+    if not text:
+        return text
+    t = text.strip()
+    # 剥 markdown 代码围栏
+    t = re.sub(r"^```[a-zA-Z]*\s*", "", t)
+    t = re.sub(r"\s*```$", "", t)
+    # 只取最外层 {…} / […]（剥掉前后杂质，如模型先写"好的"）
+    start = min((i for i in (t.find("{"), t.find("[")) if i != -1), default=-1)
+    end = max(t.rfind("}"), t.rfind("]"))
+    if start != -1 and end > start:
+        t = t[start:end + 1]
+    # 键补双引号：单引号键 {'a': …} 和裸键 {a: …}
+    t = re.sub(r"([{,]\s*)'([^']+)'(\s*:)", r'\1"\2"\3', t)
+    t = re.sub(r"([{,]\s*)([A-Za-z_][A-Za-z0-9_]*)(\s*:)", r'\1"\2"\3', t)
+    # 单引号字符串值 → 双引号
+    t = re.sub(r":\s*'([^']*)'", lambda m: ': "' + m.group(1).replace('"', '\\"') + '"', t)
+    # 尾逗号 ,} / ,]
+    t = re.sub(r",\s*([}\]])", r"\1", t)
+
+    # ⚠️ 上面这些修不了两类"值里出问题"的坏 JSON（L3 实测踩到）：
+    #   ① 值里有**裸换行**（模型把字段写成多行）→ "Invalid control character"
+    #   ② 值里有**内层双引号**。L3 提示词里全是双引号（"被夸"、"低俗擦边"），
+    #      模型写 behavior 字段时会照抄进去 → "被说"低俗"或擦边时…" → 解析失败。
+    # 这两类无法靠正则修（引号是边界还是内层，位置上看不出来），用状态机：
+    t2 = _fix_strings(t)
+    if _try_load(t2) is not None:
+        return t2
+    return t
+
+
+def _fix_strings(t: str) -> str:
+    """按「后一个非空字符」判断双引号是**字符串边界**还是**值里的内层引号**。
+
+    边界：后面跟 : , } ] 或结尾
+    内层：后面跟字母/中文/空格等（如 "被说"低俗"时…" 里第二个引号后面是"低"）
+    内层引号转义掉；同时把字符串内部的裸换行转成 \\n。
+    """
+    out, i, inside = [], 0, False
+    n = len(t)
+    while i < n:
+        ch = t[i]
+        if not inside:
+            if ch == '"':
+                inside = True
+            out.append(ch)
+            i += 1
+            continue
+        # 在字符串内部
+        if ch == "\\" and i + 1 < n:          # 已经是转义序列，原样带走
+            out.append(t[i:i + 2])
+            i += 2
+            continue
+        if ch == '"':
+            j = i + 1
+            while j < n and t[j] in " \t\r\n":
+                j += 1
+            nxt = t[j] if j < n else ""
+            if nxt in (":", ",", "}", "]", ""):   # 是边界
+                inside = False
+                out.append(ch)
+            else:                                  # 是值里的内层引号
+                out.append('\\"')
+            i += 1
+            continue
+        if ch in "\r\n":                       # 字符串里的裸换行
+            out.append("\\n")
+            i += 2 if ch == "\r" and i + 1 < n and t[i + 1] == "\n" else 1
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _try_load(s: str):
+    """能解析就返回结果，不能就返回 None。"""
+    try:
+        return json.loads(s)
+    except Exception:
+        return None
+
+
+def _parse_same_request(raw) -> dict:
+    """解析 L3 的 same_request（"连续第几轮在要同一件事"）。
+
+    为什么放在 L3 里而不是本地算：实测字符 bigram 分不开"换着说法的同一诉求"
+    （"我要听你的声音"→"那我要听语音"→"发个语音条"，两两重合都很低）。
+    而 L3 本来就每轮跑、本来就是判"这句落在哪个处境"的最强工具，
+    顺带判这一项 = **零额外调用**。
+
+    容错：拿不准一律 count=1（= 不是重复），与全模块"拿不准不触发"的取向一致。
+    """
+    if not isinstance(raw, dict):
+        return {"what": "", "count": 1}
+    what = str(raw.get("what") or "").strip()
+    try:
+        n = int(raw.get("count") or 1)
+    except (TypeError, ValueError):
+        n = 1
+    return {"what": what, "count": max(1, min(n, 99))}
 
 
 async def classify_behavior(deepseek_client, user_msg: str, history_text: str, behaviors: list) -> str:

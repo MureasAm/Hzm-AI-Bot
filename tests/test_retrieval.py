@@ -7,12 +7,10 @@ from src.plugins.chatbot.retrieval import (
     RetrievalItem,
     retrieve_corpus, retrieve_corpus_candidates,
     select_phrase_groups,
-    retrieve_voice_samples,
     select_behavior_item,
     rrf_fuse,
     truncate_by_budget,
     fuse_and_truncate,
-    load_voice_sample_vectors,
     _score_candidates,
     _corpus_keyword_overlap,
 )
@@ -68,15 +66,6 @@ class TestTruncateByBudget:
         ]
         kept = truncate_by_budget(items, budget_chars=15, max_item_chars=300)
         assert [i.item_id for i in kept] == ["a"]
-
-    def test_voice_sample_cost_uses_extra(self):
-        items = [
-            RetrievalItem(source="voice_sample", item_id="v", score=1.0,
-                          extra={"user": "问", "reply": "答" * 20}),
-        ]
-        kept = truncate_by_budget(items, budget_chars=10, max_item_chars=300)
-        # user+reply = 1+20 = 21 字符 > 10 预算 → 丢弃
-        assert kept == []
 
     def test_single_item_capped_at_max_item_chars(self):
         items = [RetrievalItem(source="corpus", item_id="a", score=1.0, text="x" * 500)]
@@ -290,56 +279,6 @@ class TestLoadPhraseGroups:
         assert [g["id"] for g in rt.load_phrase_groups()] == ["a"]
 
 
-class TestRetrieveVoiceSamples:
-    def _fake_samples(self):
-        return [
-            {"id": "a", "user": "问A", "reply": "答A", "type": "daily", "vector": [1, 0, 0, 0]},
-            {"id": "b", "user": "问B", "reply": "答B", "type": "emotion", "vector": [0, 1, 0, 0]},
-        ]
-
-    def test_no_samples_returns_empty(self, monkeypatch):
-        monkeypatch.setattr("src.plugins.chatbot.retrieval.load_voice_sample_vectors", lambda: [])
-        assert retrieve_voice_samples("q", _vec()) == []
-
-    def test_no_query_vector_returns_empty_without_raising(self, monkeypatch):
-        """embedding 挂掉（vector=None）时必须**返回空，不许抛异常**。
-
-        实测踩坑（2026-09-27）：智谱 embedding key 过期 → `rag.embed_query` 返回 None →
-        保底注入那条路算全体最高分时 `cosine_similarity(None, …)` 里 `zip(None, …)`
-        抛 TypeError；而 `core.handle_chat` 那一段**没有 try 兜底** →
-        整条回复任务死掉，**她一个字都不回**（不只主动发言那条路）。
-
-        ⚠️ 这条用例以前是"把样本库 patch 成空"来测的——那走的是另一个分支，
-        样本存在 + vector=None 这个真实组合一直没人测，所以 bug 一直没被发现。
-        """
-        monkeypatch.setattr("src.plugins.chatbot.retrieval.load_voice_sample_vectors",
-                            self._fake_samples)
-        assert retrieve_voice_samples("q", None) == []
-
-    def test_keepalive_skips_when_all_below_threshold(self, monkeypatch):
-        monkeypatch.setattr("src.plugins.chatbot.retrieval.load_voice_sample_vectors",
-                            self._fake_samples)
-        # query 与两个样本都正交 → 全低于阈值，且低于保底门槛 → 不注入（宁断档不错话题）
-        items = retrieve_voice_samples("q", [0, 0, 1, 0], threshold=0.9)
-        assert items == []
-
-    def test_keepalive_injects_when_high_similarity(self, monkeypatch):
-        monkeypatch.setattr("src.plugins.chatbot.retrieval.load_voice_sample_vectors",
-                            self._fake_samples)
-        # query 与样本 a 高相关（cos=1.0），但主阈值设很高 → 走保底注入 1 条
-        items = retrieve_voice_samples("q", [1, 0, 0, 0], threshold=0.99)
-        assert len(items) >= 1
-        assert all(i.source == "voice_sample" for i in items)
-
-    def test_returns_related_sample(self, monkeypatch):
-        monkeypatch.setattr("src.plugins.chatbot.retrieval.load_voice_sample_vectors",
-                            self._fake_samples)
-        items = retrieve_voice_samples("q", [1, 0, 0, 0], threshold=0.5, top_n=2)
-        assert len(items) == 1
-        assert items[0].item_id == "a"
-        assert items[0].extra["reply"] == "答A"
-
-
 class TestSelectBehaviorItem:
     """L3：LLM 判定的意图 → 行为注入项（关键词兜底）。"""
 
@@ -383,19 +322,6 @@ class TestSelectBehaviorItem:
 
 
 # ==================== 环境变量开关 ====================
-
-class TestVoiceSampleEnvSwitch:
-    def test_env_off_returns_empty(self, monkeypatch):
-        os.environ["VOICE_SAMPLES"] = "0"
-        try:
-            monkeypatch.setattr("src.plugins.chatbot.retrieval._sample_vectors", None)
-            assert load_voice_sample_vectors() == []
-        finally:
-            os.environ.pop("VOICE_SAMPLES", None)
-            monkeypatch.setattr("src.plugins.chatbot.retrieval._sample_vectors", None)
-
-
-# ==================== 融合流程 ====================
 
 class TestFuseAndTruncate:
     def test_full_pipeline(self):

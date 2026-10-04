@@ -134,10 +134,10 @@ class TestCli:
     def test_precompute_excludes_retired_targets(self):
         import run_tool
 
-        args = run_tool.build_parser().parse_args(["precompute", "voice-samples"])
-        assert args.target == "voice-samples"
-        with pytest.raises(SystemExit):
-            run_tool.build_parser().parse_args(["precompute", "phrases"])
+        # voice-samples / phrases 已于 2026-10-04 下线（并入 behaviors）→ 两个都该被 argparse 拒
+        for retired in ("voice-samples", "phrases"):
+            with pytest.raises(SystemExit):
+                run_tool.build_parser().parse_args(["precompute", retired])
 
 
 class TestStatementPrompt:

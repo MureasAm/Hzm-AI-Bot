@@ -10,7 +10,7 @@
 实际 20 个子命令，分六组：流水线(persona-pipeline)
 / 蒸馏(transcribe/clean-transcript/convert-to-chat/analyze-pace)
 / 生成(generate-statements/generate-vectors/generate-persona)
-/ 向量(precompute voice-samples|core-stories)
+/ 向量(precompute core-stories)
 / 评测(regression/persona-eval/retrieval-eval/style-annotate/problems)
 / 工具(bili-check/bili-login/vision-test/mine-phrases/mine-theme/extract-persona)。
 generate-statements 作为 persona-pipeline corpus 的内部步骤保留；generate-persona 会覆盖人格需 --danger。
@@ -129,7 +129,8 @@ def _add_persona_pipeline(sub):
         "persona-pipeline",
         help="四条安全流水线：清洗素材 → corpus/voice/phrases/behaviors 候选 → 审批写回",
     )
-    p.add_argument("target", choices=["corpus", "voice-samples", "phrases", "behaviors"])
+    # voice-samples / phrases 已下线（2026-10-04：并入 behaviors）
+    p.add_argument("target", choices=["corpus", "behaviors"])
     p.add_argument("-i", "--input", nargs="+", action="append",
                    help="清洗后的 JSON；可传多个（-i a b 或 -i a -i b）")
     p.add_argument("--audio", help="原始音频；内部依次执行 transcribe + clean")
@@ -265,7 +266,6 @@ def _run_generate_persona(args):
 
 # 类型 → (模块名, 默认输入, 默认输出)
 _PRECOMPUTE_TARGETS = {
-    "voice-samples": ("precompute_voice_sample_vectors", _common.VOICE_SAMPLES_FILE, _common.VOICE_SAMPLE_VECTOR_FILE),
     "core-stories":  ("precompute_core_stories", _common.CORE_STORIES_FILE, _common.CORE_STORY_VECTOR_FILE),
 }
 
@@ -274,7 +274,7 @@ def _add_precompute(sub):
     p = sub.add_parser("precompute", help="预计算运行时向量缓存（声音样本 / 核心记忆）")
     p.add_argument("target", nargs="?", choices=list(_PRECOMPUTE_TARGETS.keys()),
                    help="要预计算的类型")
-    p.add_argument("--all", action="store_true", help="预计算 voice-samples + core-stories")
+    p.add_argument("--all", action="store_true", help="预计算 core-stories")
     p.add_argument("-i", "--input", default=None,
                    help="源 JSON（缺省 persona/ 下默认文件）")
     p.add_argument("-o", "--output", default=None,
@@ -578,7 +578,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="run_tool",
         description="灰泽满离线工具箱：统一所有离线脚本的入口。\n"
                     "子命令按流水线阶段分组：\n"
-                    "  【流水线】persona-pipeline（corpus / voice-samples / phrases / behaviors）\n"
+                    "  【流水线】persona-pipeline（corpus / behaviors）\n"
                     "  【蒸馏】transcribe · clean-transcript · convert-to-chat · analyze-pace · mine-phrases\n"
                     "  【生成】generate-statements · generate-vectors · generate-persona · extract-persona\n"
                     "  【向量】precompute\n"

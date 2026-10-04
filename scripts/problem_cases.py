@@ -82,7 +82,7 @@ NOTES_MD = ROOT / "问题记录.md"
 
 # 这几路的 id 是**稳定名字**（preference/food、phrase/brag_deny…），可以钉；
 # corpus 的 id 是向量库下标，改语料就重排，只能写关键词。
-STABLE_ID_ROUTES = ("preference", "core_story", "behavior", "phrase", "voice_sample")
+STABLE_ID_ROUTES = ("preference", "core_story", "behavior", "phrase")   # voice_sample 已删（2026-10-04）
 
 FIELD_PREFIXES = {
     "用户说": "user", "用户": "user", "她说": "user",

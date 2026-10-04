@@ -42,13 +42,8 @@ ENV_FILE = PROJECT_ROOT / ".env.prod"
 # 机器人启动要读的固定文件（与 src/plugins/chatbot/constants.py 对齐）
 # 向量缓存跟源文件放一起（persona/*/），corpus 向量也归 persona/world/（人物记忆）
 VECTOR_FILE = WORLD_DIR / "corpus_vectors.json"
-VOICE_SAMPLE_VECTOR_FILE = SPEECH_DIR / "voice_sample_vectors.json"
 CORE_STORY_VECTOR_FILE = WORLD_DIR / "core_story_vectors.json"
-TRAITS_FILE = CORE_DIR / "traits.json"
-STYLES_FILE = CORE_DIR / "styles.json"
 BEHAVIORS_FILE = BEHAVIOR_DIR / "behaviors.json"
-VOICE_SAMPLES_FILE = SPEECH_DIR / "voice_samples.json"
-PHRASES_FILE = SPEECH_DIR / "phrases.json"
 PREFERENCES_FILE = WORLD_DIR / "preferences.json"
 CORE_STORIES_FILE = WORLD_DIR / "core_stories.json"
 

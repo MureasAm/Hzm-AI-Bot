@@ -261,6 +261,8 @@ class WeiboMonitor:
             "text": _extract_post_text(item),
             "image_urls": _extract_post_images(item),
             "url": url,
+            # 转发别人的微博（`retweeted_status` 是被转的那条）：同 B站，整条不推
+            "is_repost": bool(item.get("retweeted_status")),
         }
 
     async def _check_posts(self, bot) -> None:
@@ -288,6 +290,14 @@ class WeiboMonitor:
         if not _bridge_common.is_newer_id(post["id"], self.state.get("last_post_id", "")):
             # 不是"更新"的微博：已推过的、或比她已发过的更旧（删博后接口的"最新"
             # 会退回旧博，只判"和上一条不同"会把旧的又推一遍）
+            return
+
+        # **转发别人的微博：整条不推**（同 B站，用户 2026-09-29 决定）。
+        # 仍要更新水位线，否则每轮都会重新"发现"它。
+        if post.get("is_repost"):
+            print("[微博] 这条是转发微博 → 不推送（已记水位线）")
+            self.state["last_post_id"] = post["id"]
+            _save_state(self.state)
             return
 
         # 含图时下载配图一起发（多图全发、上限 6 张；失败不阻塞，仍发文字）
