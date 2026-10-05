@@ -37,8 +37,7 @@ def load_schedule():
 
     周表是回答"明天/这周/几点播"类问题的**地面真值**——记忆里带"明天/下周"的话
     是过去某场直播当时的说法，可能早已过期，不能当现在的安排答。
-    weekly 是 weekday 制的固定表，到周自动对，**永远不会过期**，这是它比
-    "近况"可靠的地方（后者已删除，见 待办清单.md）。
+    weekly 是 weekday 制的固定表，到周自动对，**永远不会过期**。
     """
     global _schedule_cache
     if _schedule_cache is not None:

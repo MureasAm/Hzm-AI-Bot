@@ -47,17 +47,8 @@ STICKER_COOLDOWN_TURNS = 3
 STICKER_RECENT_KEEP = 3
 SCHEDULE_FILE = PROJECT_ROOT / "persona" / "world" / "schedule.json"          # 她的周表(手动维护,注入地面真值)
 
-# ==================== 已删除：schedule 的「近况」====================
-# 曾经的「近况」（一个自由文本 + 更新日期 + 7 天 TTL，如"这周在收拾搬家"）已**整条删除**。
-# 脉络：① 它被无条件注入时把"搬家"当成了当前理由，且被【一致性规则】锁死用了一周；
-#       ② 于是加了 TTL，超期就不注入；③ 但 2026-09-25 实测发现——近况当时早已过期（19 天），
-#          漏的根本不是它，而是 voice_samples 里一条"她本人说过"的搬家（详见 待办清单.md「本土化」）。
-# **结论：近况治不了「用旧记忆回答当下」**——那条通道是 assistant turn（"她本人的话"），
-# 远强于任何 system 说明。且这个字段手动维护必烂（实测烂了 20 天）。
-# **别再把它加回来**：真正该做的是保持样本库/corpus 与直播内容同步，而不是再设一个会烂的字段。
 VECTOR_FILE = PROJECT_ROOT / "persona" / "world" / "corpus_vectors.json"         # 直播记忆向量库（灰泽满的人物记忆，归 world/）
-# 措辞指纹 / 偏好：**已不用向量**（2026-09-26 改判据，见 retrieval.py 顶部）。
-# 现在读源文件；`phrase_vectors.json` / `preference_vectors.json` 与对应的 precompute 已停用（留着以防回退）。
+# 偏好：**已不用向量**，按 keywords 子串命中（2026-09-26 改判据）。
 PREFERENCES_FILE = PROJECT_ROOT / "persona" / "world" / "preferences.json"
 CORPUS_KEYWORDS_FILE = PROJECT_ROOT / "persona" / "world" / "corpus_keywords.json"  # corpus 的「钩子」
 
@@ -121,18 +112,6 @@ CORPUS_LEXICAL_EXTRA_N = 6    # 除语义 top-N 外，**按词面沾边**再补�
 #   ——§2.3 的判据对比实验量过"候选给多了反而更差"。按 ov 从高到低取。
 CORPUS_JUDGE_MAX_KEEP = 2     # 判定最多保留几条（限制爆破半径：判错也只是多说一句，不是灌一堆）
 
-# ==================== 声音样本通道：2026-10-04 已停用 ====================
-# 原来这里有一组 VOICE_SAMPLE_*（TOP_N / THRESHOLD / KEEPALIVE / PREFER_SHORT / REPLY_TRIM_CHARS）
-# 和 PROACTIVE_SAMPLE_*。整套已删，原因见 retrieval.py 顶部「声音样本通道已停用」。
-# 一句话：它按【话题】检索 → 必然把同话题的**事实**灌进对话 → 自相矛盾/编事实/逐字搬；
-# 而 behaviors 按【情景】检索，话题天然不同，只带走形态。该留的 18 条已并入 behaviors。
-
-# ==================== V3 措辞指纹 ====================
-# 已删除 PHRASE_THRESHOLD：措辞组的 trigger 是 6~13 字的**类别标签**（"被夸奖、被称赞时"），
-# 拿它算余弦 = 用检索工具干分类的活。实测噪声地板 0.575 / 正例 0.573、中位 0.461 都过阈值
-# → **100% 开火，等于没有判据**（真实对话 138 条里 100% 命中）。试过提到 0.63：噪声挡住了正例一起被杀。
-# 现在改由 L3 的 LLM 分类给组 id（同 behaviors）。
-
 # ==================== V3 RRF 融合 ====================
 RRF_K = 60                    # RRF 平滑常数
 SOURCE_WEIGHTS = {"behavior": 1.5, "corpus": 1.0}
@@ -192,8 +171,6 @@ VOICE_MAX_LEN = 120   # 纯保险上限（~30s 音频，仍在 QQ 语音 ~60s �
 AUTO_ACCEPT_FRIEND = True
 
 # 偏好档案（第 5 路）：**按 keywords 子串命中**，不走向量（路径见文件头 PREFERENCES_FILE）
-# 已删除 PREFERENCE_THRESHOLD：噪声地板 0.565 插在正例（0.501/0.552/0.590）**正中间**，余弦分不开；
-# 试过 0.62：三个正例全被误杀。偏好本来就是"类别 + 用户能直接说出的词"，跟 terms 同构 → 改子串命中。
 PREFERENCE_TOP_N = 2              # 最多注入几条偏好条目
 
 # 核心记忆（印象最深的结晶，独立于 corpus 单独检索，低阈值高浮现）

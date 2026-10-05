@@ -226,31 +226,6 @@ def retrieve_corpus_candidates(user_query: str, query_vector,
     return top
 
 
-# ==================== 声音样本通道（2026-10-04 已停用） ====================
-# 为什么不做了（实测 n=32 + 真实链路观测）：
-#   ① 它按【话题】检索，必然捞到"同话题的完整回答" → 把**事实**灌进对话：
-#      "你今天吃什么了"→捞到"今天怎么没吃饭"→她答"还没吃呢"→下一轮自相矛盾；
-#      "外面下雨了"→她答"刚淋着跑回来的"（编的）；"最近怎么样"→"要写出百年孤独了"（近乎逐字搬）
-#   ② assistant 通道注入时样本与真实历史混在一起（样本 user 与真实 user 相邻）→
-#      与【当前时间】"正在直播中"冲突 13/32（system 一行只 2/32）、样本词泄漏 4/32（1/32）、
-#      反问率 38%（50%）
-#   ③ behaviors 按【情景】选，话题天然不同 → 只带走形态不带走内容。**这才是对的做法。**
-# 那批原句里该留的 18 条已并入 behaviors 的 samples。
-#
-# 保留这个函数只为兼容**诊断脚本**（retrieval_eval / trace_chain 会调它）：
-# 数据文件已删，所以它恒返回空。
-
-
-def load_voice_sample_vectors() -> list:
-    """【已停用】以前读 persona/speech/voice_sample_vectors.json。现在恒返回 []。"""
-    return []
-
-
-def retrieve_voice_samples(user_query: str, query_vector, **kwargs) -> list:
-    """【已停用】声音样本检索。恒返回 [] —— 见文件上方「声音样本通道已停用」的说明。"""
-    return []
-
-
 # 行为判别词 → 强制命中行为（语义检索对"敷衍/鸽/迟到"这类口语有~0.55天花板且易错配，
 # 对齐 LEGENDARY 的思路：固定判别词 → 固定反应）。
 # 数据化：从 persona/behavior/behavior_keywords.json 加载，填 JSON 不用改代码。
@@ -462,8 +437,6 @@ def fuse_and_truncate(corpus_items, behavior_items=None) -> list:
     """完整融合流程：RRF → 条数截断 → 字符预算截断。
 
     只融合 **corpus**（向量+LLM 判）与 **behavior**（按名字查表）。
-    原来的 `sample_items`（voice_sample）和 `phrase_items`（phrase）两路已随对应文件删除
-    （2026-10-04），空表参数一并收掉——留着只会让人以为还有那两路。
     """
     from .constants import SOURCE_WEIGHTS as _W
 

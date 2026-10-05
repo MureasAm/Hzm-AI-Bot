@@ -428,7 +428,6 @@ async def run_compress(n: int, short_path: str, from_synthetic: bool) -> int:
                  "short_file": str(short), "n": len(rows), "skipped": skipped},
         "rows": rows}, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"\n✅ 明细已保存: {out}")
-    print(f"   ⚠️ **别在这里下调**——拿它出题给你判（`style-annotate --sets --only 整块`）")
     return 0
 
 
@@ -439,8 +438,7 @@ async def run_sections(n: int, from_synthetic: bool, min_section_chars: int,
     ⚠️ 关键性质：这些段**已经在 messages 里**（检索已经跑完），
        所以消融 = **把那段删掉**，**不需要重跑检索** —— 一次检索能试所有段。
 
-    `only_section`：只做名字里含这个子串的段（给"某个段还没测过、单独补一批"用，
-    见 `scripts/style_annotate.py --run`）。不传 = 所有段。
+    `only_section`：只做名字里含这个子串的段（给"某个段还没测过、单独补一批"用）。不传 = 所有段。
     """
     core.update_memory_task = lambda *a, **k: asyncio.sleep(0)
     tmp = tempfile.mkdtemp(prefix="sectabl_")

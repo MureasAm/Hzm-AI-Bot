@@ -10,12 +10,8 @@ import asyncio
 import re
 import time
 
-from nonebot import get_driver
-from openai import AsyncOpenAI
-
 from .constants import (
-    SYSTEM_PROMPT_FILE, DEEPSEEK_BASE_URL, ZHIPU_BASE_URL,
-    DEFAULT_MODEL, THINKING_DISABLED,
+    SYSTEM_PROMPT_FILE, THINKING_DISABLED,
     CHAT_TEMPERATURE, CHAT_FREQUENCY_PENALTY, CHAT_MAX_TOKENS,
     MEMORY_EXTRACT_TEMPERATURE, MEMORY_EXTRACT_MAX_TOKENS,
 )
@@ -34,11 +30,7 @@ from .retrieval import (
     retrieve_preferences, retrieve_core_stories, fuse_and_truncate, select_behavior_item,
 )
 from .corpus_judge import judge_corpus
-from .constants import (
-    SPLIT_MIN_LEN, SPLIT_MAX_PARTS, SPLIT_MERGE_MIN_CHARS,
-    SPLIT_DELAY_BASE_MS, SPLIT_DELAY_PER_CHAR_MS,
-    SPLIT_DELAY_MIN_MS, SPLIT_DELAY_MAX_MS, SPLIT_DELAY_JITTER,
-)
+from .constants import SPLIT_DELAY_MIN_MS, SPLIT_DELAY_MAX_MS  # noqa: F401 — test_core 校验分段延迟上下限时读它
 from . import context_probe
 from . import group_memory
 from .routing import (
@@ -46,8 +38,7 @@ from .routing import (
     _repair_llm_json,
 )
 from .reply_style import (
-    split_reply, split_delay, clean_reply, is_echo_reply, is_emotion_only_query,
-    _trim_text,
+    clean_reply, is_echo_reply, is_emotion_only_query,
 )
 from .session_memory import (
     probe_session, build_session_context, is_emoji_msg, previous_session_note,
@@ -102,8 +93,8 @@ def _detach_behavior_from_rrf() -> bool:
     单跑那条用例（no_fixed_opener_when_deflecting）：**两版都 5/5 过** → 复现不了
     ```
 
-    可疑机制：新版让 **voice_samples 多进 1~2 条**（名额不再被行为/措辞占），
-    样本多了模型**可能更容易盯住某一条的开头** → 反而更同质。而那条用例判的正是
+    可疑机制：新版让 **corpus 多进 1~2 条**（top-6 名额不再被行为占），
+    素材多了模型**可能更容易盯住某一条的开头** → 反而更同质。而那条用例判的正是
     "反复求交往时不能每轮同一个词开头"。
 
     **收益不足以冒这个险**：它**不修任何已知故障**，只是结构更正确（现状实测零代价）。
@@ -129,7 +120,7 @@ async def summarize_batch(msgs: list) -> str:
     prompt = (
         "以下是用户刚刚连发的几条消息，请用一两句话概括：他们在说什么、什么语气、大致想表达什么。\n"
         "要求：只归纳原文已有的信息，不要编造；不要逐条复述；如果是纯寒暄就直接说。\n\n"
-        f"消息：\n" + "\n".join(texts)
+        "消息：\n" + "\n".join(texts)
     )
     try:
         deepseek_client, _ = _get_clients()
@@ -192,10 +183,7 @@ def _compose_record_msg(user_msg: str, vision_desc: str) -> str:
 
 
 def _split_fused(fused_items):
-    """把融合结果按源分组：behavior / corpus。
-
-    （voice_sample / phrase 两个源已随对应文件删除，2026-10-04。）
-    """
+    """把融合结果按源分组：behavior / corpus。"""
     behaviors, corpus = [], []
     for it in fused_items:
         if it.source == "behavior":
@@ -374,8 +362,7 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
 
     # 周表（地面真值）：被问"明天来吗/这周/几点播"以它为准。
     # 记忆里带"明天/下周"的话是过去某场直播当时的说法，可能早过期，不能当现在的安排。
-    # 这里**只有 weekly**（weekday 制，到周自动对，永不过期）——曾有的「近况」字段已整条删除，
-    # 它治不了"用旧记忆回答当下"（漏点在 voice_samples），且手动维护必烂。见 constants.py 的说明。
+    # 这里**只有 weekly**（weekday 制，到周自动对，永不过期），没有会过期的自由文本字段。
     sched = load_schedule()
     weekly = sched.get("weekly") if sched else None
     if weekly:
@@ -429,10 +416,6 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
     if session_context:
         messages.append({
             "role": "system",
-            # A 类包装语已删（2026-09-30）：原来尾巴还有「（这是你们这一场对话的调性和发生过的事，
-            # 回应时要自然地顺着这个语境，不要生硬提及）」——§3.5 实测"管怎么用"零作用。
-            # ⚠️ 下面那条 `prev_session_note` 的注释说的"那句写的是'你们这一场对话'"指的就是被删的这句，
-            #    删掉它**不影响**那个设计（它防的是"把几天前的东西塞进当前会话"，与包装语无关）。
             "content": f"【当前会话】{session_context}",
         })
 
@@ -455,9 +438,6 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
         if behavior_text:
             messages.append({
                 "role": "system",
-                # A 类包装语已删（2026-09-30）：原来是「请严格按此模式回应：」。
-                # ⚠️ 同句式有**已知有害**的先例：它曾把 behaviors 里的 `"'呃…'起头"` 变成 10/10 照抄
-                #    （而 86 条真实素材里 0 条那样开头）。那批措辞规定已经删了，**这句强制语一直留着**。
                 "content": f"【当前情境下的行为指令】\n{behavior_text}"
             })
 
@@ -468,10 +448,6 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
             messages.append({
                 "role": "system",
                 "content": f"【她经历过的相关背景】以下是她过去直播里经历过的事（背景记忆，都是曾经发生的，不是现在）。"
-                           # ── A 类包装语已删（2026-09-30，§3.5 实测"管怎么用"零作用）──
-                           # 删掉的是：「只当'她记得的经历'自然带出…不整段复述、不模仿里面的叙述口吻。」
-                           # 留下的是下面这句「别拿背景记忆编当下的因果」——它管的是**事实/时间**，
-                           # 对应真实故障（「搬家」被当现在用，差 80 天），不是"怎么用"。
                            f"**别拿背景记忆编当下的因果**——"
                            f"① 她一贯的毛病（迟到/睡过头/拖延/临时鸽/熬夜）是她的常态：被问'怎么又迟到/又鸽/为什么迟到'这类时，"
                            f"直接认领常态就好，嘴硬自洽地接，"
@@ -519,23 +495,6 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
             "role": "system",
             "content": f"{label}\n{context}"
         })
-
-    # ⛔【她的固定说法】注入块已删（2026-10-04）——phrases.json 连同那一路一起删除，
-    #   情景组已并入 behaviors 的 samples（按情景触发，不再按 L3 分类的组 id 查表）。
-
-    # ⛔【灰泽满的说话方式参考】整段已删（2026-10-04）——voice_samples 通道取消。
-    #   原因（实测，n=32）：
-    #     ① 它按【话题】检索，必然捞到"同话题的完整回答" → 把**事实**灌进对话：
-    #        "你今天吃什么了"→捞到"今天怎么没吃饭"→她答"还没吃呢"→下一轮自相矛盾；
-    #        "外面下雨了"→她答"刚淋着跑回来的"（编的）；"最近怎么样"→"要写出百年孤独了"（近乎逐字搬）
-    #     ② assistant 通道注入时，样本和真实历史混在一起（样本 user 与真实 user 相邻，
-    #        模型读成"连着两轮用户发言"）→ **与【当前时间】"正在直播中"冲突 13/32**（system 一行只 2/32），
-    #        样本词泄漏 4/32（system 一行 1/32），反问率 38%（system 一行 50%）
-    #   这批原句里**该留的 18 条已并入 behaviors 的 samples**（按情景触发，不按话题乱捞）。
-
-    # ⛔【回复节奏】已删（2026-09-30）——C 类：与骨架【说话节奏】重复
-    #   （骨架写的是"默认短句，一句一个想法，说清楚就停"），纯浪费预算。
-    #   短句仍由骨架软引导 + `split_reply` 分段 + 语音兜底，**没有丢机制**。
 
     # 连续索要（客观事实，不含指令）：她需要知道"这已经是第几次了"。
     # 为什么必须有（2026-10-04 从真实记录发现）：上下文只带最近 10 条，
@@ -662,8 +621,6 @@ async def update_memory_task(user_id: str, user_msg: str, reply: str, user_memor
         user_msg=user_msg,
         reply=reply
     )
-    # V1：停用 self_fact 提取。灰泽满的"自我"应来自真人素材（voice_samples/corpus），
-    # 而不是聊天时临时编造的自我披露，防止 AI 自嗨污染长期人格。
     prompt += "\n【本轮的强制规则】new_self_fact 一律返回 null。只提取关于用户的信息（new_impression / new_user_fact），不要从灰泽满的回复中提取任何自我披露内容。"
 
     content = None
@@ -701,7 +658,7 @@ async def update_memory_task(user_id: str, user_msg: str, reply: str, user_memor
             updates = _parse_memory_extract(content2)
             if updates:
                 update_user_memory(user_id, updates)
-        except Exception as e2:
+        except Exception:
             print(f"[长期记忆] 重试仍失败，本轮记忆丢弃。首次原始输出: {content!r}")
             import traceback
             traceback.print_exc()
@@ -748,7 +705,7 @@ async def gather_retrieval(query_text: str, retrieval_query: str, history_text: 
                               deepseek_client, zhipu_client, behaviors, is_user_msg)
     except Exception as e:
         # **检索层炸了不能让她变哑巴**：素材按"没检索到"处理，回复/主动发言继续。
-        # 踩坑（2026-09-27）：智谱 embedding key 过期 → retrieve_voice_samples 抛
+        # 踩坑（2026-09-27）：智谱 embedding key 过期 → 检索层抛
         # TypeError('NoneType' object is not iterable)，而调用点没有兜底 →
         # **整条回复任务死掉，她一个字都不回**（含群聊，看起来像"不接话"）。
         # 兜底放这里=两条链路（聊天/主动发言）一起受保护。
@@ -764,7 +721,6 @@ async def _fill_retrieval(result: dict, query_text: str, retrieval_query: str, h
     # 会把'灰泽满你唱歌好听'（夸）和'灰泽满你怎么又迟到'（质问）挤在一起误判）。
     # 同一次调用还判"连续第几轮在要同一件事"（same_request）。
     # 判别词（敷衍/骗/鸽/迟到/黄桃/擦边…）退**兜底**位：L3 判不出来时才用。
-    # ⚠️ 原来的"措辞组"那一路已随 phrases.json 一起删除（2026-10-04，情景组并入 behaviors）。
     if is_user_msg:
         l3 = await classify_l3(deepseek_client, query_text, history_text, behaviors)
         if l3["behavior"]:
@@ -786,9 +742,6 @@ async def _fill_retrieval(result: dict, query_text: str, retrieval_query: str, h
         # 判不出来一律不带（宁可漏不可错，见 corpus_judge 模块头）。
         candidates = retrieve_corpus_candidates(retrieval_query or query_text, query_vector)
         corpus_items = await judge_corpus(deepseek_client, query_text, candidates)
-
-    # 声音样本那一路已删（2026-10-04）：sample_items 恒为空，见 retrieval.py 顶部说明。
-    sample_items: list = []
 
     if _detach_behavior_from_rrf():
         # 行为**不进 RRF**：它是 L3 判出类别后**按名字查表**的结果（没有相似度、
@@ -935,10 +888,6 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
             reply = await generate_reply(list(messages) + [nudge])
             if not is_echo_reply(reply, recent_bot, window=8):
                 break
-
-    # （这里曾有"防措辞固化"：find_repeat_word 检测到反复用同一个词就强制换措辞重生成。
-    #  2026-09-12 删除——实测它 75% 的触发是在拦她自己的自称"灰泽满"，
-    #  详见 reply_style.py 顶部注释。）
 
     # --- 💾 更新短期记忆（带锁）：图片消息把视觉描述记进去，后续才记得聊过什么图 ---
     # 存**清洗后**的版本（clean_reply 平时在 chat_window 里、本函数返回之后才跑）：
