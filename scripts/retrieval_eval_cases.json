@@ -183,11 +183,11 @@
       "id": "p1_brag",
       "query": "你唱得真好听！",
       "source": "回归案例",
-      "why": "被夸 → 该带『嘴硬否认』那组措辞",
+      "why": "被夸 → 该套『被夸时嘴硬否认』（原判 brag_deny 措辞组；phrases 已并入 behaviors）",
       "expect": {
-        "phrase": {
+        "behavior": {
           "should": [
-            "brag_deny"
+            "被夸时嘴硬否认"
           ]
         }
       }
@@ -196,11 +196,11 @@
       "id": "p2_excuse",
       "query": "你昨晚为什么没播",
       "source": "回归案例",
-      "why": "被问不播 → 该带『含糊借口』那组措辞",
+      "why": "被问不播 → 该套『失约被催时认栽滑跪』（原判 busy_excuse 措辞组；phrases 已并入 behaviors）",
       "expect": {
-        "phrase": {
+        "behavior": {
           "should": [
-            "busy_excuse"
+            "失约被催时认栽滑跪"
           ]
         }
       }
@@ -401,9 +401,6 @@
         },
         "preference": {
           "should_not_hit": true
-        },
-        "phrase": {
-          "should_not_hit": true
         }
       }
     },
@@ -417,9 +414,6 @@
           "should_not_hit": true
         },
         "preference": {
-          "should_not_hit": true
-        },
-        "phrase": {
           "should_not_hit": true
         },
         "behavior": {
@@ -466,9 +460,6 @@
         },
         "preference": {
           "should_not_hit": true
-        },
-        "phrase": {
-          "should_not_hit": true
         }
       }
     },
@@ -482,9 +473,6 @@
           "should_not_hit": true
         },
         "preference": {
-          "should_not_hit": true
-        },
-        "phrase": {
           "should_not_hit": true
         }
       }
@@ -522,9 +510,6 @@
         },
         "preference": {
           "should_not_hit": true
-        },
-        "phrase": {
-          "should_not_hit": true
         }
       }
     },
@@ -553,9 +538,6 @@
         },
         "preference": {
           "should_not_hit": true
-        },
-        "phrase": {
-          "should_not_hit": true
         }
       }
     },
@@ -569,9 +551,6 @@
           "should_not_hit": true
         },
         "preference": {
-          "should_not_hit": true
-        },
-        "phrase": {
           "should_not_hit": true
         }
       }
@@ -640,6 +619,32 @@
       "expect": {
         "corpus": {
           "should_not_hit": true
+        }
+      }
+    },
+    {
+      "id": "b17_capability",
+      "query": "你能看我转发的视频吗",
+      "source": "回归案例",
+      "why": "要她做做不到的事 → 『被推着要求时打太极』（2026-10-05 折进来）",
+      "expect": {
+        "behavior": {
+          "should": [
+            "被推着要求时打太极"
+          ]
+        }
+      }
+    },
+    {
+      "id": "b18_help_study",
+      "query": "你能帮助我的学习吗",
+      "source": "回归案例",
+      "why": "同上：要她做做不到的事",
+      "expect": {
+        "behavior": {
+          "should": [
+            "被推着要求时打太极"
+          ]
         }
       }
     }

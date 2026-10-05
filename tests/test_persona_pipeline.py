@@ -155,14 +155,12 @@ class TestToolModulesImport:
         import convert_to_chat
         import extract_persona
         import generate_statements
-        import mine_phrases
 
         assert analyze_pace.MODEL
         assert clean_transcript.MODEL
         assert convert_to_chat.MODEL
         assert extract_persona.MODEL
         assert generate_statements.MODEL
-        assert mine_phrases.MODEL
 
 
 class TestReuseApply:

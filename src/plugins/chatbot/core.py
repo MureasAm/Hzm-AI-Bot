@@ -31,12 +31,11 @@ from .memory import (
 from .rag import embed_query
 from .retrieval import (
     retrieve_corpus_candidates,
-    load_phrase_groups, select_phrase_groups,
     retrieve_preferences, retrieve_core_stories, fuse_and_truncate, select_behavior_item,
 )
 from .corpus_judge import judge_corpus
 from .constants import (
-    PHRASE_PHASES_MAX, SPLIT_MIN_LEN, SPLIT_MAX_PARTS, SPLIT_MERGE_MIN_CHARS,
+    SPLIT_MIN_LEN, SPLIT_MAX_PARTS, SPLIT_MERGE_MIN_CHARS,
     SPLIT_DELAY_BASE_MS, SPLIT_DELAY_PER_CHAR_MS,
     SPLIT_DELAY_MIN_MS, SPLIT_DELAY_MAX_MS, SPLIT_DELAY_JITTER,
 )
@@ -193,18 +192,17 @@ def _compose_record_msg(user_msg: str, vision_desc: str) -> str:
 
 
 def _split_fused(fused_items):
-    """把融合结果按源分组：behavior / corpus / voice_sample / phrase。"""
-    behaviors, corpus, samples, phrases = [], [], [], []
+    """把融合结果按源分组：behavior / corpus。
+
+    （voice_sample / phrase 两个源已随对应文件删除，2026-10-04。）
+    """
+    behaviors, corpus = [], []
     for it in fused_items:
         if it.source == "behavior":
             behaviors.append(it)
         elif it.source == "corpus":
             corpus.append(it)
-        elif it.source == "voice_sample":
-            samples.append(it)
-        elif it.source == "phrase":
-            phrases.append(it)
-    return behaviors, corpus, samples, phrases
+    return behaviors, corpus
 
 
 # ==================== 名词库（terms/lorebook） ====================
@@ -449,7 +447,7 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
     if now_context:
         messages.append({"role": "system", "content": now_context})
 
-    behaviors, corpus, samples, phrases = _split_fused(fused_items)
+    behaviors, corpus = _split_fused(fused_items)
 
     # 行为指令（source=behavior）
     if behaviors:
@@ -522,24 +520,8 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
             "content": f"{label}\n{context}"
         })
 
-    # 措辞指纹（source=phrase）：同一意思用她的真实原话锚定，不自创措辞
-    if phrases:
-        phrase_blocks = []
-        for it in phrases:
-            usage = it.extra.get("usage", "")
-            phs = it.extra.get("phrases", [])[:PHRASE_PHASES_MAX]
-            if phs:
-                block = f"· {it.extra.get('meaning', it.item_id)}：{'、'.join(phs)}"
-                if usage:
-                    block += f"（{usage}）"
-                phrase_blocks.append(block)
-        if phrase_blocks:
-            messages.append({
-                "role": "system",
-                # A 类包装语已删（2026-09-30）：原来是「表达同类意思时用这些原话组织，不要自创解释性措辞：」。
-                # 而且 phrases 本来就是**碎片**（实测 0/16 被抄）——这条约束在管一件不会发生的事。
-                "content": "【她的固定说法】以下情景她说这些话：\n" + "\n".join(phrase_blocks)
-            })
+    # ⛔【她的固定说法】注入块已删（2026-10-04）——phrases.json 连同那一路一起删除，
+    #   情景组已并入 behaviors 的 samples（按情景触发，不再按 L3 分类的组 id 查表）。
 
     # ⛔【灰泽满的说话方式参考】整段已删（2026-10-04）——voice_samples 通道取消。
     #   原因（实测，n=32）：
@@ -777,27 +759,22 @@ async def gather_retrieval(query_text: str, retrieval_query: str, history_text: 
 async def _fill_retrieval(result: dict, query_text: str, retrieval_query: str, history_text: str,
                           deepseek_client, zhipu_client, behaviors, is_user_msg: bool) -> None:
     """`gather_retrieval` 的干活部分（单独一层，方便上面统一兜底）。结果写进 result。"""
-    behavior_items, phrase_items, corpus_items = [], [], []
+    behavior_items, corpus_items = [], []
     # L3：归属用 LLM 判意图（不再用 embedding 猜——embedding 按句式聚团，
     # 会把'灰泽满你唱歌好听'（夸）和'灰泽满你怎么又迟到'（质问）挤在一起误判）。
-    # **一次调用同时判"行为"（该怎么做）和"措辞"（该用哪些词）**——两者是同一个问题的两半。
-    # 判别词（敷衍/骗/鸽/迟到/黄桃/擦边…）退**兜底**位：L3 判不出来时才用
-    # （这才是它 docstring 里写的定位；以前被当成"省一次调用"的短路，
-    #   但实测 138 条真实消息里它 0 次命中，而短路会顺手跳过措辞分类）。
+    # 同一次调用还判"连续第几轮在要同一件事"（same_request）。
+    # 判别词（敷衍/骗/鸽/迟到/黄桃/擦边…）退**兜底**位：L3 判不出来时才用。
+    # ⚠️ 原来的"措辞组"那一路已随 phrases.json 一起删除（2026-10-04，情景组并入 behaviors）。
     if is_user_msg:
-        phrase_groups = load_phrase_groups()
-        l3 = await classify_l3(deepseek_client, query_text, history_text, behaviors, phrase_groups)
+        l3 = await classify_l3(deepseek_client, query_text, history_text, behaviors)
         if l3["behavior"]:
             print(f"[行为] LLM 判定: {l3['behavior']}")
-        if l3["phrases"]:
-            print(f"[措辞] LLM 判定: {'、'.join(l3['phrases'])}")
         sr = l3.get("same_request") or {}
         if int(sr.get("count") or 1) >= 2:
             result["same_request"] = sr
             print(f"[连续索要] 第 {sr['count']} 轮：{sr.get('what') or '（未说明）'}")
         behavior_item = select_behavior_item(query_text, l3["behavior"], behaviors)
         behavior_items = [behavior_item] if behavior_item else []
-        phrase_items = select_phrase_groups(l3["phrases"], phrase_groups)
 
     query_vector = await embed_query(zhipu_client, retrieval_query or query_text)
     if is_user_msg:
@@ -814,20 +791,14 @@ async def _fill_retrieval(result: dict, query_text: str, retrieval_query: str, h
     sample_items: list = []
 
     if _detach_behavior_from_rrf():
-        # 行为/措辞**不进 RRF**：它们是 L3 判出类别后**按名字查表**的结果（没有相似度、
+        # 行为**不进 RRF**：它是 L3 判出类别后**按名字查表**的结果（没有相似度、
         # 分数写死 1.0），不是"从一堆里挑最像的"那种检索。RRF 是给检索造的（融合多路排名），
         # 把查表结果丢进去，它会**占 top-6 名额和 1200 字预算**。
-        # → 截断**之后**再追加，永不参与名额竞争；名额全还给 corpus + voice_sample。
+        # → 截断**之后**再追加，永不参与名额竞争；名额全还给 corpus。
         # 注入位置由 `_split_fused` 按段类型决定，**不受这里顺序影响**（见 build_message_list）。
-        # ⚠️ `fuse_and_truncate` 的签名是 (corpus, sample, behavior, phrase)，
-        # 四个都是位置参数（`behavior_items` 没有默认值）——所以要显式传空表，
-        # 不能只传前两个（踩过：少传参数会让**整层检索抛异常**，
-        # 然后被 gather_retrieval 的兜底"按没检索到继续"吞掉，A/B 结果全废）。
-        result["fused_items"] = (fuse_and_truncate(corpus_items, sample_items, [], [])
-                                 + behavior_items + phrase_items)
+        result["fused_items"] = fuse_and_truncate(corpus_items) + behavior_items
     else:
-        result["fused_items"] = fuse_and_truncate(corpus_items, sample_items,
-                                                  behavior_items, phrase_items)
+        result["fused_items"] = fuse_and_truncate(corpus_items, behavior_items)
     # 第 5 路：偏好（关键词命中）／核心记忆（结晶）
     result["preference_items"] = retrieve_preferences(retrieval_query or query_text)
     result["core_stories"] = retrieve_core_stories(retrieval_query or query_text, query_vector)

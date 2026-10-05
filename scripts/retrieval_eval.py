@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""检索层评测：量化六路检索（corpus/voice_sample/behavior/phrase 走 RRF + preference/core_story 命中才带）
+"""检索层评测：量化检索层（corpus/behavior 走 RRF + preference/core_story 命中才带）
+
+⚠️ voice_sample / phrase 两路已于 2026-10-04 删除（前者整条通道删，后者并入 behaviors）。
+phrase 相关的期望已从用例集里清掉——它恒为空，留着是假绿灯。
 在不同 query 下的命中率，让阈值调参从"人肉肉眼看"变成"可测量的回归"。
 
 用法：
@@ -146,13 +149,11 @@ async def snapshot(query: str, client, ds_client, behaviors) -> tuple:
     qv = await embed_query(client, query)
     if not qv:
         return None, {"behavior": "", "phrases": []}
-    phrase_groups = retrieval.load_phrase_groups()
     # L3：一次调用同时判行为 + 措辞（与 core.handle_chat 同一条路）
-    l3 = (await classify_l3(ds_client, query, "", behaviors, phrase_groups)
+    l3 = (await classify_l3(ds_client, query, "", behaviors)
           if ds_client else {"behavior": "", "phrases": []})
     got = {
         "corpus": await corpus_items(query, qv, ds_client),
-        "phrase": retrieval.select_phrase_groups(l3["phrases"], phrase_groups),
         "preference": retrieval.retrieve_preferences(query),
         "core_story": retrieval.retrieve_core_stories(query, qv),
         "behavior": [],
@@ -223,7 +224,7 @@ async def run(cases, verbose: bool, only_id: str = None):
                     print(f"      · 实际 {source}: {items}")
 
     # ---- 汇总：按 source 的命中率 ----
-    total = {"behavior": [0, 0], "corpus": [0, 0], "phrase": [0, 0],
+    total = {"behavior": [0, 0], "corpus": [0, 0],
              "preference": [0, 0], "core_story": [0, 0]}
     for r in results:
         for c in r["checks"]:

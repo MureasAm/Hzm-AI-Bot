@@ -657,64 +657,6 @@ class TestClassifyBehavior:
         assert out == ""
 
 
-class TestClassifyL3Phrases:
-    """同一次调用里的措辞组判定。"""
-
-    def _phrases(self):
-        return TestClassifyBehavior()._phrases()
-
-    def _behaviors(self):
-        return TestClassifyBehavior()._behaviors()
-
-    def _fake(self, content):
-        return TestClassifyBehavior()._fake(content)
-
-    async def test_phrase_ids_returned(self):
-        out = await routing.classify_l3(self._fake('{"behavior": null, "phrases": ["brag_deny"]}'),
-                                        "你唱歌好好听", "", self._behaviors(), self._phrases())
-        assert out == {"behavior": "", "phrases": ["brag_deny"],
-                       "same_request": {"what": "", "count": 1}}
-
-    async def test_behavior_and_phrases_together(self):
-        out = await routing.classify_l3(
-            self._fake('{"behavior": "被夸时嘴硬否认", "phrases": ["brag_deny"]}'),
-            "你唱歌好好听", "", self._behaviors(), self._phrases())
-        assert out["behavior"] == "被夸时嘴硬否认"
-        assert out["phrases"] == ["brag_deny"]
-
-    async def test_fabricated_phrase_id_dropped(self):
-        out = await routing.classify_l3(self._fake('{"behavior": null, "phrases": ["不存在的组"]}'),
-                                        "你好", "", self._behaviors(), self._phrases())
-        assert out["phrases"] == []
-
-    async def test_phrases_missing_key_ok(self):
-        out = await routing.classify_l3(self._fake('{"behavior": "被夸时嘴硬否认"}'),
-                                        "你唱歌好好听", "", self._behaviors(), self._phrases())
-        assert out["behavior"] == "被夸时嘴硬否认"
-        assert out["phrases"] == []
-
-    async def test_duplicate_phrase_ids_deduped(self):
-        out = await routing.classify_l3(self._fake('{"behavior": null, "phrases": ["brag_deny", "brag_deny"]}'),
-                                        "你好", "", self._behaviors(), self._phrases())
-        assert out["phrases"] == ["brag_deny"]
-
-    async def test_no_phrase_groups_keeps_behavior(self):
-        out = await routing.classify_l3(self._fake('{"behavior": "被夸时嘴硬否认", "phrases": ["x"]}'),
-                                        "你唱歌好好听", "", self._behaviors(), [])
-        assert out == {"behavior": "被夸时嘴硬否认", "phrases": [],
-                       "same_request": {"what": "", "count": 1}}
-
-    async def test_failure_returns_empty_both(self):
-        def _raise(*a, **k):
-            raise RuntimeError("api down")
-        fake = type("C", (), {"chat": type("Chat", (), {"completions": type("C2", (), {"create": _raise})()})()})
-        assert await routing.classify_l3(fake, "你好", "", self._behaviors(), self._phrases()) == {
-            "behavior": "", "phrases": [], "same_request": {"what": "", "count": 1}}
-
-    async def test_empty_msg_short_circuits(self):
-        assert await routing.classify_l3(self._fake('{"behavior": "x"}'), "", "", self._behaviors()) == {
-            "behavior": "", "phrases": [], "same_request": {"what": "", "count": 1}}
-
 
 class TestRepairLlmJson:
     """DeepSeek 偶发的不规范 JSON 修复（记忆提取路径）。"""
@@ -875,7 +817,6 @@ class TestHandleChatEmotionOnly:
 
         monkeypatch.setattr(core, "embed_query", _fail)
         monkeypatch.setattr(core, "retrieve_corpus_candidates", _fail)
-        monkeypatch.setattr(core, "select_phrase_groups", _fail)
         monkeypatch.setattr(core, "classify_l3", _fail)
 
         captured = {}
@@ -912,7 +853,6 @@ class TestHandleChatImageOnly:
         monkeypatch.setattr(core, "embed_query", fake_embed)
         monkeypatch.setattr(core, "retrieve_corpus_candidates", _fail)
         monkeypatch.setattr(core, "classify_l3", _fail)  # L3：图片-only 也不做行为/措辞分类
-        monkeypatch.setattr(core, "select_phrase_groups", _fail)
         monkeypatch.setattr(core, "fuse_and_truncate", _fail)
 
         captured = {}

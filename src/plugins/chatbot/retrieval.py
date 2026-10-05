@@ -24,10 +24,9 @@ from dataclasses import dataclass, field
 from .constants import (
     PROJECT_ROOT,
     CORE_STORY_VECTOR_FILE,
-    PHRASES_FILE, PREFERENCES_FILE, CORPUS_KEYWORDS_FILE,
+    PREFERENCES_FILE, CORPUS_KEYWORDS_FILE,
     RAG_THRESHOLD, CORPUS_TOP_N, CORPUS_CANDIDATE_N, CORPUS_LEXICAL_EXTRA_N,
     CORPUS_KEYWORD_FLOOR, CORPUS_STRONG_KEYWORD,
-    PHRASE_TOP_N, PHRASE_PHASES_MAX,
     PREFERENCE_TOP_N,
     CORE_STORY_THRESHOLD, CORE_STORY_TOP_N,
     RRF_K, SOURCE_WEIGHTS, RETRIEVAL_TOPK,
@@ -312,52 +311,8 @@ def select_behavior_item(user_msg: str, behavior_intent: str, behaviors: list) -
 # 现在改由 L3 的 LLM 分类给出组 id（和 behaviors 同一套：类别少、说法固定就该分类不该检索），
 # 这里只负责按 id 把组取出来。
 
-_phrase_groups_cache = None
 
 
-def load_phrase_groups() -> list:
-    """读 persona/speech/phrases.json（源文件，缓存）。环境变量 PHRASES=0 时返回 []。
-
-    注意读的是**源文件**（phrases.json），不是 precompute 出来的向量缓存——
-    这一路不再用向量，`phrase_vectors.json` 已停用（见 交接文档/注入链路）。
-    """
-    global _phrase_groups_cache
-    if _phrase_groups_cache is not None:
-        return _phrase_groups_cache
-    if os.environ.get("PHRASES", "1") == "0" or not PHRASES_FILE.exists():
-        _phrase_groups_cache = []
-        return _phrase_groups_cache
-    try:
-        with open(PHRASES_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        groups = data.get("phrase_groups", []) if isinstance(data, dict) else []
-        _phrase_groups_cache = [g for g in groups if isinstance(g, dict) and g.get("id") and g.get("phrases")]
-    except (json.JSONDecodeError, OSError):
-        _phrase_groups_cache = []
-    return _phrase_groups_cache
-
-
-def select_phrase_groups(group_ids, groups: list = None, top_n: int = PHRASE_TOP_N) -> list:
-    """把 L3 判出来的措辞组 id 转成注入项（不再有阈值/相似度）。
-
-    extra 含 meaning/phrases/usage，供【她的固定说法】注入。
-    """
-    if not group_ids:
-        return []
-    groups = load_phrase_groups() if groups is None else groups
-    by_id = {g.get("id"): g for g in groups}
-    out = []
-    for gid in group_ids:
-        g = by_id.get(gid)
-        if not g:
-            continue                      # 模型编的 id 直接丢
-        out.append(RetrievalItem(source="phrase", item_id=gid, score=1.0, text="",
-                                 extra={"meaning": g.get("meaning", ""),
-                                        "phrases": g.get("phrases", []),
-                                        "usage": g.get("usage", "")}))
-        if len(out) >= top_n:
-            break
-    return out
 
 
 # ==================== 偏好检索（第 5 路） ====================
@@ -487,9 +442,6 @@ def rrf_fuse(ranked_lists: list, k: int = RRF_K,
 # ==================== 预算控制 ====================
 
 def _item_cost(it: RetrievalItem) -> int:
-    if it.source == "phrase":
-        # 措辞组成本 = 注入的短语总长（按 PHRASE_PHASES_MAX 裁剪后）
-        return sum(len(p) for p in it.extra.get("phrases", [])[:PHRASE_PHASES_MAX])
     return len(it.text)
 
 
@@ -508,17 +460,15 @@ def truncate_by_budget(items: list, budget_chars: int = RETRIEVAL_BUDGET_CHARS,
     return kept
 
 
-def fuse_and_truncate(corpus_items, sample_items, behavior_items, phrase_items=None) -> list:
+def fuse_and_truncate(corpus_items, behavior_items=None) -> list:
     """完整融合流程：RRF → 条数截断 → 字符预算截断。
 
-    `sample_items` 保留在签名里只为兼容旧调用方——声音样本通道已停用（恒空），
-    RRF 权重表里也已没有 voice_sample 这一路。
+    只融合 **corpus**（向量+LLM 判）与 **behavior**（按名字查表）。
+    原来的 `sample_items`（voice_sample）和 `phrase_items`（phrase）两路已随对应文件删除
+    （2026-10-04），空表参数一并收掉——留着只会让人以为还有那两路。
     """
     from .constants import SOURCE_WEIGHTS as _W
 
-    if phrase_items is None:
-        phrase_items = []
-
-    fused = rrf_fuse([corpus_items, sample_items, behavior_items, phrase_items], weights=dict(_W))
+    fused = rrf_fuse([corpus_items, behavior_items or []], weights=dict(_W))
     fused = fused[:RETRIEVAL_TOPK]
     return truncate_by_budget(fused)

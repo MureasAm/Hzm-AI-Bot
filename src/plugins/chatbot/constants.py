@@ -58,7 +58,6 @@ SCHEDULE_FILE = PROJECT_ROOT / "persona" / "world" / "schedule.json"          # 
 VECTOR_FILE = PROJECT_ROOT / "persona" / "world" / "corpus_vectors.json"         # 直播记忆向量库（灰泽满的人物记忆，归 world/）
 # 措辞指纹 / 偏好：**已不用向量**（2026-09-26 改判据，见 retrieval.py 顶部）。
 # 现在读源文件；`phrase_vectors.json` / `preference_vectors.json` 与对应的 precompute 已停用（留着以防回退）。
-PHRASES_FILE = PROJECT_ROOT / "persona" / "speech" / "phrases.json"
 PREFERENCES_FILE = PROJECT_ROOT / "persona" / "world" / "preferences.json"
 CORPUS_KEYWORDS_FILE = PROJECT_ROOT / "persona" / "world" / "corpus_keywords.json"  # corpus 的「钩子」
 
@@ -129,8 +128,6 @@ CORPUS_JUDGE_MAX_KEEP = 2     # 判定最多保留几条（限制爆破半径：
 # 而 behaviors 按【情景】检索，话题天然不同，只带走形态。该留的 18 条已并入 behaviors。
 
 # ==================== V3 措辞指纹 ====================
-PHRASE_TOP_N = 2              # 一轮最多注入几组措辞（组由 L3 分类给出，不再有相似度阈值）
-PHRASE_PHASES_MAX = 3         # 每个措辞组注入的短语条数上限
 # 已删除 PHRASE_THRESHOLD：措辞组的 trigger 是 6~13 字的**类别标签**（"被夸奖、被称赞时"），
 # 拿它算余弦 = 用检索工具干分类的活。实测噪声地板 0.575 / 正例 0.573、中位 0.461 都过阈值
 # → **100% 开火，等于没有判据**（真实对话 138 条里 100% 命中）。试过提到 0.63：噪声挡住了正例一起被杀。
