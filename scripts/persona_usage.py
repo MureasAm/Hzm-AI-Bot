@@ -18,19 +18,18 @@
 
 | 文件 | 探针 | 匹配方式 |
 |---|---|---|
-| `phrases`（74 条碎词） | 每组的那几个词 | **子串**（短，词面能对） |
 | `legendary`（固定应答） | 那条固定应答的文本 | **字符 bigram 重合 ≥0.6**（她会照发或近似） |
-| `behaviors`（27 条内嵌例句） | "她这么说过"那几句 | 同上 |
-| `terms`（27 个词） | keyword + 定义里的词 | 子串 |
+| `behaviors`（16 条情景，内嵌她的原话 samples） | "她这么说过"那几句 | 同上 |
+| `terms`（27 个词） | keyword + aliases | 子串 |
 | `preferences`（23 条） | 该条的 `keywords` | 子串（⚠️ 那是"**用户会说的词**"，不是"她会说的词" → **弱探针**，只当参考） |
 
-⚠️ **`corpus` / `core_stories` / `voice_samples` 故意不做**：它们是长陈述 / 成段原话，
+⚠️ **`corpus` / `core_stories` 故意不做**：它们是长陈述 / 成段原话，
 词面探针测不出"有没有用上"（说同一件事可以一个词都不重）。**它们只能靠消融**。
 
 ## 用法
 
     python scripts/persona_usage.py              # 全部文件
-    python scripts/persona_usage.py --file phrases
+    python scripts/persona_usage.py --file behaviors
     python scripts/persona_usage.py --list-unused   # 顺便列出"从没被用过"的条目
 """
 import argparse
@@ -71,15 +70,6 @@ def _overlap(a: str, b: str) -> float:
 
 
 # ==================== 各文件的探针 ====================
-
-def probes_phrases():
-    out = []
-    for g in _load(PERSONA / "speech" / "phrases.json", "phrase_groups"):
-        words = [str(w) for w in (g.get("phrases") or []) if len(str(w)) >= 2]
-        if words:
-            out.append((f"phrase:{g.get('id')}", words, "sub"))
-    return out
-
 
 def probes_legendary():
     # ⚠️ 结构是 `{replies: {触发词: [应答...] 或 {replies: [...], pattern: ...}}}`（字典，不是列表）
@@ -125,7 +115,6 @@ def probes_preferences():
 
 
 BUILDERS = {
-    "phrases": probes_phrases,
     "legendary": probes_legendary,
     "behaviors": probes_behaviors,
     "terms": probes_terms,

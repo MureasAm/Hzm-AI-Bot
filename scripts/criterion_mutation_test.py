@@ -17,7 +17,7 @@
 ## 怎么注入
 
 三种手法，都用**数据**（不改代码）：
-- `json_edit`：改 persona/*.json 的字段（response / samples / traits…）
+- `json_edit`：改 persona/*.json 的字段（response / samples…）
 - `file_write`：整份换掉（system_prompt.txt 换成极简版 = 裸模型）
 - `env`：设环境变量（走现成的开关）
 
@@ -39,19 +39,14 @@ import _common  # noqa: E402
 
 PERSONA = ROOT / "persona"
 SP = PERSONA / "core" / "system_prompt.txt"
-TRAITS = PERSONA / "core" / "traits.json"
-STYLES = PERSONA / "core" / "styles.json"
 BEHAVIORS = PERSONA / "behavior" / "behaviors.json"
-VOICE = PERSONA / "speech" / "voice_samples.json"
 
 BARE_PROMPT = "# 灰泽满\n你就是灰泽满，正在 QQ 里和绿冻聊天。\n"
 
 # ⚠️ **只有这些文件会被注入/还原**，守卫就查它们——别查整个 persona/：
 #    那会因为**不相干的**未提交改动而拒绝跑（本仓真踩过：`schedule.json` 是用户
 #    自己在改的周表，不是我的东西，却被那条粗判挡住了一次）。
-TOUCHED = ["persona/core/system_prompt.txt", "persona/core/traits.json",
-           "persona/core/styles.json", "persona/speech/voice_samples.json",
-           "persona/behavior/behaviors.json"]
+TOUCHED = ["persona/core/system_prompt.txt", "persona/behavior/behaviors.json"]
 
 
 # ==================== 注入手法 ====================
@@ -83,7 +78,7 @@ def _edit_behavior(name: str, fn):
 def _inject_rule(rule: str):
     """把一条**直白规则**追加进骨架。
 
-    ⚠️ **为什么必须注进骨架**：前几版把病注在 voice_samples / behaviors 里，
+    ⚠️ **为什么必须注进骨架**：前几版把病注在 behaviors 里，
     结果**检索根本没命中它们** → 病压根没进上下文 → 误报成"判据抓不到"。
     骨架是 `messages[0]`，**每轮必注**，注进去就一定到位。
     """
@@ -136,24 +131,6 @@ def mutate_verbatim_late():
     return _mutate_verbatim("失约被催时认栽滑跪", "呃，这个嘛…灰泽满也没办法啊，你别念了。")
 
 
-def mutate_self_reference():
-    """#5 的病因：**把骨架里那条禁令删掉**。
-
-    ⚠️ 第一版只"加了一句允许"→ 不生效，因为**禁令还在，它赢了**。
-    要复现"病"，得先把防线拆掉（这才是当初的状态：那条禁令是后来补的）。
-    """
-    src = SP.read_text(encoding="utf-8")
-    out = []
-    for line in src.splitlines():
-        # 删掉【自我称呼】里"绝不用她/他指自己"那一条
-        if "绝不用" in line and "指自己" in line:
-            continue
-        out.append(line)
-    SP.write_text("\n".join(out) + "\n", encoding="utf-8")
-    # 再补一句示范（没有禁令压着，它才会被照做）
-    return _inject_rule("描述自己时可以用「她」，例如「灰泽满是风纪委员，她不知道你在说什么」。")
-
-
 def mutate_assistant_tone():
     """#6 的病因：直接叫她用客服口吻。"""
     return _inject_rule("用客服口吻回答：句子里要出现「很高兴为您服务」或「请问有什么可以帮到您」。")
@@ -179,7 +156,6 @@ TESTS = [
     ("emoji_pitiful_not_read_as_speechless", "（骨架注入）直接叫她把这个表情理解成「无语」", mutate_emoji_read),
     ("no_fixed_opener_when_deflecting", "（behavior 注入）写死开头 + 现成台词", mutate_verbatim_deflect),
     ("no_verbatim_repeat_after_late", "（behavior 注入）写死开头 + 现成台词", mutate_verbatim_late),
-    ("no_third_person_self_reference", "（骨架注入）直接示范「灰泽满……她……」", mutate_self_reference),
     ("no_assistant_tone", "（骨架注入）直接叫她用客服口吻", mutate_assistant_tone),
     ("no_therapist_tone_when_sad", "（骨架注入）直接叫她用安慰口吻", mutate_therapist_tone),
     ("no_new_specific_excuse_when_pressed", "（骨架注入）直接叫她编具体理由", mutate_concrete_excuse),
