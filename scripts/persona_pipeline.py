@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""把清洗后的直播素材安全地补进四类 persona 文件。
+"""把清洗后的直播素材安全地补进 persona 文件。
 
-支持四条独立流水线：
+支持两条独立流水线：
 
     corpus       清洗素材 → statement 候选 → 追加 statement_final → 补钩子 → 重建 corpus 向量
-    voice-samples 清洗素材 → 直播转聊天 → 追加 voice_samples → 重建 voice 向量
-    phrases      清洗素材 → 措辞挖掘 → 合并 phrases
     behaviors    清洗素材 → 直播转聊天 → 行为提取 → 合并 behaviors
+
+（voice-samples / phrases 两条已于 2026-10-04 下线，样本并入 behaviors。）
 
 默认是 **prepare 模式**：只生成候选 JSON 和 review.md，不改 persona。
 确认候选后加 `--apply` 才写回 persona，并自动备份原文件。
@@ -17,7 +17,6 @@
 """
 import argparse
 import asyncio
-import hashlib
 import json
 import os
 import re
@@ -69,14 +68,6 @@ def _items(data, key):
 def _safe_session(value: str) -> str:
     value = re.sub(r"[^\w.-]+", "_", (value or "").strip(), flags=re.UNICODE)
     return value.strip("._") or "session"
-
-
-def _session_tag(value: str) -> str:
-    return hashlib.sha1(value.encode("utf-8")).hexdigest()[:8]
-
-
-def _length_tier(text: str) -> str:
-    return "short" if len(text or "") <= 30 else "long"
 
 
 def _unique_append(items, item, key):
@@ -298,73 +289,6 @@ async def _convert_to_chat(cleaned_paths, stage: Path):
     return data if isinstance(data, list) else []
 
 
-async def _prepare_voice(cleaned_paths, stage: Path, session: str):
-    converted = await _convert_to_chat(cleaned_paths, stage)
-    tag = _session_tag(session)
-    candidates, seen = [], set()
-    for i, item in enumerate(converted, 1):
-        if not isinstance(item, dict):
-            continue
-        user = (item.get("user_situation") or item.get("user") or "").strip()
-        reply = (item.get("reply") or "").strip()
-        key = (_norm(user), _norm(reply))
-        if not user or not reply or key in seen:
-            continue
-        seen.add(key)
-        candidates.append({
-            "id": f"session_{tag}_{i:03d}",
-            "type": item.get("type") or "daily",
-            "length": item.get("length") or _length_tier(reply),
-            "user": user,
-            "reply": reply,
-        })
-    _write_json(stage / "voice_samples_candidates.json",
-                {"source_files": cleaned_paths, "samples": candidates})
-    return candidates
-
-
-async def _prepare_phrases(cleaned_paths, stage: Path, batch_size: int):
-    import mine_phrases
-
-    raw = stage / "phrases_raw.json"
-    _clear_output(raw)
-    await mine_phrases.run(cleaned_paths, raw, batch_size=batch_size)
-    if not raw.exists():
-        raise RuntimeError("措辞挖掘失败，没有写出 phrases_raw.json")
-    data = _read_json(raw)
-    groups = data.get("phrase_groups", []) if isinstance(data, dict) else []
-    candidates, seen = [], set()
-    for group in groups:
-        if not isinstance(group, dict):
-            continue
-        meaning = (group.get("meaning") or "").strip()
-        phrases = []
-        for phrase in group.get("phrases", []):
-            phrase = str(phrase).strip()
-            if phrase and phrase not in phrases:
-                phrases.append(phrase)
-        if not meaning or not phrases:
-            continue
-        key = _norm(meaning)
-        if key in seen:
-            continue
-        seen.add(key)
-        group_id = group.get("id") or "new_" + hashlib.sha1(
-            meaning.encode("utf-8")
-        ).hexdigest()[:8]
-        candidates.append({
-            "id": group_id,
-            "meaning": meaning,
-            "trigger": (group.get("trigger") or "").strip(),
-            "phrases": phrases,
-            "usage": (group.get("usage") or "").strip(),
-            "evidence": [str(x).strip() for x in group.get("evidence", []) if str(x).strip()],
-        })
-    _write_json(stage / "phrases_candidates.json",
-                {"source_files": cleaned_paths, "phrase_groups": candidates})
-    return candidates
-
-
 def _scene_to_name(scene: str) -> str:
     mapping = {
         "被夸": "被夸时嘴硬否认",
@@ -469,69 +393,6 @@ def _merge_corpus(existing, candidates):
             seen.add(_norm(text))
             items.append({"statement": text})
             added.append({"statement": text})
-    return items, added
-
-
-def _merge_voice(existing, candidates, session: str):
-    items = _items(existing, "samples")
-    seen = {(_norm(x.get("user")), _norm(x.get("reply"))) for x in items}
-    ids = {x.get("id") for x in items}
-    tag = _session_tag(session)
-    added = []
-    for i, item in enumerate(candidates, 1):
-        user = (item.get("user") or "").strip()
-        reply = (item.get("reply") or "").strip()
-        key = (_norm(user), _norm(reply))
-        if not user or not reply or key in seen:
-            continue
-        new_id = f"session_{tag}_{i:03d}"
-        while new_id in ids:
-            new_id += "_x"
-        ids.add(new_id)
-        seen.add(key)
-        row = {
-            "id": new_id,
-            "type": item.get("type") or "daily",
-            "length": item.get("length") or _length_tier(reply),
-            "user": user,
-            "reply": reply,
-        }
-        items.append(row)
-        added.append(row)
-    return items, added
-
-
-def _merge_phrases(existing, candidates):
-    items = _items(existing, "phrase_groups")
-    by_meaning = {_norm(x.get("meaning")): x for x in items}
-    by_id = {_norm(x.get("id")): x for x in items}
-    added = []
-    for item in candidates:
-        meaning = (item.get("meaning") or "").strip()
-        target = by_meaning.get(_norm(meaning)) or by_id.get(_norm(item.get("id")))
-        if target:
-            old = {_norm(p) for p in target.get("phrases", [])}
-            new_phrases = [p for p in item.get("phrases", []) if _norm(p) not in old]
-            target.setdefault("phrases", []).extend(new_phrases)
-            if not target.get("trigger"):
-                target["trigger"] = item.get("trigger", "")
-            if not target.get("usage"):
-                target["usage"] = item.get("usage", "")
-            if new_phrases:
-                added.append({"id": target.get("id", ""), "meaning": meaning,
-                              "phrases": new_phrases})
-            continue
-        row = {
-            "id": item.get("id") or f"phrase_{len(items)+1:03d}",
-            "meaning": meaning,
-            "trigger": item.get("trigger", ""),
-            "phrases": list(item.get("phrases", [])),
-            "usage": item.get("usage", ""),
-        }
-        items.append(row)
-        by_meaning[_norm(meaning)] = row
-        by_id[_norm(row["id"])] = row
-        added.append(row)
     return items, added
 
 
@@ -643,8 +504,6 @@ async def _apply_target(target: str, candidates, session: str, stage: Path,
 
     if target == "corpus":
         merged, added = _merge_corpus(before, candidates)
-    elif target == "phrases":
-        merged, added = _merge_phrases(before, candidates)
     else:
         merged, added = _merge_behaviors(before, candidates)
 
@@ -716,8 +575,6 @@ async def run(args):
 
     if args.target == "corpus":
         candidates = await _prepare_corpus(cleaned_paths, stage, args.batch_size or 50)
-    elif args.target == "phrases":
-        candidates = await _prepare_phrases(cleaned_paths, stage, args.batch_size or 60)
     else:
         candidates = await _prepare_behaviors(cleaned_paths, stage)
 

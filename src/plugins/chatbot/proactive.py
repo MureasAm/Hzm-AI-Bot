@@ -29,7 +29,6 @@
 返回 None 只是"少她那句"，信息不会丢（两个桥现在都是「原文 + 她那句」两条）。
 """
 import asyncio
-import json
 import os
 import re
 from pathlib import Path

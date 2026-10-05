@@ -1,22 +1,20 @@
-"""检索抽象层：六路检索 + RRF 融合 + 预算控制。
+"""检索抽象层：两路 RRF 融合 + 两路直达 + 预算控制。
 
-六路来源（全部同步 CPU，query 向量由调用方传入，全程只调 1 次 embedding）：
+来源（全部同步 CPU，query 向量由调用方传入，全程只调 1 次 embedding）：
 - corpus        背景记忆（persona/world/corpus_vectors.json）        → 走 RRF
-- voice_sample  风格样本（persona/speech/voice_sample_vectors.json） → 走 RRF
 - behavior      行为触发（L3 LLM 意图分类 + behavior_keywords 判别词兜底，不走 embedding）→ 走 RRF
-- phrase        措辞指纹（**按 L3 判出的组 id 取**，不再向量检索）    → 走 RRF
 - preference    偏好事实（**按 keywords 子串命中**，不再向量检索）    → 命中才带，不走 RRF
 - core_story    核心记忆（persona/world/core_story_vectors.json）    → 命中才带，不走 RRF
 
 **判据怎么选**（2026-09-26 定，别再搞混）：说法千变万化、要从 N 条里挑 → 向量 + LLM 判（corpus）；
-类别少、任务其实是"给这句话归类" → 分类（behavior/phrase）；类别名能被用户直接说出来 → 子串命中（preference/terms）。
-**phrase 和 preference 原本都用向量，都是"用检索工具干分类/关键词的活"**，已改掉（两路的地板都压在正例上）。
+类别少、任务其实是"给这句话归类" → 分类（behavior）；类别名能被用户直接说出来 → 子串命中（preference/terms）。
+**preference 原本也用向量，是"用检索工具干关键词的活"**，已改掉（地板压在正例上）。
 
-corpus/voice_sample/behavior/phrase 四路走加权 RRF 融合（score = w/(k+rank)），
-再条数截断 + 字符预算截断，只注入本轮真正相关的信息；
-preference/core_story 是身份事实层，命中才带、不占检索预算。
+corpus/behavior 两路走加权 RRF 融合（score = w/(k+rank)），再条数截断 + 字符预算截断，
+只注入本轮真正相关的信息；preference/core_story 是身份事实层，命中才带、不占检索预算。
+
+（voice_sample / phrase 两路已于 2026-10-04 随对应文件删除。）
 """
-import os
 import json
 import re
 from dataclasses import dataclass, field
@@ -39,13 +37,13 @@ from .persona import _format_behavior_rule
 @dataclass
 class RetrievalItem:
     """一条检索候选。source 区分来源，extra 承载注入所需信息。"""
-    source: str                       # "corpus" | "voice_sample" | "behavior"
+    source: str                       # "corpus" | "behavior"
     item_id: str                      # 样本 id / 行为 name / corpus 序号
     score: float                      # 原始余弦相似度
     rank: int = 0                     # 本路内排名（1-based），RRF 时填充
     fusion_score: float = 0.0         # RRF 融合分
-    text: str = ""                    # 注入文本：corpus=陈述 / behavior=指令 / sample=""
-    extra: dict = field(default_factory=dict)  # voice_sample → {"user","reply","type"}
+    text: str = ""                    # 注入文本：corpus=陈述 / behavior=指令
+    extra: dict = field(default_factory=dict)  # 各路附带的注入所需信息
 
 
 # ==================== 统一打分核心 ====================

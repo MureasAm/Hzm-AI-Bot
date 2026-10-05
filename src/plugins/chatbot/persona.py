@@ -118,9 +118,6 @@ def build_global_persona_context(traits, styles):
     return "\n".join(context_parts) if context_parts else ""
 
 
-# 缓存的 trigger → 向量 映射（模块级，只加载一次）
-
-
 def _strip_speaker_prefix(u: str) -> str:
     """去掉 samples.user 里自带的说话人前缀，防注入时出现「粉丝说：粉丝说：」。
 

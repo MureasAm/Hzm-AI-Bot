@@ -180,7 +180,6 @@ __all__ = [
     "load_short_memory",
     "get_user_history",
     "get_last_turn_gap_seconds",
-    "count_consecutive_requests",
     "append_user_history",
     "append_bot_message",
     "humanize_gap",

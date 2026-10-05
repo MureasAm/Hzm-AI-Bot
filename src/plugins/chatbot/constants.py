@@ -135,7 +135,7 @@ CORPUS_JUDGE_MAX_KEEP = 2     # 判定最多保留几条（限制爆破半径：
 
 # ==================== V3 RRF 融合 ====================
 RRF_K = 60                    # RRF 平滑常数
-SOURCE_WEIGHTS = {"behavior": 1.5, "corpus": 1.0, "phrase": 1.2}   # voice_sample 已删（2026-10-04）
+SOURCE_WEIGHTS = {"behavior": 1.5, "corpus": 1.0}
 RETRIEVAL_TOPK = 6            # 融合后条数硬上限
 
 # ==================== V3 预算控制 ====================

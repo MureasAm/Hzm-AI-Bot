@@ -42,55 +42,6 @@ class TestSelfPronounAudit:
         assert not pp._has_self_pronoun("女同学在教室里等她一起走。")
 
 
-class TestMergeVoice:
-    def test_append_with_id_and_dedupe(self):
-        existing = {
-            "_readme": "x",
-            "samples": [{
-                "id": "a", "type": "daily", "length": "short",
-                "user": "粉丝问：在吗", "reply": "在。",
-            }],
-        }
-        merged, added = pp._merge_voice(
-            existing,
-            [
-                {"user": "粉丝问：在吗", "reply": "在。"},
-                {"user": "粉丝问：吃了吗", "reply": "吃了。"},
-            ],
-            "session",
-        )
-        assert len(merged) == 2
-        assert added[0]["user"] == "粉丝问：吃了吗"
-        assert added[0]["id"].startswith("session_")
-
-
-class TestMergePhrases:
-    def test_merge_same_meaning(self):
-        existing = {
-            "_readme": "x",
-            "phrase_groups": [{
-                "id": "brag_deny",
-                "meaning": "被夸时否认",
-                "trigger": "",
-                "phrases": ["也没有啦"],
-                "usage": "",
-            }],
-        }
-        incoming = [{
-            "id": "phrase_001",
-            "meaning": "被夸时否认",
-            "trigger": "被夸奖时",
-            "phrases": ["也没有啦", "别夸了"],
-            "usage": "先否认",
-        }]
-        merged, added = pp._merge_phrases(existing, incoming)
-        assert merged[0]["id"] == "brag_deny"
-        assert merged[0]["phrases"] == ["也没有啦", "别夸了"]
-        assert merged[0]["trigger"] == "被夸奖时"
-        assert added == [{"id": "brag_deny", "meaning": "被夸时否认",
-                          "phrases": ["别夸了"]}]
-
-
 class TestMergeBehaviors:
     def test_merge_samples_and_evidence(self):
         existing = {

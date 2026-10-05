@@ -127,9 +127,8 @@ def _run_convert_to_chat(args):
 def _add_persona_pipeline(sub):
     p = sub.add_parser(
         "persona-pipeline",
-        help="四条安全流水线：清洗素材 → corpus/voice/phrases/behaviors 候选 → 审批写回",
+        help="两条安全流水线：清洗素材 → corpus/behaviors 候选 → 审批写回",
     )
-    # voice-samples / phrases 已下线（2026-10-04：并入 behaviors）
     p.add_argument("target", choices=["corpus", "behaviors"])
     p.add_argument("-i", "--input", nargs="+", action="append",
                    help="清洗后的 JSON；可传多个（-i a b 或 -i a -i b）")
@@ -321,28 +320,6 @@ def _run_generate_statements(args):
     out = Path(args.output) if args.output else _common.OUT_STATEMENTS / "generated_statements.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     asyncio.run(generate_statements.run(_flatten_inputs(args.input), out, batch_size=args.batch_size))
-    _common.report_saved(out)
-
-
-# ==================== 子命令：mine-phrases ====================
-
-def _add_mine_phrases(sub):
-    p = sub.add_parser("mine-phrases", help="从清洗素材里批量挖掘措辞指纹（多维度，输出候选 JSON 待审批）")
-    p.add_argument("-i", "--input", nargs="+", required=True, action="append",
-                   help="清洗后的素材 JSON，可传多个")
-    p.add_argument("-o", "--output", default=None,
-                   help="输出路径（默认 outputs/mine/mined_phrases.json）")
-    p.add_argument("--batch-size", type=int, default=60,
-                   help="每批话轮数，默认 60")
-    p.set_defaults(func=_run_mine_phrases)
-
-
-def _run_mine_phrases(args):
-    import asyncio
-    import mine_phrases
-    out = Path(args.output) if args.output else _common.OUT_MINE / "mined_phrases.json"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    asyncio.run(mine_phrases.run(_flatten_inputs(args.input), out, batch_size=args.batch_size))
     _common.report_saved(out)
 
 
@@ -579,7 +556,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="灰泽满离线工具箱：统一所有离线脚本的入口。\n"
                     "子命令按流水线阶段分组：\n"
                     "  【流水线】persona-pipeline（corpus / behaviors）\n"
-                    "  【蒸馏】transcribe · clean-transcript · convert-to-chat · analyze-pace · mine-phrases\n"
+                    "  【蒸馏】transcribe · clean-transcript · convert-to-chat · analyze-pace\n"
                     "  【生成】generate-statements · generate-vectors · generate-persona · extract-persona\n"
                     "  【向量】precompute\n"
                     "  【评测】regression · persona-eval · retrieval-eval · style-annotate · problems\n"
@@ -596,7 +573,6 @@ def build_parser() -> argparse.ArgumentParser:
     _add_generate_persona(sub)
     _add_precompute(sub)
     _add_regression(sub)
-    _add_mine_phrases(sub)
     _add_generate_statements(sub)
     _add_bili_check(sub)
     _add_bili_login(sub)

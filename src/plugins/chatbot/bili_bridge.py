@@ -11,7 +11,6 @@
 import asyncio
 import random
 import re
-import json
 import tempfile
 import time
 from pathlib import Path
@@ -27,7 +26,6 @@ from .memory import append_bot_message
 from .proactive import compose_proactive
 from . import _bridge_common
 from .config import get_bili_uid, get_bili_sessdata, get_notify_whitelist, get_push_interval
-from .vision import _read_image_bytes, _normalize_image
 
 LIVE_STATUS_API = "https://api.live.bilibili.com/room/v1/Room/get_status_info_by_uids"
 

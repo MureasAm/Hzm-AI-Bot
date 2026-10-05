@@ -11,7 +11,6 @@ import random
 import re
 import json
 import hashlib
-import tempfile
 import time
 from pathlib import Path
 
@@ -25,7 +24,6 @@ from .memory import append_bot_message
 from .proactive import compose_proactive
 from . import _bridge_common
 from .config import get_weibo_uid, get_weibo_cookie, get_notify_whitelist, get_push_interval
-from .vision import _read_image_bytes, _normalize_image
 
 WEIBO_API = "https://weibo.com/ajax/statuses/mymblog"
 
