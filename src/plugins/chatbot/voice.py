@@ -54,12 +54,17 @@ def _is_greeting(reply: str) -> bool:
 
 
 def should_voice(reply: str, min_len: int = VOICE_MIN_LEN,
-                 max_len: int = VOICE_MAX_LEN) -> bool:
+                 max_len: int = VOICE_MAX_LEN, force: bool = False) -> bool:
     """判断这条回复是否适合朗读成语音条。
 
     长度/寒暄判断用**实际会读出来的文本**（_tts_text 剥括号后）——避免"原文带括号尾巴够 20 字、
     读出来只剩短句"的误触发。内心戏括号/数字/链接铁则仍针对原文（括号是文字专属表达）。
     语音 = 剥括号后成句(≥min_len) 或 短寒暄命中；短敷衍词("在呢")/含内心戏括号/链接仍打字。
+
+    `force=True`：用户**点名要了语音**（消息里带"语音"，见 `voice_requested`）→
+    放宽**长度**闸门，短句也读。内容铁则（内心戏括号/数字/链接）仍然最高优先，
+    超长（>max_len）也仍走文字——这两类是"读出来就没意义/发不出去"，
+    不是风格偏好（用户 2026-10-05 要的是"她肯开口"，不是"什么都念"）。
     """
     if not reply:
         return False
@@ -73,6 +78,8 @@ def should_voice(reply: str, min_len: int = VOICE_MIN_LEN,
     if not spoken:
         return False
     n = len(spoken)
+    if force and n <= max_len:
+        return True
     in_range = min_len <= n <= max_len
     # 短寒暄命中 → 突破长度下限。只救"真·短应酬句"(≤_GREETING_MAX_LEN)，
     # 长句顺带提到词表词不算寒暄 → 按长度规则走文字。超长仍走文字分段
@@ -80,9 +87,30 @@ def should_voice(reply: str, min_len: int = VOICE_MIN_LEN,
     return in_range or greeting_ok
 
 
+# 用户**直接要语音**的说法（"能发语音吗""来条语音听听"）：命中 → 下一句回复直接朗读。
+# 纯数据可随意增删；只放宽长度闸门，内容铁则（链接/数字/内心戏括号）不受它影响。
+_VOICE_REQUEST_WORDS = ("语音", "录音", "发个声音")
+
+
+def voice_requested(user_msg: str) -> bool:
+    """用户这条消息是不是在**点名要语音**。
+
+    为什么要它（用户 2026-10-05）：不少人发"能发语音吗"，而她的应答往往是
+    "行啊""这就说给你听"这类**短句**——够不着 30 字下限、也不在寒暄表里，
+    于是照样回文字，用户觉得"没听劝"。
+    """
+    return any(w in (user_msg or "") for w in _VOICE_REQUEST_WORDS)
+
+
 def _tts_text(reply: str) -> str:
-    """清洗：笑声括号→笑声文字，其余括号/动作剥掉（括号是文字专属表达）。"""
+    """清洗：笑声括号→笑声文字，其余括号/动作剥掉（括号是文字专属表达）。
+
+    顺带把自称 "hzm" 换成"灰泽满"：TTS 念不了这三个字母（会读成"诶吃贼诶姆"
+    或干脆吞掉）。字数不变（都是三个字），所以 `should_voice` 的长度判断不受影响。
+    """
     t = reply
+    # 换自称要在别处之前做：括号里的 "（hzm心虚）" 反正会被剥掉，不影响
+    t = re.sub(r"hzm", "灰泽满", t, flags=re.IGNORECASE)
     for pat, rep in (("（笑）", "哈哈哈"), ("（笑死）", "哈哈哈哈"),
                      ("（偷笑）", "嘿嘿嘿"), ("（尬笑）", "哈"), ("（苦笑）", "呵")):
         t = t.replace(pat, rep)

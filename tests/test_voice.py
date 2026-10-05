@@ -8,6 +8,7 @@ import pytest
 
 from src.plugins.chatbot import config as cfg
 from src.plugins.chatbot import voice as v
+from src.plugins.chatbot.voice import _tts_text, should_voice, voice_requested
 
 
 class TestToQqVoiceUrl:
@@ -250,3 +251,60 @@ class TestSpeechSeconds:
             w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
             w.writeframes(a.tobytes())
         assert v._speech_seconds(p) == 0.0
+
+
+class TestTtsSelfReference:
+    """TTS 念不了 "hzm" 这三个字母 → 合成前换成"灰泽满"（用户 2026-10-05）。"""
+
+    def test_hzm_becomes_name(self):
+        assert _tts_text("hzm可没这体力") == "灰泽满可没这体力"
+
+    def test_uppercase_also_replaced(self):
+        assert _tts_text("HZM不知道") == "灰泽满不知道"
+
+    def test_length_unchanged(self):
+        # 换得等长（都是三个字），所以 should_voice 的长度判断不受影响
+        assert len(_tts_text("hzm在这")) == len("hzm在这")
+
+    def test_other_text_untouched(self):
+        assert _tts_text("灰泽满今天很困") == "灰泽满今天很困"
+
+
+class TestVoiceRequested:
+    """用户直接要语音（"能发语音吗"）→ 下一句回复直接朗读。"""
+
+    @pytest.mark.parametrize("msg", [
+        "能发语音吗", "来条语音听听", "语音", "你发个录音呗", "发个声音听听",
+    ])
+    def test_detected(self, msg):
+        assert voice_requested(msg) is True
+
+    @pytest.mark.parametrize("msg", ["在吗", "今天播不播", "晚安", ""])
+    def test_not_detected(self, msg):
+        assert voice_requested(msg) is False
+
+    def test_none_is_safe(self):
+        assert voice_requested(None) is False
+
+
+class TestForceVoice:
+    """点名要语音 → 放宽**长度**闸门；内容铁则（链接/数字/内心戏括号）仍最高优先。"""
+
+    def test_short_reply_voiced_when_forced(self):
+        assert should_voice("行啊", force=True) is True          # 平时 <30 字不打
+
+    def test_short_reply_not_voiced_by_default(self):
+        assert should_voice("行啊") is False
+
+    def test_force_still_refuses_link(self):
+        # 语音没法回看链接，读出来等于丢信息
+        assert should_voice("行啊，链接给你 https://b23.tv/x", force=True) is False
+
+    def test_force_still_refuses_digits(self):
+        assert should_voice("八点见，房间号 123456", force=True) is False
+
+    def test_force_still_refuses_inner_paren(self):
+        assert should_voice("行啊（心虚）", force=True) is False
+
+    def test_force_still_respects_max_len(self):
+        assert should_voice("啊" * 200, force=True) is False     # 超长仍走文字

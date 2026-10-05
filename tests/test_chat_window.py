@@ -141,6 +141,16 @@ class TestVoiceFlush:
         monkeypatch.setattr(cw, "summarize_batch", fake_summarize)
         monkeypatch.setattr(cw, "_describe_image_src", fake_describe)
         monkeypatch.setattr(cw, "send_voice", fake_send_voice)
+
+        # 语音成功之后还会试着配一张表情包（2026-10-05 新行为）→ 这里必须打桩，
+        # 否则会真调 LLM 判定（网络），整个测试挂住。
+        self.pick_calls = []
+
+        async def fake_pick(client, reply, avoid_groups=None):
+            self.pick_calls.append(reply)
+            return None
+        monkeypatch.setattr(cw, "pick_sticker", fake_pick)
+        monkeypatch.setattr(cw, "_sticker_state", {})   # 冷却状态隔离，别跨用例串味
         sent = []
 
         async def fake_send(win, content):
@@ -170,6 +180,12 @@ class TestVoiceFlush:
         sent, voice_calls = await self._run_flush(monkeypatch, "今天直播聊得特别开心（小声）下次再一起")
         assert voice_calls == []  # 内心戏括号是文字专属表达，TTS 表达不了
         assert sent
+
+    async def test_voice_path_also_tries_sticker(self, monkeypatch):
+        """语音那条路原来直接 return，表情包永远是语音轮的盲区（用户 2026-10-05）。"""
+        sent, voice_calls = await self._run_flush(monkeypatch, self.SENTENCE, voice_ok=True)
+        assert voice_calls and sent == []       # 语音成功、没刷文字
+        assert self.pick_calls == [self.SENTENCE]   # 但照样试着配了一张
 
 
 class TestVoiceSurvivesInterrupt:
@@ -209,7 +225,12 @@ class TestVoiceSurvivesInterrupt:
 
         monkeypatch.setattr(cw, "handle_chat", fake_handle)
         monkeypatch.setattr(cw, "summarize_batch", fake_summarize)
-        monkeypatch.setattr(cw, "should_voice", lambda t: True)
+        monkeypatch.setattr(cw, "should_voice", lambda t, force=False: True)
+
+        async def fake_pick(client, reply, avoid_groups=None):
+            return None
+        monkeypatch.setattr(cw, "pick_sticker", fake_pick)
+        monkeypatch.setattr(cw, "_sticker_state", {})
         monkeypatch.setattr(cw, "send_voice", slow_send_voice)
         monkeypatch.setattr(cw, "_send", fake_send)
         return win, sent, voice_done, started

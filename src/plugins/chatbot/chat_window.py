@@ -26,7 +26,7 @@ from .stickers import pick_sticker
 from .reply_style import (
     split_reply, split_delay, clean_reply,
 )
-from .voice import should_voice, send_voice
+from .voice import should_voice, send_voice, voice_requested
 from .vision import describe_image_bytes, _read_image_bytes
 from .constants import (
     READ_WINDOW_MIN_SECONDS, READ_WINDOW_MAX_SECONDS, SPLIT_REPLY_ENABLED,
@@ -254,7 +254,8 @@ async def _flush(win: _UserWindow) -> None:
     # 语音优先：成句回复(≥30字、无内心戏括号/链接)朗读成语音条——像真人"话多就录给你听"。
     # 成功就不刷文字分段（互斥不双发）；未启用/合成失败时 send_voice 返回 False，
     # 落回下方文字分段兜底，绝不影响收到回复。
-    if should_voice(reply):
+    # 用户点名要语音（消息里带"语音"）→ force：短句也读，别让人白问一句。
+    if should_voice(reply, force=voice_requested(combined)):
         if win.generation != my_gen:
             # 已经被新消息取代：别再占 GPU 去合成（合成了也送不出去）
             print("[读秒] 语音：已被新消息取代，跳过合成")
@@ -268,6 +269,9 @@ async def _flush(win: _UserWindow) -> None:
         # 语义上也说得通：文字分段是"发一段是一段"，语音是一条整消息，
         # 所以"已开始就等于第一段已发出"。
         if await asyncio.shield(send_voice(win.bot, win.target_id, win.is_private, reply)):
+            # 语音之后**也补表情包**（用户 2026-10-05）：原来这里直接 return，
+            # 表情包永远是语音轮的盲区。表情包自己有"十分对应才发"的闸门，不会硬凑。
+            await _maybe_send_sticker(win, reply)
             return
 
     parts = split_reply(reply) if SPLIT_REPLY_ENABLED else [reply]
@@ -279,7 +283,7 @@ async def _flush(win: _UserWindow) -> None:
     await _send(win, parts[-1])
 
     # 表情包：文字发完之后，若某张表情与这句话"十分对应"就补一张。
-    # 走语音那条路时不发（语音本身就是长句/情绪表达，再配图很怪）。
+    # （语音那条路在上面单独调了一次——它提前 return，不在这里。）
     await _maybe_send_sticker(win, reply)
 
 
