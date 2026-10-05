@@ -9,8 +9,6 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 SYSTEM_PROMPT_FILE = PROJECT_ROOT / "persona" / "core" / "system_prompt.txt"
-TRAITS_FILE = PROJECT_ROOT / "persona" / "core" / "traits.json"
-STYLES_FILE = PROJECT_ROOT / "persona" / "core" / "styles.json"
 BEHAVIORS_FILE = PROJECT_ROOT / "persona" / "behavior" / "behaviors.json"
 TERMS_FILE = PROJECT_ROOT / "persona" / "world" / "terms.json"                 # 灰泽满名词库(lorebook)：核心词always注入+命中注入
 

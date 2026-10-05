@@ -480,7 +480,7 @@ async def _clients():
         return None, None, None
     client = AsyncOpenAI(api_key=zp, base_url=ZHIPU_BASE_URL)
     ds_client = AsyncOpenAI(api_key=ds, base_url=DEEPSEEK_BASE_URL) if ds else None
-    _, _, behaviors = load_persona_rules()
+    behaviors = load_persona_rules()
     return client, ds_client, behaviors
 
 

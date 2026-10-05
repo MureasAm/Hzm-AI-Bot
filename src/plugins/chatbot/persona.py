@@ -1,4 +1,4 @@
-"""人格规则加载：traits/styles/behaviors + 周表 + terms 名词库。
+"""人格规则加载：behaviors + 周表 + terms 名词库。
 
 behaviors **不走向量**（L3 改为「判别词 + LLM 意图分类」，见 retrieval.select_behavior_item），
 所以改 behaviors.json 后不需要重算任何向量（旧文档提的 trigger_vectors.json 已废弃）。
@@ -7,8 +7,7 @@ import json
 import re
 
 from .constants import (
-    TRAITS_FILE, STYLES_FILE, BEHAVIORS_FILE,
-    TERMS_FILE, SCHEDULE_FILE,
+    BEHAVIORS_FILE, TERMS_FILE, SCHEDULE_FILE,
 )
 
 
@@ -64,38 +63,13 @@ def _persona_items(data, key: str) -> list:
     return data if isinstance(data, list) else []
 
 
-def load_persona_rules():
-    """读取人格规则三件套：traits / styles / behaviors。"""
-    traits_text = []
-    styles_text = []
+def load_persona_rules() -> list:
+    """读取 behaviors（情景规则：什么情境怎么反应）。
+
+    traits / styles 两个文件已于 2026-10-04 拆掉——情景部分并进了 behaviors，
+    其余并进了骨架（`core/system_prompt.txt`）。所以这里**只读 behaviors**。
+    """
     behaviors = []
-
-    if TRAITS_FILE.exists():
-        try:
-            with open(TRAITS_FILE, "r", encoding="utf-8") as f:
-                for item in _persona_items(json.load(f), "traits"):
-                    if not isinstance(item, dict):   # 防手写裸字符串把整层打挂
-                        continue
-                    name = item.get("name", "")
-                    desc = item.get("description", "")
-                    if name or desc:
-                        traits_text.append(f"{name}: {desc}" if name else desc)
-        except Exception as e:
-            print(f"⚠️ 读取 traits 失败: {e}")
-
-    if STYLES_FILE.exists():
-        try:
-            with open(STYLES_FILE, "r", encoding="utf-8") as f:
-                for item in _persona_items(json.load(f), "styles"):
-                    if not isinstance(item, dict):   # 防手写裸字符串把整层打挂
-                        continue
-                    name = item.get("name", "")
-                    desc = item.get("description", "")
-                    if name or desc:
-                        styles_text.append(f"{name}: {desc}" if name else desc)
-        except Exception as e:
-            print(f"⚠️ 读取 styles 失败: {e}")
-
     if BEHAVIORS_FILE.exists():
         try:
             with open(BEHAVIORS_FILE, "r", encoding="utf-8") as f:
@@ -105,16 +79,7 @@ def load_persona_rules():
         except Exception as e:
             print(f"⚠️ 读取 behaviors 失败: {e}")
 
-    return traits_text, styles_text, behaviors
-
-
-def build_global_persona_context(traits, styles):
-    context_parts = []
-    if traits:
-        context_parts.append("【性格基底】\n" + "\n".join([f"- {t}" for t in traits]))
-    if styles:
-        context_parts.append("【语言风格】\n" + "\n".join([f"- {s}" for s in styles]))
-    return "\n".join(context_parts) if context_parts else ""
+    return behaviors
 
 
 def _strip_speaker_prefix(u: str) -> str:

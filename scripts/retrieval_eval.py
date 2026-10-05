@@ -195,7 +195,7 @@ async def run(cases, verbose: bool, only_id: str = None):
     client = AsyncOpenAI(api_key=key, base_url=ZHIPU_BASE_URL)
     ds_client = AsyncOpenAI(api_key=_deepseek_key(), base_url=DEEPSEEK_BASE_URL) if _deepseek_key() else None
 
-    _, _, behaviors = load_persona_rules()
+    behaviors = load_persona_rules()
     print("🔍 检索评测 | 行为走 L3（LLM 判意图 + 关键词兜底），其余走 embedding")
 
     results = []

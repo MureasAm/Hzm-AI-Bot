@@ -35,7 +35,6 @@ import nonebot  # noqa: E402
 nonebot.init()
 
 from src.plugins.chatbot import core  # noqa: E402
-from src.plugins.chatbot.persona import load_persona_rules, build_global_persona_context  # noqa: E402
 
 QUERY = "你最喜欢哪个数字啊"
 WANT = ["7", "七"]
@@ -48,9 +47,7 @@ RHYTHM = {"role": "system", "content": "【回复节奏】日常闲聊一句话�
 
 def base_msgs() -> list:
     """真实链路搭好的 messages（不含测试内容）。最后一条是用户那句话。"""
-    traits, styles, _ = load_persona_rules()
-    gp = build_global_persona_context(traits, styles)
-    return core.build_message_list(QUERY, gp, [], "", [])
+    return core.build_message_list(QUERY, [], "", [])
 
 
 def at_system(where: str) -> list:

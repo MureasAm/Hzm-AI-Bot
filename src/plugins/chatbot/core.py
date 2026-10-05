@@ -16,7 +16,7 @@ from .constants import (
     MEMORY_EXTRACT_TEMPERATURE, MEMORY_EXTRACT_MAX_TOKENS,
 )
 from .persona import (
-    load_persona_rules, build_global_persona_context, load_schedule,
+    load_persona_rules, load_schedule,
 )
 from .memory import (
     get_user_history, append_user_history,
@@ -335,7 +335,7 @@ async def confirm_ambiguous_terms(user_msg: str, deepseek_client=None) -> set:
         return set()
 
 
-def build_message_list(user_msg: str, global_persona: str, fused_items: list,
+def build_message_list(user_msg: str, fused_items: list,
                        memory_context: str, user_history: list,
                        vision_desc: str = "", weather_city: str = "",
                        batch_summary: str = "", preference_items: list = None,
@@ -345,7 +345,7 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
                        prev_session_note: str = "", same_request: dict = None) -> list:
     """按优先级组装发送给模型的消息列表。
 
-    fused_items 为三路融合后的 RetrievalItem 列表，按源分组注入。
+    fused_items 为融合后的 RetrievalItem 列表（corpus + behavior），按源分组注入。
     vision_desc 为用户消息附带的图片视觉描述（可选）。
     weather_city 为该用户所在城市（空则用全局默认天气城市）。
     batch_summary 为一批消息的智能归纳（可选，提示层）。
@@ -355,10 +355,7 @@ def build_message_list(user_msg: str, global_persona: str, fused_items: list,
     query_hint 为短消息的语境扩充（可选）：模型理解短消息用，正文仍是原 msg。
     """
     messages = []
-    base_system = SYSTEM_PROMPT
-    if global_persona:
-        base_system += "\n\n" + global_persona
-    messages.append({"role": "system", "content": base_system})
+    messages.append({"role": "system", "content": SYSTEM_PROMPT})
 
     # 周表（地面真值）：被问"明天来吗/这周/几点播"以它为准。
     # 记忆里带"明天/下周"的话是过去某场直播当时的说法，可能早过期，不能当现在的安排。
@@ -684,9 +681,8 @@ async def gather_retrieval(query_text: str, retrieval_query: str, history_text: 
     ⚠️ 后续若要给主动发言也接直播记忆，得另写一个判据（"这条内容和她的哪段经历有关"），
     不能直接复用 corpus_judge 的问法。
     """
-    traits, styles, behaviors = load_persona_rules()
-    global_persona = build_global_persona_context(traits, styles)
-    result = {"global_persona": global_persona, "fused_items": [],
+    behaviors = load_persona_rules()
+    result = {"fused_items": [],
               "preference_items": [], "core_stories": [], "same_request": None}
 
     # 纯图片消息（无文字）不做检索：让灰泽满直接评价图片，避免语料/行为劫持图片内容
@@ -823,7 +819,6 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     # 素材统一从 gather_retrieval 取（主动发言也走同一个入口，别再各拼一套）
     ctx = await gather_retrieval(query_text, retrieval_query, history_text,
                                  deepseek_client, zhipu_client)
-    global_persona = ctx["global_persona"]
     fused_items = ctx["fused_items"]
     preference_items = ctx["preference_items"]
     core_stories = ctx["core_stories"]
@@ -858,7 +853,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     # 术语语境确认：confirm:true 的命中做一次便宜 LLM 判断，剔除误触词条（词→意思守卫）
     denied_terms = await confirm_ambiguous_terms(user_msg, deepseek_client)
     messages = build_message_list(
-        user_msg, global_persona, fused_items, memory_context, user_history,
+        user_msg, fused_items, memory_context, user_history,
         vision_desc=vision_desc, weather_city=weather_city, batch_summary=batch_summary,
         preference_items=preference_items, core_stories=core_stories,
         session_context=session_context, query_hint=query_hint,

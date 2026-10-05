@@ -83,7 +83,7 @@ async def do_dump() -> int:
         return 1
     client = AsyncOpenAI(api_key=key, base_url=ZHIPU_BASE_URL)
     ds = AsyncOpenAI(api_key=dk, base_url=DEEPSEEK_BASE_URL) if dk else None
-    _, _, behaviors = load_persona_rules()
+    behaviors = load_persona_rules()
     cases = RE.load_cases()
     out = []
     for i, case in enumerate(cases, 1):

@@ -245,16 +245,15 @@ async def compose_proactive(content: str, source: str = "B站",
                            f"\n（她内容里写「⬇️」「这个」「图片里那个」时，指的就是这张图）")
         # 素材：跟聊天同一个入口取。
         # `is_user_msg=False`——这条动态是**她自己发的**，不是"用户说的话"，
-        # 所以跳过两个前提不成立的层（L3 行为/措辞、corpus 的"用户是不是在问她"判），
-        # 风格样本也按"她自己的陈述句"取（不设阈值）。
+        # 所以跳过两个前提不成立的层（L3 行为、corpus 的"用户是不是在问她"判）。
         ctx = await gather_retrieval(text, text, "", deepseek_client, zhipu_client,
                                      is_user_msg=False)
 
-        # 组装：跟聊天同一套（周表 / 当前时间+直播状态 / 名词库 / 风格样本 / 偏好 / 核心记忆…）。
+        # 组装：跟聊天同一套（周表 / 当前时间+直播状态 / 名词库 / 偏好 / 核心记忆…）。
         # 记忆两路传空——主动发言是**广播给所有好友**的，没有"这个用户"这回事。
         messages = build_message_list(
             PROACTIVE_PROMPT.format(source=source, content=text, image_block=image_block),
-            ctx["global_persona"], ctx["fused_items"], "", [],
+            ctx["fused_items"], "", [],
             preference_items=ctx["preference_items"],
             core_stories=ctx["core_stories"],
         )

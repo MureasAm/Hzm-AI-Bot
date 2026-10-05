@@ -131,7 +131,7 @@ class TestNoRomajiInInjectedText:
                         f"{t['keyword']} 的 {field} 里出现罗马音 {r!r}——她会照抄（罗马音请放 aliases）"
 
     def test_no_romaji_in_behavior_injected_fields(self):
-        _, _, behaviors = persona.load_persona_rules()
+        behaviors = persona.load_persona_rules()
         for b in behaviors:
             fields = [b.get("trigger") or "", b.get("response") or ""]
             for s in b.get("samples", []):

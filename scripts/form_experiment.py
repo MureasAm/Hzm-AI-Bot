@@ -41,8 +41,6 @@ import nonebot  # noqa: E402
 nonebot.init()
 
 from src.plugins.chatbot import core  # noqa: E402
-from src.plugins.chatbot.persona import load_persona_rules, build_global_persona_context  # noqa: E402
-from src.plugins.chatbot.constants import SYSTEM_PROMPT_FILE  # noqa: E402
 
 # ==================== 实验素材：合成事实（不在人格数据里） ====================
 # 每条 = 一个问题 + 用来判"有没有用上/抄没抄"的词 + 若干种"形式"。
@@ -125,9 +123,7 @@ FACTS = {
 
 def _messages_for(fact: dict, form_val) -> list:
     """真实链路搭好 messages，再按条件挂一层。只变这一层，其余完全一致。"""
-    traits, styles, _ = load_persona_rules()
-    global_persona = build_global_persona_context(traits, styles)
-    msgs = core.build_message_list(fact["query"], global_persona, [], "", [])
+    msgs = core.build_message_list(fact["query"], [], "", [])
     last_user = msgs[-1]                               # 真正的"用户这句话"
 
     if form_val is None:                               # ① 基线：什么都不加

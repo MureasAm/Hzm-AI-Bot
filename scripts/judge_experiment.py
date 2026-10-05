@@ -263,7 +263,7 @@ async def main():
     ds = AsyncOpenAI(api_key=_key("OPENAI_API_KEY"), base_url=DEEPSEEK_BASE_URL)
     zp = AsyncOpenAI(api_key=_key("ZHIPU_API_KEY"), base_url=ZHIPU_BASE_URL)
     model = _key("OPENAI_MODEL") or "deepseek-flash"
-    _, _, behaviors = load_persona_rules()
+    behaviors = load_persona_rules()
 
     # 预热：偏好向量（旧方案要）+ BM25 索引
     prefs = R.load_preferences()
