@@ -32,7 +32,7 @@ class TestScheduleWeekly:
 
     曾有的「近况」字段（自由文本+TTL）已整条删除——它治不了"用旧记忆回答当下"
     （真正的漏点是 voice_samples 那条 assistant turn 通道），且手动维护必烂。
-    见 src/plugins/chatbot/constants.py 的说明与 待办清单.md 的「本土化」条。
+    见 src/plugins/chatbot/constants.py 的说明与 docs/历史/待办清单.md 的「本土化」条。
     """
 
     def test_loads_weekly(self):

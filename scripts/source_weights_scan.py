@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""给 `SOURCE_WEIGHTS` 找实测依据（`注入设计原理.md` §七-4）。
+"""给 `SOURCE_WEIGHTS` 找实测依据（`docs/评测与实验.md` §七-4）。
 
 ## 先说一个发现：**现在的评测测不到这个旋钮**
 

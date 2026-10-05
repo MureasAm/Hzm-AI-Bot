@@ -297,7 +297,7 @@ def _load_corpus(input_path) -> list:
         # 兼容两种 {"statements": [...]}：
         #   ① 纯字符串（generate-statements 的旧输出）
         #   ② {"statement": "..."} 字典（statement_final.json 现在的形状——
-        #      包了 _readme 说明后从"裸 list"变成 dict，见 注入设计原理.md 第 1 节）
+        #      包了 _readme 说明后从"裸 list"变成 dict，见 docs/评测与实验.md 第 1 节）
         out = []
         for s in data["statements"]:
             if isinstance(s, str) and s:

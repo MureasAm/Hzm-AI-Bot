@@ -5,7 +5,7 @@
 ## 为什么改
 
 `statement_final.json`（322 条直播经历）的形式是**第三人称陈述**。但实测
-（`scripts/form_experiment.py`，见 `注入设计原理.md` 第三节）：
+（`scripts/form_experiment.py`，见 `docs/评测与实验.md` 第三节）：
 **自足的内容会被模型整句搬走**（③ 事实条目 逐字 16/16、② 陈述 9/16），
 而 corpus 的注入包装语写着"别整段复述"——**包装语实测无效**。
 

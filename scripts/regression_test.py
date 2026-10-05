@@ -6,7 +6,7 @@
     python scripts/regression_test.py --check         # ★判据回归：跑 scripts/regression_cases.json
     python scripts/regression_test.py --check --case no_old_fact_as_current_reason
 
-`--check` 是这套工具的重点：它把**真实翻过的车**（记录.txt / 待办清单.md 里归档的）
+`--check` 是这套工具的重点：它把**真实翻过的车**（记录.txt / docs/历史/待办清单.md 里归档的）
 固化成**确定性判据**（禁词 / 开头同质率 / 逐字复读率），跑一次就知道有没有回退。
 
 ⚠️ 为什么判据要确定性、不用 LLM 当裁判：调研文档 §2.4 实测——LLM judge 对

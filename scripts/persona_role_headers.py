@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""给每个数据文件的头部补一个统一的「角色」头（`注入设计原理.md` §七-6）。
+"""给每个数据文件的头部补一个统一的「角色」头（`docs/评测与实验.md` §七-6）。
 
 ## 为什么
 
@@ -99,7 +99,7 @@ def main() -> int:
     if not args.write and done:
         print(f"\n（预览模式，没落盘。加 --write 才写。）")
     print(f"\n⚠️ `core/system_prompt.txt` **不在名单里**——它是被注入的提示词本体，"
-          f"加注释会进模型上下文。它的「角色」写在 `docs/注入设计原理.md` §1.1。")
+          f"加注释会进模型上下文。它的「角色」写在 `docs/评测与实验.md` §1.1。")
     return 0
 
 

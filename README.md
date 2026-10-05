@@ -6,7 +6,7 @@
 
 > 一句话：**不是靠模型的聪明，而是靠数据、检索、记忆、评测这套体系的构建，让一个 LLM 从"会聊天"变成"像某个人"。**
 
-**一眼了解：** **54** 真实用户 · **四路 RRF 素材融合 + 两路直达** · **三层**记忆 · **795** 单元测试 · **480+** 条人格数据 · **承诺记忆** · **会开口说话（GPT-SoVITS 语音）** · **问题驱动评测**（看到答错记一笔 → 自动变成回归用例）
+**一眼了解：** **54** 真实用户 · **两路 RRF 素材融合 + 两路命中直达** · **三层**记忆 · **746** 单元测试 · **480+** 条人格数据 · **承诺记忆** · **会开口说话（GPT-SoVITS 语音）** · **问题驱动评测**（看到答错记一笔 → 自动变成回归用例）
 
 ---
 
@@ -25,8 +25,8 @@
 
 这不是 demo，是一个真的在用的东西——**包括真的出问题、再被修好**。
 
-- 有真实用户长期在跟它聊；这轮（V7.x）也修掉了几类只有真跑才会暴露的问题
-  （表情包冷却失效、转发内容读不到、群聊里点名却被判成"不用接"）
+- 有真实用户长期在跟它聊；历次版本修掉的大多是只有真跑才会暴露的问题
+  （表情包冷却失效、转发内容读不到、群聊里点名却被判成"不用接"、语音被插话打断）
 - 出过的问题会沉淀成**判据回归集**（`scripts/regression_cases.json`）——把真实翻车固化成
   能自动跑的检查，以后改任何东西都能知道有没有回退
 - watchdog 自愈在真实事件里拉回过它（日志摘录自不同时点的事件）：
@@ -51,43 +51,45 @@
 
 1. **样本 > 规则**：真实对话示范"怎么说话"，比规则规定有效得多。few-shot 看样本学说话，而不是读规则学说话。
 2. **素材层解决，别用提示词打补丁**：措辞、括号、重复问题从素材层根治；提示词硬约束是堆砌，无效且走老路。
-3. **直播 ≠ 聊天**：直播语料必须经"转聊天"转化，且切分压缩（一个独立意思 = 一条 15-50 字短回复），不能整段保留。
-4. **行为 > 标签**：人格标签（"乐观的悲观主义者"）是 tell，模型会当行为模板过度执行；要写"在什么情境怎么反应"。
-5. **提示词不放具体台词**：带引号的原话放提示词 = "点名口癖 → 每条都加"；例句下沉到行为/措辞/样本层（条件注入 + 真人原话）。
-6. **先筛选后分析**：从素材提炼前先判噪声（礼物/寒暄/转述），只提炼高质量话轮。
-7. **确定性兜底，只在模型默认习惯压不住时才上**：括号、省略号、"她"自指，都是提示词管不住之后靠输出后处理（clean_reply）兜底。
+3. **直播 ≠ 聊天**：直播语料必须经"转聊天"转化，先分离"读弹幕 / 回答"再切分压缩（一个独立意思 = 一条短回复），不能整段保留。
+4. **样本必须挂在"情景"上，不能只按话题索引**：按话题检索必然捞到"同话题的完整回答" → 把事实灌进对话 → 自相矛盾 / 编事实 / 逐字搬。**这就是 `voice_samples` 整条通道被删的原因**——该留的原句并进了 `behaviors` 的 `samples`。
+5. **行为 > 标签**：人格标签（"乐观的悲观主义者"）是 tell，模型会当行为模板过度执行；要写"在什么情境怎么反应"。
+6. **提示词不放具体台词**：带引号的原话放提示词 = "点名口癖 → 每条都加"；例句下沉到行为/样本层（条件注入 + 真人原话）。
+7. **确定性兜底，只在模型默认习惯压不住时才上**：括号、省略号、"她"自指，都是提示词管不住之后靠输出后处理（`clean_reply`）兜底。**且兜底不能伤人设**——曾有个"防措辞固化"因为 75% 的触发都在拦她自己的自称"灰泽满"而被删掉。
 8. **每步产物先展示审批**：不一次性跑完流水线，验证通过再往前。
 
-> 方法论、踩坑记录、回复链路逐层剖析、记忆系统设计、终极愿景——都沉淀在 [`docs/版本史.md`](docs/版本史.md)。
-> 接手这个仓库（或让 AI 接手）时按这个顺序读：[`CLAUDE.md`](CLAUDE.md)（常驻速查：黄金律 / 怎么跑测 / 危险清单）
-> → [`注入设计·人话版.md`](docs/注入设计·人话版.md)（只看最终会进入 messages 的注入文件）
-> → [`FILE_MAP.md`](docs/FILE_MAP.md)（每个文件干什么）
-> → [`人格素材流水线.md`](docs/人格素材流水线.md)（新素材怎样分流进四类 persona 数据）
-> → [`待办清单.md`](docs/待办清单.md)（还没做的问题 + 已被判定"不用改"的）。
+> **接手这个仓库（或让 AI 接手）按这个顺序读**：
+> [`CLAUDE.md`](CLAUDE.md)（常驻速查：黄金律 / 怎么跑测 / 危险清单）
+> → [`docs/地图.md`](docs/地图.md)（**先看这份**：现在走到哪 + 每个文件干什么 + 该改哪）
+> → [`docs/架构.md`](docs/架构.md)（判别 → 检索 → 注入这套核心机制怎么转）
+> → [`docs/操作手册.md`](docs/操作手册.md)（要动手时怎么做）
+> → [`docs/评测与实验.md`](docs/评测与实验.md)（量过什么、结论是什么）。
+> 历史与被删机制在 [`docs/历史/`](docs/历史/)——**那份是存档，别按它改回去**。
 
 ## 更新记录
 
-> 这里是**简洁概括**；完整版本史（每个版本改了什么、为什么这么改、踩过哪些坑）见 [`版本史.md`](docs/版本史.md)。
+> 这里是**简洁概括**；完整版本史（V1.0 → V7.9 每个版本改了什么、为什么这么改、踩过哪些坑）见
+> [`docs/历史/版本史.md`](docs/历史/版本史.md)（已归档，**停在 V7.9**，V8.0 未回填）。
 >
-> 版本规则：**小更新 +0.1**（修 bug / 调参数 / 补数据 / 小功能），**大更新 +1**（架构级：数据分层重构 / 检索层判据改造 / 新增子系统），小版本满 `.9` 进位到下一个大版本。全史 34 个版本，两次大更新：**V6.0**（拆 core.py 分四层）、**V7.0**（提示词下沉 + 模块重构）。
+> 版本规则：**小更新 +0.1**（修 bug / 调参数 / 补数据 / 小功能），**大更新 +1**（架构级：数据分层重构 / 检索层判据改造 / 新增子系统），小版本满 `.9` 进位到下一个大版本。三次大更新：**V6.0**（拆 core.py 分四层）、**V7.0**（提示词下沉 + 模块重构）、**V8.0**（架构收敛成两层 + 全仓整理）。
 
 ### V0 · 仓库起步（2026-07-18 ~ 08-07）
 - 一个能回消息的 bot：初始提交、`.gitignore`、最早的记忆存储；08-07 工程化重构 + 目录整理。
 
 ### V1.0 · 样本 few-shot（2026-08-08）
-- 从"读规则学说话"改成"**看样本学说话**"（voice_samples.json）；停用会污染人格的 AI 自嗨记忆。
+- 从"读规则学说话"改成"**看样本学说话**"；停用会污染人格的 AI 自嗨记忆。
 
 ### V2.0 · 砍提示词
 - system_prompt 318 行/3.2 万字 → 40 行/3500 字，删掉数字配额与语气词详解——**提示词不是越多越好**。
 
 ### V3.0 · 多路融合检索
-- corpus / 声音 / 行为 / 措辞四路 RRF 融合 + 预算截断，全程只调 1 次 embedding；后来再加入偏好 / 核心记忆两路命中直达——"按需注入"的雏形。
+- corpus / 声音 / 行为 / 措辞多路 RRF 融合 + 预算截断，全程只调 1 次 embedding；再加入偏好 / 核心记忆两路命中直达——"按需注入"的雏形。
 
 ### V3.1 · 措辞指纹库
 - "同一意思 → 她真实说过的原话"；样本分 short / long 档 + 节奏地图。
 
 ### V4.0 · 补样本收官 + 参数定稿（08-09 ~ 08-10）
-- 样本库 14→56 条全场景均衡、措辞库 11 组从素材重建、corpus 273 条、参数定稿（temperature 0.85 / penalty 0.3）、承诺记忆。
+- 样本库 14→56 条全场景均衡、corpus 273 条、参数定稿（temperature 0.85 / penalty 0.3）、承诺记忆。
 
 ### V5.0 · 感知增强 + 真人节奏（08-10）
 - 时间 / 农历 / 天气（按用户记城市）、glm-4.6v 看图、B站开播与动态推送、读秒窗口 + 分批发送。
@@ -144,7 +146,7 @@
 - 先把线接上、再调触发规则；**成句才朗读语音条**（成功即不发文字，失败回退分段），短寒暄可突破下限；参考音频必须无尾静音；群聊窗口按会话开。
 
 ### V6.8 · 语音防截断 + 语料清洗（09-05）
-- 合成后量有效语音时长、不足就换温度重试；corpus 去分析腔（119/322）；周表注入；防复读升级为"换动作 pivot"。
+- 合成后量有效语音时长、不足就换温度重试；corpus 去分析腔；周表注入；防复读升级为"换动作 pivot"。
 
 ### V6.9 · 配图修复 + 群聊升级（09-07 ~ 09-08）
 - 微博改读 `pic_ids`、B站真配图优先全发；群聊改整群攒批 + 群级记忆（`groups.json` /【群聊现场】）+ 周表识图。
@@ -168,54 +170,52 @@
 - 失败码是负数（`not -100` 为假 → 错误分支被整个跳过）→ 误报"该 UID 暂无微博"；旧 jar 顶掉新填的 cookie（加 `_base_fp` 指纹）。
 
 ### V7.6 · 纯表情用确定性还原（09-22）
-- `[表情：可怜]` 的含义不交给 LLM 猜；`交接文档.md` / `CLAUDE.md` 固定新会话入口。
+- `[表情：可怜]` 的含义不交给 LLM 猜；固定新会话入口文档。
 
 ### V7.7 · 群聊新能力 + 素材本土化（09-25）
 - **接话门**（该不该开口有判据）/ 读合并转发 / 发表情包 / 主动发言；样本情境越具体越危险（3/5 → 0/5）；QQ 引用可见；判据回归集。
 
 ### V7.8 · 检索层判据改造（09-25 ~ 09-26）
-- 量出噪声地板（voice_sample 阈值压在地板上；phrase / preference 真信号与噪声完全重叠）；corpus 召回改成"**门放行的直通、没放行的交 LLM 判**——排序有用、阈值没用"；聊天落盘 + 索引工具；四处修复收尾。测试 528 → 534。
+- 量出噪声地板（voice_sample 阈值压在地板上；phrase / preference 真信号与噪声完全重叠）；corpus 召回改成"**门放行的直通、没放行的交 LLM 判**——排序有用、阈值没用"；聊天落盘 + 索引工具。
 
-### V7.9 · 评测资产合并 + 文件体检 + 注入审计（09-27 ~ 10-01，当前版本）
+### V7.9 · 评测资产合并 + 文件体检 + 注入审计（09-27 ~ 10-01）
+- **评测集与标注集合并成一份**（`scripts/retrieval_eval_cases.json`，48 条）：原来两份同源却**互相打架**；并把**负例泛化到多路**——这才照出"某一路开始乱开火"（phrase 曾 100% 开火、评测却全绿）。
+- **corpus 取消「门放行直通」**：门/钩子只决定**候选**，判定全交 LLM。依据是实测：**词重叠分不开「说的是谁」**。
+- **问题驱动入口**：看到一条答得不对 → 记一笔 → 脚本把"这句话实际召回了什么"摆给你看 → 变成永久用例，还带**复核老用例**（`--audit`）。
+- **文件体检**：逐个文件回答"它到底有没有在起作用"。已证实有用：周表（问直播时间 **88% vs 0%**）、【当前时间】（**92% vs 0%**）、terms（+38pp）、corpus（+100pp）、性格基底+语言风格（**用户盲判 76% 选「带它」**）。
+- ⚠️ **方法学收获（比结论更值钱）**：**风格类不能用模型当裁判**——三把尺子**先后失败**，最后靠"左右打乱 + 不标注 + 用户盲判"才站得住。**判据铁律：「如果她答错了，这个判据会通过吗？」会通过就不是判据。**
+- **包装语审计与删除**：10 处逐条分类；A 类用法说明 6 处、C 类骨架重复 2 处已实际删除。
 
-- **评测集与标注集合并成一份**（`scripts/retrieval_eval_cases.json`，48 条）：
-  原来两份同源却**互相打架**（同一条标注在三个地方有两个值）；判据实验的 `want` 改由它**推导**。
-  并把**负例泛化到多路** —— 这才照出"某一路开始乱开火"（phrase 曾 100% 开火、评测却全绿）。
-- **corpus 取消「门放行直通」**：门/钩子只决定**候选**，判定全交 LLM。
-  依据是实测：**词重叠分不开「说的是谁」**（误报 ov=0.40 > 真阳性 0.143），任何阈值都只是拿一个换一个。
-- **问题驱动入口**：看到一条答得不对 → **记一笔** → 脚本把"这句话实际召回了什么"摆给你看 → 变成永久用例。
-  还带**复核老用例**（`--audit`）。操作手册：`docs/问题驱动.md`。
-- **文件体检**：逐个文件回答"它到底有没有在起作用"。
-  **已证实有用**：周表（问直播时间 **88% vs 0%**）、【当前时间】（**92% vs 0%**）、terms（+38pp）、
-  corpus（+100pp）、**性格基底+语言风格**（**用户盲判 76% 选「带它」**）。
-- ⚠️ **方法学收获（比结论更值钱）**：**风格类不能用模型当裁判** ——
-  "像不像她"没有客观标准，三把尺子（自定义指标 / 指纹距离 / LLM 成对比较）**先后失败**，
-  最后靠"**左右打乱 + 不标注 + 用户盲判 + 复现两次**"才站得住。
-  **判据铁律：「如果她答错了，这个判据会通过吗？」会通过就不是判据。**
-- **包装语审计与删除**：10 处逐条分类；A 类用法说明 6 处、C 类骨架重复 2 处已实际删除，
-  B 类时间语义/优先级声明保留。`retrieval-eval` 47/48、`regression --check` 8/8。
-- **风格标注集结论**：工具和用例库保留，但这条路线已实测停止，不再作为风格类消融入口。
-  用户标 30 条后，23 道成对题里 20 道回答"差不多"（87%）；根因是两版同模型、同 base，差异落在人眼分辨极限以下。
-- **当前工作区**：主动发言/动态推送开始写入对应好友的短期记忆；新的周表已更新；
-  这批改动在 `2026-10-01` 验证为 **795 tests passed**。
-- **persona 更新流水线**：新增 `persona-pipeline`，一条命令即可从音频或清洗素材生成
-  corpus / voice-samples / phrases / behaviors 候选；默认 review，`--apply` 后备份写回，
-  corpus / voice 自动重建向量；corpus 还会自动补 `corpus_keywords` 钩子并审计自指代词。
-- **2026-10-01 实跑**：`20260923-wanjianzatan` 清洗出 273 个话轮、生成 99 条 corpus 候选；
-  corpus `322 → 421`，`corpus_vectors.json` 与 `corpus_keywords.json` 均同步为 421 条。
-- **注入链路说明视频**：`video/` 下的 Remotion 工程已把 `注入设计·人话版` 做成
-  16:9 / 30fps / 约 92 秒的 8 场景样片；旁白使用本地 `HZM-SPEAK` 权重，
-  逐句时间轴、SRT、CSV 和渲染脚本均可复跑。
+### V8.0 ·【大更新】架构收敛成两层 + 全仓整理（2026-10-04 ~ 10-05，当前版本）
+
+**2026-10-04 · 架构收敛**：人格层从"四个文件"砍到**两个**——
+`core/system_prompt.txt`（骨架，每轮常驻）+ `behavior/behaviors.json`（16 条情景，命中才注）；其余全部归**事实层**。
+
+| 被拆掉的文件 | 内容去向 | 原因 |
+|---|---|---|
+| `core/traits.json` | 情景部分 → behaviors；其余 → 骨架 | 它是个"没有归属的文件" |
+| `core/styles.json` | 重复与自我修正 → behaviors；反问推进 → 骨架；**戏剧化叙事 → 删** | 同上；戏剧化会**逼模型编** |
+| `speech/phrases.json` | 情景组 → behaviors | 与 behaviors 重复 |
+| `speech/voice_samples.json` | 该留的 18 条 → behaviors 的 `samples` | **按话题检索必然灌事实** |
+
+同时修掉两个真 bug：L3 的 `max_tokens=40` 在加入 `same_request` 字段后**会截断 JSON**（每轮 L3 全废）；`_repair_llm_json` 修不了值里的内层引号/裸换行（换成状态机）。
+
+**2026-10-05 · 全仓整理**：
+- **文档从 17 份收敛成 4 份正文 + 一个历史存档区**：`地图.md` / `架构.md` / `操作手册.md` / `评测与实验.md` + `历史/`。
+- **清掉死代码与已停用资产**：指向不存在文件的 `mine-phrases` 子命令（跑必崩）、`persona_pipeline` 里 6 个不可达分支、5 处死导入、`SOURCE_WEIGHTS` 里的墓碑键、孤儿向量缓存 `preference_vectors.json`、已停用的风格标注路线（`style_annotate.py` 1390 行 + 其 59 个测试 + `pairwise_style.py`）。
+- **代码里的"已删机制"注释全部搬进** [`docs/历史/已删机制登记.md`](docs/历史/已删机制登记.md)——每个被删机制**为什么删、实测数据是什么**，代码里只留活代码。
+- 测试 **807 → 746**（减少的是随已删脚本一起退役的用例）；`retrieval-eval` 47/48、`regression --check` 7/7。
 
 ## 技术亮点
 
-- **分层注入架构**：10+ 层条件注入（人设/行为/corpus/记忆/会话/措辞/样本/感知），每层管一件事，出问题能定位到具体层。
-- **记忆系统**：三层（短期 5 轮 / 长期画像+承诺 / 会话话题追踪）。长期记忆卡存"印象标签（带置信度）+ 用户事实 + 承诺 + 重要时刻"，支持 supersede 作废旧信息、'null' 污染防御、拒绝提取 AI 自嗨式自我披露。
+- **两层人格架构**：人格层只有 2 个文件（骨架常驻 + 16 条情景命中才注），其余全是事实层——**"她怎么说话"和"她知道什么"第一次被物理分开**。
+- **判别 → 检索 → 注入一条链路**：四种判定方式按任务选（常驻 / 关键词子串 / 向量 / LLM），检索是两路 RRF（corpus、behavior）融合 + 两路命中直达（偏好、核心记忆），再按字符预算截断注入。
+- **记忆系统**：三层 + 一张卡（短期 / 会话 / 群 / 长期画像）。长期记忆卡存"印象标签（带置信度）+ 用户事实 + 承诺 + 重要时刻"，支持 supersede 作废旧信息、`'null'` 污染防御、拒绝提取 AI 自嗨式自我披露。
 - **检索评测体系**：48 条标注集 + `retrieval_eval.py`，量化每路命中率，阈值/样本改动可回归验证。
-- **人格一致性评测**：InCharacter 式大五人格开放题 + 匿名化防名字作弊，实测实名/匿名都不掉分。
+- **人格一致性评测**：InCharacter 式大五人格开放题 + 匿名化防名字作弊。
 - **图片与视觉工程**：QQ/B站 CDN 的 Referer 分流、rkey 时效急切缓存、格式归一化、NapCat 本地缓存兜底绕开 CDN。
-- **真人节奏交互**：读秒窗口攒批 + 插话优先（发送中用户插话，取消未发送分段先回新消息）。
-- **工程纪律**：795 个单元测试；方法论 + 踩坑记录持续沉淀进 `docs/`，常驻速查在 CLAUDE.md。
+- **真人节奏交互**：读秒窗口攒批 + 插话优先（发送中用户插话，取消未发送分段先回新消息）+ 分批发送。
+- **工程纪律**：746 个单元测试；方法论与被删机制的实测数据持续沉淀进 `docs/`，常驻速查在 `CLAUDE.md`。
 
 ## 技术栈
 
@@ -229,13 +229,14 @@
 | 天气 | 和风天气（按用户记城市） |
 | 农历/节日 | lunar-python（本地） |
 | B站联动 | bilibili-api-python + 直播公开接口 |
+| 语音合成 | GPT-SoVITS（本地权重，HZM-SPEAK） |
 | 语音转写 | faster-whisper（离线蒸馏工具链） |
 | 数据存储 | JSON（记忆、向量、人格数据） |
 
 ## 快速开始
 
 ### 前置要求
-- Python 3.10+、QQ 账号（NapCatQQ）、DeepSeek API Key、智谱 AI API Key、本地 GPU（可选）
+- Python 3.10+、QQ 账号（NapCatQQ）、DeepSeek API Key、智谱 AI API Key、本地 GPU（语音合成可选）
 
 ### 安装与配置
 ```bash
@@ -249,43 +250,41 @@ pip install -e .              # 依赖声明在 pyproject.toml（仓库里没有
 
 ## 人格蒸馏流水线（离线工具箱）
 
-从直播素材到人格数据的全链路：`python scripts/run_tool.py <工具>` 统一入口（20 子命令按阶段分组）。
+从直播素材到人格数据的全链路：`python scripts/run_tool.py <工具>` 统一入口（18 个子命令按阶段分组）。
 
 ```
-【蒸馏】transcribe → clean-transcript → analyze-pace → convert-to-chat
-【流水线】persona-pipeline corpus|voice-samples|phrases|behaviors
-         从音频或清洗素材生成候选；确认后 --apply 写回，corpus/voice 自动重建向量
-【向量】generate-vectors -i persona/world/statement_final.json → corpus_vectors.json
-         --only-index 335,410,420 可只重算指定索引
-         precompute voice-samples|core-stories
-【评测】regression / persona-eval / retrieval-eval
-【工具】bili-check / bili-login / vision-test
+【流水线】persona-pipeline corpus|behaviors
+         从音频或清洗素材生成候选；确认后 --apply 写回，corpus 自动补钩子并重建向量
+【蒸馏】transcribe → clean-transcript → convert-to-chat → analyze-pace
+【生成】generate-statements / generate-vectors / generate-persona(--danger) / extract-persona
+【向量】precompute core-stories
+【评测】regression --check / persona-eval / retrieval-eval / problems
+【工具】bili-check / bili-login / vision-test / mine-theme
 不在 run_tool（独立运行）：watchdog.py（假死自愈进程）/ notifier.py（SMTP，被 watchdog 用）
                      / update_schedule.py（把周表图丢 data/schedule_inbox/ 后无参跑即 OCR 更新周表）
 ```
 
-新增直播素材时，推荐直接用四条安全流水线：
+新增直播素材时，用两条安全流水线（corpus / behaviors）：
 
 ```bash
 # 从音频开始，先生成候选（不改 persona）
-# 同一个 session 只会转写/清洗一次，后三条复用 cleaned.json
-python scripts/run_tool.py persona-pipeline corpus --audio assets/audio/xxx.m4a --session 20261001
-python scripts/run_tool.py persona-pipeline voice-samples --audio assets/audio/xxx.m4a --session 20261001
-python scripts/run_tool.py persona-pipeline phrases --audio assets/audio/xxx.m4a --session 20261001
+# 同一个 session 只会转写/清洗一次，第二条复用 cleaned.json
+python scripts/run_tool.py persona-pipeline corpus    --audio assets/audio/xxx.m4a --session 20261001
 python scripts/run_tool.py persona-pipeline behaviors --audio assets/audio/xxx.m4a --session 20261001
 
 # 看 outputs/persona_pipeline/<session>/<target>_review.md
-# 确认后复用候选写回；corpus 会自动补钩子并重建向量，voice 会自动重建向量
+# 确认后复用候选写回；corpus 会自动补钩子并重建向量
 python scripts/run_tool.py persona-pipeline corpus --session 20261001 --apply
 ```
 
-产物按阶段落盘到 `outputs/` 对应文件夹（transcribe/clean/pace/convert/mine/statements/eval），最终源数据 `persona/world/statement_final.json` → `persona/world/corpus_vectors.json`（机器人只读后者）。
+产物按阶段落盘到 `outputs/`（transcribe/clean/pace/convert/mine/statements/eval），最终源数据 `persona/world/statement_final.json` → `persona/world/corpus_vectors.json`（机器人只读后者）。
 
-> 改过 `persona/behavior/behaviors.json` / `persona/speech/voice_samples.json` / `persona/speech/phrases.json` / `persona/world/preferences.json` 后需重跑对应向量；source 与 *_vectors 缓存不同步时会用旧文本检索。
+> **改完要重算向量的只有 `core_stories` 与 `statement_final`**；`behaviors` 不走向量（走判别词 + LLM 分类），
+> `preferences` 改 `keywords` 即可。source 与 `*_vectors` 缓存不同步时会用旧文本检索——详见 [`docs/操作手册.md`](docs/操作手册.md)。
 
 ## 注入链路说明视频
 
-`video/` 是独立的 Remotion 工程，输入是 `docs/注入设计·人话版.md` 的内容结构：
+`video/` 是独立的 Remotion 工程，把"一条消息怎么被判、被查、被拼成最终 messages"做成 16:9 / 30fps / 约 92 秒的 8 场景样片：
 
 ```bash
 cd video
@@ -293,56 +292,62 @@ npm install --registry=https://registry.npmmirror.com
 npm run render:voice
 ```
 
-成片、旁白时间轴和 TTS 接入方式见 `video/README.md`。
+成片、旁白时间轴和 TTS 接入方式见 [`video/README.md`](video/README.md)。
 
 ## 项目结构
 
 ```
 bot.py                       # 启动入口
-memory_manager.py            # 长期记忆（long_term.json）实现（被 src/.../memory.py re-export）
-CLAUDE.md                    # 常驻速查：黄金律 / 怎么跑测 / 危险清单 / 当前下一步 ★ 接手先读
-docs/                        # 全部说明文档（入口 docs/README.md）
-docs/FILE_MAP.md             # 文件地图：每个文件干什么
-docs/待办清单.md             # 还没做的问题 + 已判定"不用改"的（防顺手改回去）
-docs/版本史.md               # 完整版本史（V1.0→V7.9）：每版改了什么、为什么、踩过什么坑
-docs/_archive/ROADMAP.md     # 踩坑记录 / 回复链路逐层剖析 / 终极愿景（部分内容停在 2026-08）
-docs/注入链路.md             # 素材层 + 注入层的完整解剖（每层多少字符、各路阈值、为什么这么设计）
-docs/交接文档.md             # 当前状态 + 下一步（新会话先读这份）
+memory_manager.py            # 长期记忆（记忆卡）实现（被 src/.../memory.py 按路径加载）
+CLAUDE.md                    # 常驻速查：黄金律 / 怎么跑测 / 危险清单 / 文档在哪 ★ 接手先读
+docs/                        # 全部说明文档
+├── 地图.md                  #   ★ 现在在哪 + 每个文件干什么 + 该改哪（先看这份）
+├── 架构.md                  #   判别 → 检索 → 注入 这套核心机制 + 一层记忆
+├── 操作手册.md              #   要动手时怎么做：跑/测、加素材、写 behaviors、问题驱动、脚本总表
+├── 评测与实验.md            #   量过什么、结论是什么、哪些结论已作废
+└── 历史/                    #   存档，别按它改回去
+    ├── 已删机制登记.md      #     每个被删机制为什么删、实测数据（★★）
+    ├── 待办清单.md / 交接文档.md / 版本史.md / 包装语审计.md / 调研-角色对话AI架构.md / ROADMAP.md
 video/                       # Remotion 注入链路说明视频（场景、旁白、字幕、渲染）
-src/plugins/chatbot/         # 运行时核心
-├── core.py                  # 主循环（组装 + 生成 + 记忆更新 + 防复读）
+src/plugins/chatbot/         # 运行时核心（25 个 .py）
+├── core.py                  # 主循环（拼 messages + 生成 + 记忆更新 + 防复读）
+├── chat_window.py           # 读秒攒批窗口 + 分批发送 + 插话取消 + 表情包
 ├── reply_style.py           # 纯函数后处理（clean_reply / split_reply / 防复读检测）
-├── routing.py               # 硬路由（legendary 梗库双路由 + 行为意图 L3）
-├── retrieval.py             # 四路 RRF + 两路命中直达 + 预算/关键词门
+├── routing.py               # 硬路由（legendary 梗库双路由 + 行为 L3 分类）
+├── retrieval.py             # 两路 RRF + 两路命中直达 + 预算/关键词门
+├── corpus_judge.py          # corpus 语义判（LLM；失败宁可漏）
+├── group_gate.py            # 群聊接话门（失败宁可放行）
 ├── rag.py                   # 向量工具（embedding 客户端封装）
+├── stickers.py              # 表情包判定（LLM；失败返回 None）
 ├── config.py / constants.py # 配置读取+客户端工厂 / 可调参数集中 ★
-├── persona.py               # 人格/traits/styles/terms/schedule 加载
+├── persona.py               # 人格数据加载（behaviors / 周表 / terms）
 ├── memory.py                # 短期记忆（带锁，每轮带时间戳）
 ├── session_memory.py        # 会话级记忆（话题追踪 + 指代补全）
-├── group_memory.py          # 群级记忆（成员 id→昵称 + 群近况 events）
+├── group_memory.py          # 群级记忆（成员 id→昵称 + 群近况）
 ├── context_probe.py         # 时间/农历/天气/直播状态感知
 ├── vision.py                # glm-4.6v 看图
-├── chat_window.py           # 读秒攒批窗口 + 分批发送（含群现场/群记忆写入）
 ├── bili_bridge.py           # B站开播/动态 → 私聊广播
 ├── weibo_bridge.py          # 微博新博 → 私聊广播（cookie jar 会话）
 ├── _bridge_common.py        # bili/weibo 共用（状态读写 + 图片下载）
 ├── voice.py                 # GPT-SoVITS 语音（合成/静音裁剪/达标重试）
-└── __init__.py              # 事件入口 + 心跳/在线信号 + 自动通过好友
-persona/                     # 角色人格 + 她的记忆（源文件 + 向量）
-├── core/                    #   人设：system_prompt + traits + styles
-├── behavior/                #   行为：behaviors(+samples) + behavior_keywords(判别词)
-├── speech/                  #   说话：voice_samples + phrases（源 + 向量）
-└── world/                   #   世界：terms/lorebook、preferences、core_stories、legendary、schedule(周表)、statement_final→corpus_vectors
-user_memory/                 # 对用户/群的记忆
+├── proactive.py             # 主动发言（动态 → 她会说的一句话）
+└── __init__.py              # 事件入口 + 消息还原 + 心跳/在线信号 + 自动通过好友
+persona/                     # 人格 + 事实（14 个文件）
+├── core/system_prompt.txt   #   人格层①骨架（每轮常驻）
+├── behavior/                #   人格层②16 条情景 + 判别词兜底
+├── media/stickers.json      #   表情包标注
+└── world/                   #   事实层：terms / preferences / core_stories / legendary
+                             #           / schedule(周表) / statement_final→corpus_vectors
+user_memory/                 # 对用户/群的记忆（不入库）
 ├── short_term.json          #   短期（最近几轮原文，每条带时间戳）
 ├── long_term.json           #   长期（用户画像 + 承诺 + last_seen）
 ├── session.json             #   会话级（当前话题 + 本场事件）
 └── groups.json              #   群级（成员身份 + 群近况）
-outputs/                     # 分析产物（按阶段分文件夹，gitignore）
-assets/                      # 原始素材（音频、参考音频 voice_refs、表情 emotes）+ 展示图
+outputs/                     # 分析产物（按阶段分文件夹，不入库）
+assets/                      # 素材（音频、参考音频 voice_refs、表情 emotes）+ 展示图
 data/                        # 运行时状态：bili_state / weibo_state / weibo_cookies(会话jar) / heartbeat / voice_cache / schedule_inbox
 scripts/                     # 离线工具箱 + 自愈：run_tool.py 统一入口；watchdog.py / notifier.py / update_schedule.py 独立运行
-tests/                       # 795 个单元测试
+tests/                       # 746 个单元测试
 ```
 
 ## 结语
@@ -353,6 +358,6 @@ tests/                       # 795 个单元测试
 
 ---
 
-*完整版本史见 [`docs/版本史.md`](docs/版本史.md)；
-每个文件「到底有没有在起作用」的体检结论见 [`docs/文件体检结论.md`](docs/文件体检结论.md)；
-怎么把看到的错误变成永久用例见 [`docs/问题驱动.md`](docs/问题驱动.md)。*
+*完整版本史（V1.0 → V7.9）见 [`docs/历史/版本史.md`](docs/历史/版本史.md)；
+每个被删机制的原因与实测数据见 [`docs/历史/已删机制登记.md`](docs/历史/已删机制登记.md)；
+怎么把看到的错误变成永久用例见 [`docs/操作手册.md`](docs/操作手册.md)。*
