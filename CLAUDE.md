@@ -44,7 +44,7 @@ NoneBot2 + OneBot v11(NapCat) 的"灰泽满"人格聊天机器人。核心是**�
 - 运行时核心：`src/plugins/chatbot/`（core 主循环 / chat_window 读秒窗口 / retrieval 两路 RRF+两路直达 / reply_style 纯函数 / routing 梗库+行为分类 / persona 加载 / memory|session_memory|group_memory 记忆 / voice 语音 / bili_bridge|weibo_bridge 联动 / context_probe 感知 / vision 看图 / rag 向量 / config 客户端 / constants 常量★）
 - 人格数据：`persona/`（core=骨架 / behavior=16 条情景 / world=事实层。`speech/` 与 `core/traits|styles` 已于 2026-10-04 删除）
 - 长期记忆：根 `memory_manager.py`
-- 离线工具：`scripts/run_tool.py <工具>`；**47 个脚本各干什么见 `docs/操作手册.md`**
+- 离线工具：`scripts/run_tool.py <工具>`；**52 个脚本各干什么见 `docs/操作手册.md`**
 
 ## 文档指针（按需懒读，别开头全灌）
 **`docs/` 现在只有 4 份正文 + 一个历史存档区**（2026-10-05 整理后的样子）。
