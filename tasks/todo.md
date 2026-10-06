@@ -50,12 +50,12 @@
 ## Task 5: Add developer audit and replay commands
 
 **Acceptance criteria:**
-- [ ] Audit defaults to aggregate counts and redacted user identifiers.
-- [ ] Detailed inspection requires an explicit user ID.
-- [ ] Replay is private-chat-only, bounded by a required positive limit, and writes only to ignored output paths.
+- [x] Audit defaults to aggregate counts and redacted user identifiers.
+- [x] Detailed inspection requires an explicit user ID.
+- [x] Replay is private-chat-only, bounded by a required positive limit, and writes only to ignored output paths.
 
 **Verification:**
-- [ ] `.venv\Scripts\python.exe -m pytest tests\test_memory_v2_tool.py -q`
+- [x] `.venv\Scripts\python.exe -m pytest tests\test_memory_v2_tool.py -q`
 
 **Dependencies:** Tasks 2-3
 

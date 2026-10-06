@@ -38,7 +38,7 @@ Build a private-chat-only, disabled-by-default shadow memory pipeline. It extrac
 
 ### Phase 3: Developer Audit and Replay
 
-- [ ] Task 5: Add developer-only `memory-audit` and bounded historical `memory-replay` tool commands.
+- [x] Task 5: Add developer-only `memory-audit` and bounded historical `memory-replay` tool commands.
 - [ ] Task 6: Document enablement, output locations, privacy constraints, and promotion criteria.
 
 ### Checkpoint: Complete

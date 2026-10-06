@@ -7,12 +7,12 @@
     python scripts/run_tool.py --help
     python scripts/run_tool.py <工具> --help
 
-实际 18 个子命令，分六组：流水线(persona-pipeline)
+实际 20 个子命令，分六组：流水线(persona-pipeline)
 / 蒸馏(transcribe/clean-transcript/convert-to-chat/analyze-pace)
 / 生成(generate-statements/generate-vectors/generate-persona)
 / 向量(precompute core-stories)
 / 评测(regression/persona-eval/retrieval-eval/problems)
-/ 工具(bili-check/bili-login/vision-test/mine-theme/extract-persona)。
+/ 工具(bili-check/bili-login/vision-test/mine-theme/extract-persona/memory-audit/memory-replay)。
 generate-statements 作为 persona-pipeline corpus 的内部步骤保留；generate-persona 会覆盖人格需 --danger。
 旧脚本仍可直接运行（向后兼容），本入口为推荐用法。
 """
@@ -500,6 +500,53 @@ def _run_problems(args):
     sys.exit(asyncio.run(problem_cases.main(argv)))
 
 
+# ==================== 子命令：Memory V2 影子审计 / 回放 ====================
+
+def _add_memory_audit(sub):
+    p = sub.add_parser("memory-audit", help="Memory V2 影子数据审计（默认仅聚合）")
+    p.add_argument(
+        "--state",
+        default=str(_common.PROJECT_ROOT / "user_memory" / "memory_v2_shadow.json"),
+        help="影子状态文件",
+    )
+    p.add_argument("--user", default=None, help="显式查看某个用户分区")
+    p.add_argument(
+        "--show-source",
+        action="store_true",
+        help="配合 --user 显示来源原文；缺省隐藏",
+    )
+    p.set_defaults(func=_run_memory_audit)
+
+
+def _run_memory_audit(args):
+    import memory_v2_tool
+    memory_v2_tool.run_audit(args)
+
+
+def _add_memory_replay(sub):
+    import memory_v2_tool
+
+    p = sub.add_parser("memory-replay", help="有界回放历史私聊到隔离的 Memory V2 影子文件")
+    p.add_argument(
+        "-i", "--input", nargs="*", default=None,
+        help="chat JSONL；缺省读取 data/chat_log/chat*.jsonl",
+    )
+    p.add_argument(
+        "--limit", type=memory_v2_tool.positive_limit, required=True,
+        help="最多回放多少条有效私聊（1~5000，必须显式指定）",
+    )
+    p.add_argument(
+        "--out-dir", default=str(_common.OUTPUTS_DIR / "memory_v2"),
+        help="输出目录，必须位于 outputs/ 下",
+    )
+    p.set_defaults(func=_run_memory_replay)
+
+
+def _run_memory_replay(args):
+    import memory_v2_tool
+    memory_v2_tool.run_replay(args)
+
+
 # ==================== 主入口 ====================
 
 def build_parser() -> argparse.ArgumentParser:
@@ -512,7 +559,7 @@ def build_parser() -> argparse.ArgumentParser:
                     "  【生成】generate-statements · generate-vectors · generate-persona · extract-persona\n"
                     "  【向量】precompute\n"
                     "  【评测】regression · persona-eval · retrieval-eval · problems\n"
-                    "  【工具】bili-check · bili-login · vision-test · mine-theme",
+                    "  【工具】bili-check · bili-login · vision-test · mine-theme · memory-audit · memory-replay",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sub = parser.add_subparsers(dest="command", required=True, title="可用工具")
@@ -534,6 +581,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_persona_eval(sub)
     _add_retrieval_eval(sub)
     _add_problems(sub)
+    _add_memory_audit(sub)
+    _add_memory_replay(sub)
     return parser
 
 
