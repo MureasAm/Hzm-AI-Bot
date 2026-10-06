@@ -1,8 +1,8 @@
-"""短期记忆时间戳：老数据（裸字符串）兼容 + "距上一轮对话"注入。
+"""短期记忆时间戳：老数据（裸字符串）兼容 + **每条消息带「多久前」**。
 
-背景：她以前分不清"刚刚说的"和"三天前说的"。现在每轮存时间戳，
-生成前把间隔作为**一行汇总**注入【最近对话记录】顶部（不是每行都打时间戳，
-免得模型去复述"3天前"）。
+背景：她以前分不清"刚刚说的"和"三天前说的"。
+2026-10-05 改：不再是"一行汇总拼在历史顶部"，而是**每行自己带 `[3小时前] `**
+——因为旧做法下 gap=10秒 和 gap=3小时 注入出来长得一样，她分不出刚说完还是隔了很久。
 """
 import json
 import time
@@ -73,6 +73,41 @@ class TestHistoryBackCompat:
             memory.append_user_history("g1", f"群消息{i}", "")
         raw = json.loads(tmp_memory.read_text(encoding="utf-8"))["g1"]
         assert len(raw) == memory.SHORT_MEMORY_LINES
+
+
+class TestTimedHistory:
+    """`get_user_history_timed`：每行带「距上一条多久」，没时间戳的老数据不加前缀。"""
+
+    def test_each_line_gets_gap_prefix(self, tmp_memory):
+        now = time.time()
+        t0 = now - 5 * 3600           # 5 小时前
+        _write(tmp_memory, {"u": [
+            {"t": t0, "text": "用户：在吗"},
+            {"t": t0 + 600, "text": "灰泽满：在呢"},        # 距上一条 10 分钟
+            {"t": t0 + 600 + 1800, "text": "用户：那个事你还记得吗"},   # 距上一条 30 分钟
+        ]})
+        lines = memory.get_user_history_timed("u")
+        assert len(lines) == 3
+        # 每行的时间是**相对上一条**的间隔；第一行相对"现在"。
+        assert lines[0].startswith("[5小时前] ")
+        assert lines[1].startswith("[10分钟前] ")
+        assert lines[2].startswith("[30分钟前] ")
+        assert lines[0].endswith("用户：在吗")
+
+    def test_legacy_plain_strings_get_no_prefix(self, tmp_memory):
+        _write(tmp_memory, {"u": ["用户：在吗", "灰泽满：在呢"]})
+        lines = memory.get_user_history_timed("u")
+        assert lines == ["用户：在吗", "灰泽满：在呢"]
+
+    def test_short_gap_gets_no_prefix(self, tmp_memory):
+        """同一场对话内（<90秒）不加前缀——否则每行都挂个 [刚刚]，纯噪音。"""
+        now = time.time()
+        _write(tmp_memory, {"u": [
+            {"t": now - 20, "text": "用户：在吗"},
+            {"t": now - 10, "text": "灰泽满：在呢"},
+        ]})
+        lines = memory.get_user_history_timed("u")
+        assert lines == ["用户：在吗", "灰泽满：在呢"]
 
 
 class TestLastTurnGap:

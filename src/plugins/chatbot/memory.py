@@ -61,6 +61,56 @@ def get_user_history(user_id: str) -> list:
     return [_entry_text(it) for it in raw]
 
 
+def get_user_history_timed(user_id: str) -> list:
+    """和 `get_user_history` 同样返回字符串行，但**每行前面带「距上一条多久」**。
+
+    例：
+        用户：还有十五分钟就九点了，等着等
+        [3小时前] 灰泽满：睡了，你咋还不睡🧑‍🌾
+        [5分钟前] 用户：在吗
+
+    为什么需要它（2026-10-05 用户提出）：
+      原来只把「距上一轮多久」当**一行汇总**拼在整块开头，而**每条消息自己没有时间**。
+      结果 gap=10 秒 和 gap=3 小时 注入出来的【当前会话】/历史**长得一模一样**——
+      她分不出"刚说完"和"三小时前说的"，只能一律当成"正在聊"。
+      这跟「上一场会话」那条不一样：那条只在 >12h 时出现，且自带时间定性。
+
+    ⚠️ 这里**只给事实（过了多久），不给任何"该怎么理解"的说明**——按项目实测，
+    "管怎么用"的包装语一律无效，事实类信息才有效。判断交给模型。
+
+    没有时间戳的老数据（裸字符串）不给前缀，不猜。
+    """
+    from memory_manager import humanize_gap
+
+    raw = _load_raw_history(user_id)
+    if not raw:
+        return []
+    out = []
+    prev_t = None
+    for it in raw:
+        text = _entry_text(it)
+        t = it.get("t") if isinstance(it, dict) else None
+        prefix = ""
+        if t is not None and prev_t is not None:
+            try:
+                g = humanize_gap(max(0.0, float(t) - float(prev_t)))
+                if g:
+                    prefix = f"[{g}前] "
+            except (TypeError, ValueError):
+                prefix = ""
+        elif t is not None and prev_t is None:
+            # 第一行：相对"现在"（它可能已经是几小时前的了，正是要让她知道的那条）
+            try:
+                g = humanize_gap(max(0.0, time.time() - float(t)))
+                if g:
+                    prefix = f"[{g}前] "
+            except (TypeError, ValueError):
+                prefix = ""
+        out.append(prefix + text)
+        prev_t = t if t is not None else prev_t
+    return out
+
+
 def _load_raw_history(user_id: str) -> list:
     """读原始历史（保留 {t,text} 结构），供需要时间戳的调用方用。"""
     memory = load_short_memory()

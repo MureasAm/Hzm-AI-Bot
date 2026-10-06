@@ -19,7 +19,7 @@ from .persona import (
     load_persona_rules, load_schedule,
 )
 from .memory import (
-    get_user_history, append_user_history,
+    get_user_history, get_user_history_timed, append_user_history,
     get_user_memory, update_user_memory, build_memory_context,
     _format_profile_summary, MEMORY_EXTRACT_PROMPT,
     get_last_turn_gap_seconds, humanize_gap,
@@ -413,7 +413,10 @@ def build_message_list(user_msg: str, fused_items: list,
     if session_context:
         messages.append({
             "role": "system",
-            "content": f"【当前会话】{session_context}",
+            # ⚠️ 段头原为【当前会话】——那在**断言"这是正在进行的对话"**（2026-10-05 改）。
+            #    它可能是几小时前那场、早就自然结束了，所以改成中性的【会话记忆】，
+            #    里面只陈述"话题是什么 + 什么时候开始的"，判断交给模型。
+            "content": f"【会话记忆】{session_context}",
         })
 
     # 上一场会话（已过期，带"隔了多久"）：**不能并进上面那块**——
@@ -465,10 +468,12 @@ def build_message_list(user_msg: str, fused_items: list,
     if user_history:
         if isinstance(user_history, list):
             context = "\n".join(user_history)
-            if history_gap_note:
-                # 只加一行汇总，不给每行打时间戳——要的是"知道隔了多久"这个概念，
-                # 不是让她复述"3天前"。同一场对话内 humanize_gap 返回空串，不注入。
-                context = f"（距离上一轮对话已经过去{history_gap_note}了）\n" + context
+            # ⚠️ 时间戳**不再**在这里加一行汇总（2026-10-05 改）——
+            #   旧做法是把「距上一轮多久」当一行汇总拼在整块开头，结果 gap=10秒 和 gap=3小时
+            #   注入出来的历史**长得一模一样**，她分不出"刚说完"和"三小时前说的"。
+            #   现在改成：**每条消息自己带 [多久前]**（由 memory.get_user_history_timed 渲染），
+            #   只给事实、不给"该怎么理解"的说明，判断交给模型。
+            #   history_gap_note 参数保留（调用方还在传），但不再拼进历史块。
             # 一致性（只管事实）+ 防复读（别逐字复读）。
             # 旧的【一致性规则】写的是"借口要与之前保持一致"——那是**直接教它复读**：
             # 一旦第一次用了某个借口（"威严""搬家"），规则就把它锁死，错误只固化不自我纠正
@@ -506,6 +511,7 @@ def build_message_list(user_msg: str, fused_items: list,
             "content": f"【客观情况】用户已经连续 {same_request['count']} 轮在向灰泽满要{what}了"
                        f"（换着说法也算同一件事）。前面 {same_request['count'] - 1} 轮都没有答应。",
         })
+
 
     # 感知源②：图片消息——把视觉描述并入用户消息，避免空消息让模型以为"对方没说话"
     final_user = user_msg
@@ -766,7 +772,11 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     # 必须在组装消息前完成，这样本轮注入的就是本轮自己的话题，不滞后一轮。
     query_text = user_msg.strip()
     user_history = get_user_history(user_id)
-    history_text = "\n".join(user_history[-6:]) if user_history else ""
+    # ⚠️ 带每条时间戳的版本（2026-10-05）：让模型看出"刚说完"和"三小时前说的"。
+    #    两个消费者都用它：① 注入层（【最近对话记录】）② L3 判 same_request
+    #    ——L3 必须知道那几轮之间隔了多久，否则隔 8 小时的一句会被算成"连着"。
+    user_history_timed = get_user_history_timed(user_id)
+    history_text = "\n".join(user_history_timed[-8:]) if user_history_timed else ""
     # 距上一轮多久（此刻还没 append 本轮，最后一条就是上一轮）。同一场对话内为空串
     _gap_sec = get_last_turn_gap_seconds(user_id)
     history_gap_note = humanize_gap(_gap_sec) if _gap_sec is not None else ""
@@ -853,7 +863,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     # 术语语境确认：confirm:true 的命中做一次便宜 LLM 判断，剔除误触词条（词→意思守卫）
     denied_terms = await confirm_ambiguous_terms(user_msg, deepseek_client)
     messages = build_message_list(
-        user_msg, fused_items, memory_context, user_history,
+        user_msg, fused_items, memory_context, user_history_timed,
         vision_desc=vision_desc, weather_city=weather_city, batch_summary=batch_summary,
         preference_items=preference_items, core_stories=core_stories,
         session_context=session_context, query_hint=query_hint,

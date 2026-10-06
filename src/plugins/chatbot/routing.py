@@ -109,7 +109,6 @@ async def legendary_confirmed(user_msg: str, prompt_template: str, history: str 
 # 2026-09-26 扩展：**行为 + 措辞共用这一次调用**。
 # 原因：两者是同一个问题的两半——"这条消息落在哪个已知情境"。
 #   · behavior 回答"该怎么做"（11 条）
-#   · phrases  回答"该用哪些词"（11 组）
 # 而措辞原本走向量检索，实测 100% 开火（trigger 是 6~13 字的**类别标签**，不是句子，
 # 余弦根本分不开）——用检索工具干分类的活。并进来 = 零额外调用 + 判据统一。
 BEHAVIOR_CLASSIFY_PROMPT = """你是{role_name}的意图分类器。判断用户刚发的这条消息落入哪些「已知情境」。只有明确匹配才选，拿不准一律不放（宁可不触发，不误触发）。
@@ -142,41 +141,36 @@ BEHAVIOR_CLASSIFY_PROMPT = """你是{role_name}的意图分类器。判断用户
     （换个说法也算，如「我要听你的声音」→「那我要听语音」→「发个语音条」），
     就说出是**同一件事**、以及**从几轮前开始连着**（含当前这轮，最小 1）。
   · **要的是「诉求」相同，不是「话题」相同**。用户连着问三个不同的生活问题 → 不算。
-  · 只有 1 轮、或前几句是别的事 → `count` 填 1。
+  · ⚠️ **注意方括号里的时间**（如 `[3小时前] 用户：…`）：如果用户那几句**中间隔了很久**
+    （隔了几小时），那**不算"连着"**——只从**同一场对话内**的连续几轮算起。
+    上一句在几小时前 → 这轮就是 `count` 1。
   · `what` 写「在要什么」（如「要语音」「要被叫宝宝」「要一个表态」），不要知道就不写。
-{phrase_section}
 最近对话：
 {history}
 
 用户消息：{user_msg}
 
-只输出 JSON：{{"behavior": "<行为name>" 或 null, "phrases": ["<措辞组id>", …], "same_request": {{"what": 「在要什么」, "count": 连续轮数}}}}"""
+只输出 JSON：{{"behavior": "<行为name>" 或 null, "same_request": {{"what": 「在要什么」, "count": 连续轮数}}}}"""
 
-# 措辞那一节（没有措辞组数据时整节不出现，免得给模型一个空列表）
-PHRASE_SECTION = """
-【措辞】用户这句话会让{role_name}用上哪些措辞组？**可以多选，也可以全不选**：
-{phrase_defs}
-
-措辞判定要点：
-- 判的是"用户**冲着她**说了这类话"，不是"提到了同一个词"。
-- 例：用户说"你唱歌真好听"→ 是夸她 → 选；用户说"今天股市怎么样"→ 跟她无关 → 不选。
-- 例：用户说"你昨晚为什么没播"→ 在问责 → 选；用户说"感冒吃什么药"→ 在问药 → 不选。
-- **多数消息一个都不选**（日常闲聊占大多数）。拿不准 → 不选。
-"""
 
 
 async def classify_l3(deepseek_client, user_msg: str, history_text: str,
-                      behaviors: list, phrase_groups: list = None) -> dict:
-    """一次调用判出：行为名（0/1 个）+ 措辞组 id（0~N 个）。
+                      behaviors: list) -> dict:
+    """一次调用判出：行为名（0/1 个）+ 连续索要轮数。
 
-    返回 {"behavior": str, "phrases": [str], "same_request": {"what": str, "count": int}}；
-    **失败/拿不准返回空**（不触发任何东西）。返回的名字/id 都必须是数据里的真值（防模型编造）。
+    返回 {"behavior": str, "same_request": {"what": str, "count": int}}；
+    **失败/拿不准返回空**（不触发任何东西）。返回的名字必须是数据里的真值（防模型编造）。
 
     ⚠️ 判据措辞是本模块最要紧的东西（改词=改行为，实测过判据稍动结果就从 0% 跳到 74%）。
+
+    ⚠️ 原「措辞组」那一路已随 phrases.json 一起删除（2026-10-04）：
+       输出的 `phrases` 字段、`phrase_groups` 参数、`PHRASE_SECTION` 全部拆掉。
+       留着死字段只会浪费 token、并给 JSON 输出添乱（踩过：加字段后 40 token 截断过 JSON）。
+       现在 `history_text` 由调用方传**带时间标签**的版本（`[3小时前] 用户：…`），
+       same_request 靠它判断"是不是同一场对话内的连续索要"。
     """
-    phrase_groups = phrase_groups or []
     if not user_msg:
-        return {"behavior": "", "phrases": [], "same_request": {"what": "", "count": 1}}
+        return {"behavior": "", "same_request": {"what": "", "count": 1}}
 
     defs = []
     for b in behaviors or []:
@@ -191,13 +185,8 @@ async def classify_l3(deepseek_client, user_msg: str, history_text: str,
                 line += f"\n    例：{u}"
         defs.append(line)
 
-    phrase_defs = "\n".join(
-        f"- {g.get('id')}：{g.get('trigger', '')}（{g.get('meaning', '')}）"
-        for g in phrase_groups if g.get("id")
-    )
     prompt = BEHAVIOR_CLASSIFY_PROMPT.format(
         behavior_defs="\n".join(defs) or "（无）",
-        phrase_section=PHRASE_SECTION.format(phrase_defs=phrase_defs, role_name="灰泽满") if phrase_defs else "",
         history=history_text or "（无）", user_msg=user_msg,
         role_name="灰泽满",
     )
@@ -220,19 +209,11 @@ async def classify_l3(deepseek_client, user_msg: str, history_text: str,
         parsed = json.loads(_repair_llm_json(content))
         names = {b.get("name") for b in (behaviors or [])}
         behavior = str(parsed.get("behavior") or "").strip()
-        ids = {g.get("id") for g in phrase_groups}
-        raw = parsed.get("phrases")
-        kept, seen = [], set()
-        for gid in (raw if isinstance(raw, list) else []):
-            gid = str(gid).strip()
-            if gid in ids and gid not in seen:      # 拦住模型编的 id
-                seen.add(gid)
-                kept.append(gid)
-        return {"behavior": behavior if behavior in names else "", "phrases": kept,
+        return {"behavior": behavior if behavior in names else "",
                 "same_request": _parse_same_request(parsed.get("same_request"))}
     except Exception as e:
         print(f"⚠️ L3 意图分类失败（降级不触发）: {e}")
-        return {"behavior": "", "phrases": [], "same_request": {"what": "", "count": 1}}
+        return {"behavior": "", "same_request": {"what": "", "count": 1}}
 
 
 def _repair_llm_json(text: str) -> str:

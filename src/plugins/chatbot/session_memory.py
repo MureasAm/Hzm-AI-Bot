@@ -31,7 +31,10 @@ SHORT_QUERY_MAX_CHARS = 4
 # 单用户保留的最大事件数（防无限膨胀）
 MAX_EVENTS_PER_SESSION = 6
 # 话题无活动多久视为冷场（秒），跨天对话重新起话题
-SESSION_STALE_SECONDS = 12 * 3600
+# ⚠️ 这不是"话题结束"的判定阈值（2026-10-05 改）——"话题有没有自然结束"**交给模型判**：
+#    我们只把「话题 + 它什么时候开始的」如实注入，模型自己看时间下判断。
+#    这个值只是**很长的兜底**：隔了这么久，连记录都不值得一提了。
+SESSION_STALE_SECONDS = 24 * 3600
 # 「上次聊过」最多带几条当时的事件（整场搬进来会挤上下文，只要够唤起记忆就行）
 PREV_SESSION_EVENTS_MAX = 2
 
@@ -75,19 +78,30 @@ def session_gap_seconds(user_id: str) -> float | None:
 def get_session(user_id: str) -> dict:
     """读取某用户的会话状态。没有、或已冷场时返回空会话。
 
-    冷场判定：太久没聊（SESSION_STALE_SECONDS，默认 12 小时）→ 旧话题不适用，
-    返回空会话重新起。
+    冷场判定（2026-10-05 改）：**按"话题年龄"（topic_since）而不是"距上次说话"**。
+    为什么改：last_active 每轮都被 probe_session 刷新，所以按它判**永远不会过期**——
+    一个话题哪怕已经持续好几天、中间断过无数次，也永远算"新鲜"。
+    改为看话题**开始**多久了（SESSION_STALE_SECONDS = 24h 兜底），才真的会老化。
 
-    ⚠️ **拿不到时间戳的一律按冷场处理**（老记录/手改记录没有 last_active）。
-    旧写法是 `if last:` 才做判定——缺字段的记录**直接跳过检查、永久免疫**，
-    永远被当【当前会话】注入。2026-09-27 查过线上 106 条都有该字段，所以还没炸；
-    但那是运气不是设计，随手动改数据随时会踩。
+    ⚠️ 这个阈值**不是"话题结束"的判定**——"有没有自然结束"交给模型看时间自己判
+    （注入里会如实写"这个话题是X前开始的"）。这里只是很长的兜底。
+
+    ⚠️ **拿不到时间戳的一律按冷场处理**（老记录/手改记录没有时间字段）。
+    旧写法是 `if last:` 才做判定——缺字段的记录**直接跳过检查、永久免疫**。2026-09-27 查过
+    线上 106 条都有该字段，所以还没炸；但那是运气不是设计，随手动改数据随时会踩。
     """
     sess = _raw_session(user_id)
     if not sess:
         return {"topic": "", "events": [], "last_active": ""}
-    gap = session_gap_seconds(user_id)
-    if gap is None or gap > SESSION_STALE_SECONDS:
+    # 话题年龄优先（新字段）；老记录没有 topic_since 就退回 last_active
+    since = str(sess.get("topic_since") or sess.get("last_active") or "")
+    if not since:
+        return {"topic": "", "events": [], "last_active": ""}
+    try:
+        age = (datetime.now() - datetime.fromisoformat(since)).total_seconds()
+    except (ValueError, TypeError):
+        return {"topic": "", "events": [], "last_active": ""}
+    if age > SESSION_STALE_SECONDS:
         return {"topic": "", "events": [], "last_active": ""}
     return sess
 
@@ -235,10 +249,21 @@ async def probe_session(user_id: str, user_msg: str, history_text: str, client) 
 
     with _lock:
         data = _load()
+        # topic_since = **这个话题是什么时候开始的**（2026-10-05 加）。
+        # 为什么需要：last_active 每轮都刷新，所以它只等于"距上一条消息多久"，
+        # **不表示"这个话题有多旧"**。没有它，模型就算拿到时间也无法判断
+        # "这场对话是不是早就结束了"——它看不到话题的年龄。
+        # 话题延续（changed=False）时**保持不变**，转话题时才重置。
+        prev_since = str(prev.get("topic_since") or "")
+        if not changed and prev_since:
+            topic_since = prev_since
+        else:
+            topic_since = datetime.now().isoformat()
         data[user_id] = {
             "topic": topic or prev_topic,
             "events": events,
             "last_active": datetime.now().isoformat(),
+            "topic_since": topic_since,
         }
         _save(data)
 
@@ -290,17 +315,37 @@ def is_emoji_msg(msg: str) -> bool:
 # ==================== 注入上下文 ====================
 
 def build_session_context(user_id: str) -> str:
-    """生成【当前会话】注入文本。无有效会话返回空串。"""
+    """生成会话记忆的注入文本。无有效会话返回空串。
+
+    ⚠️ 2026-10-05 改：**不再叫「当前话题」/「本场发生」**。
+    旧措辞在断言"这是正在进行的对话"（模型读到"当前"就不会去判时间），
+    而它可能是几小时前那场、早就自然结束了。
+
+    现在只陈述事实：**话题是什么 + 它什么时候开始的 + 期间发生了什么**；
+    "这场还继不继续"交给模型看时间自己判（用户定的原则：不设阈值）。
+    """
     sess = get_session(user_id)
     topic = sess.get("topic", "")
     events = sess.get("events", [])
     if not topic and not events:
         return ""
+    # 话题年龄：优先 topic_since；老记录没这个字段就退回 last_active
+    # （那等于"距上次说话多久"，比话题真实年龄小，但聊胜于无）
+    since = str(sess.get("topic_since") or sess.get("last_active") or "")
+    age = ""
+    if since:
+        try:
+            secs = (datetime.now() - datetime.fromisoformat(since)).total_seconds()
+            g = humanize_gap(secs)
+            if g:
+                age = f"（这个话题是{g}前开始的）"
+        except (ValueError, TypeError):
+            age = ""
     parts = []
     if topic:
-        parts.append(f"当前话题：{topic}")
+        parts.append(f"话题：{topic}{age}")
     if events:
-        parts.append("本场发生：" + "；".join(events))
+        parts.append("期间：" + "；".join(events))
     return "\n".join(parts)
 
 

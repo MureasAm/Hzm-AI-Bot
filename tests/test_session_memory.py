@@ -269,3 +269,54 @@ class TestBuildSessionContext:
         assert "聊了檀香" in ctx
 
 
+class TestTopicAge:
+    """2026-10-05：话题要带**年龄**，且兜底按"话题年龄"而不是"距上次说话"判。
+
+    用户指出的结构问题：会话记忆只随"话题变了"而变，不随时间变——
+    结果隔几小时回来说话，上次那个话题**依旧被当"当前会话"注入**。
+    改法：记住话题**什么时候开始的**（topic_since），如实注入年龄；
+    "有没有自然结束"交给模型判；只留 24h 兜底。
+    """
+
+    def _write(self, tmp_path, monkeypatch, **sess):
+        f = tmp_path / "s.json"
+        monkeypatch.setattr(sm, "SESSION_MEMORY_FILE", f)
+        f.write_text(json.dumps({"u1": sess}, ensure_ascii=False), encoding="utf-8")
+
+    def test_age_is_stated(self, tmp_path, monkeypatch):
+        self._write(tmp_path, monkeypatch, topic="香水", events=[],
+                    topic_since=(datetime.now() - timedelta(hours=3)).isoformat(),
+                    last_active=datetime.now().isoformat())
+        ctx = sm.build_session_context("u1")
+        assert "这个话题是3小时前开始的" in ctx
+        # 不再断言"当前/本场"（旧措辞在断言"这是正在进行的对话"）
+        assert "当前话题" not in ctx
+        assert "本场发生" not in ctx
+
+    def test_fresh_topic_has_no_age_label(self, tmp_path, monkeypatch):
+        """刚开始（<90 秒）不加年龄——humanize_gap 返回空串。"""
+        self._write(tmp_path, monkeypatch, topic="香水", events=[],
+                    topic_since=datetime.now().isoformat(),
+                    last_active=datetime.now().isoformat())
+        ctx = sm.build_session_context("u1")
+        assert "香水" in ctx and "前开始的" not in ctx
+
+    def test_backstop_uses_topic_age_not_last_active(self, tmp_path, monkeypatch):
+        """⚠️ 关键：last_active 每轮都刷新 → 按它判永远不过期。
+
+        所以兜底必须看 topic_since。这里构造"话题 30 小时前开始、
+        但 last_active 是刚刚"——旧逻辑不会拦（gap≈0），新逻辑应该拦。
+        """
+        self._write(tmp_path, monkeypatch, topic="香水", events=[],
+                    topic_since=(datetime.now() - timedelta(hours=30)).isoformat(),
+                    last_active=datetime.now().isoformat())
+        assert sm.build_session_context("u1") == ""
+        assert sm.get_session("u1") == {"topic": "", "events": [], "last_active": ""}
+
+    def test_old_record_without_topic_since_falls_back(self, tmp_path, monkeypatch):
+        """老记录没有 topic_since → 退回 last_active，不能因此被当成"永久有效"。"""
+        self._write(tmp_path, monkeypatch, topic="香水", events=[],
+                    last_active=(datetime.now() - timedelta(hours=30)).isoformat())
+        assert sm.build_session_context("u1") == ""
+
+

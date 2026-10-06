@@ -269,14 +269,21 @@ class TestSelfPronounCleanup:
 
 
 class TestHistoryGapNote:
-    """"距上一轮对话 X"注入【最近对话记录】顶部（一行汇总，不给每行打时间戳）。"""
+    """时间不再以「一行汇总」拼在历史顶部，而是**每条消息自带 [多久前]**。
 
-    def test_note_prepended_to_history(self, monkeypatch):
+    改因（2026-10-05）：旧做法下 gap=10秒 与 gap=3小时 注入的历史**长得一样**，
+    她分不出「刚说完」和「三小时前说的」。现在由 `memory.get_user_history_timed`
+    在每行前渲染 `[3小时前] `，注入层原样拼即可（渲染逻辑见 TestTimedHistory）。
+    """
+
+    def test_gap_note_is_not_prepended_anymore(self, monkeypatch):
         monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
         msgs = core.build_message_list(
             "在吗", [], "", ["用户：在吗", "灰泽满：在呢"], history_gap_note="3天")
         block = [m["content"] for m in msgs if m["content"].startswith("【最近对话记录】")]
-        assert block and block[0].startswith("【最近对话记录】\n（距离上一轮对话已经过去3天了）\n")
+        assert block
+        # 旧的一行汇总**不该**再出现（否则等于同一件事说两遍）
+        assert "距离上一轮对话" not in block[0]
 
     def test_no_note_when_empty(self, monkeypatch):
         monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
