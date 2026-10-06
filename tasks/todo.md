@@ -62,12 +62,12 @@
 ## Task 6: Final verification and documentation
 
 **Acceptance criteria:**
-- [ ] Architecture and operation docs describe shadow mode and promotion gates.
-- [ ] Full tests and lint pass.
-- [ ] Diff contains no real user data or secrets.
+- [x] Architecture and operation docs describe shadow mode and promotion gates.
+- [x] Full tests and lint pass.
+- [x] Diff contains no real user data or secrets.
 
 **Verification:**
-- [ ] `.venv\Scripts\python.exe -m pytest -q`
-- [ ] `.venv\Scripts\ruff.exe check memory_manager.py src\plugins\chatbot\memory_v2.py src\plugins\chatbot\core.py scripts\memory_v2_tool.py scripts\run_tool.py tests\test_memory_v2.py tests\test_memory_v2_tool.py`
+- [x] `.venv\Scripts\python.exe -m pytest -q`
+- [x] `.venv\Scripts\ruff.exe check memory_manager.py src\plugins\chatbot\memory_v2.py src\plugins\chatbot\core.py scripts\memory_v2_tool.py scripts\run_tool.py tests\test_memory_v2.py tests\test_memory_v2_tool.py`
 
 **Dependencies:** Tasks 1-5

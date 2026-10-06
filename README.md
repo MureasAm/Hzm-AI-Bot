@@ -6,7 +6,7 @@
 
 > 一句话：**不是靠模型的聪明，而是靠数据、检索、记忆、评测这套体系的构建，让一个 LLM 从"会聊天"变成"像某个人"。**
 
-**一眼了解：** **54** 真实用户 · **两路 RRF 素材融合 + 两路命中直达** · **三层**记忆 · **746** 单元测试 · **480+** 条人格数据 · **承诺记忆** · **会开口说话（GPT-SoVITS 语音）** · **问题驱动评测**（看到答错记一笔 → 自动变成回归用例）
+**一眼了解：** **54** 真实用户 · **两路 RRF 素材融合 + 两路命中直达** · **三层**记忆 + V2 影子审计 · **797** 单元测试 · **480+** 条人格数据 · **承诺记忆** · **会开口说话（GPT-SoVITS 语音）** · **问题驱动评测**（看到答错记一笔 → 自动变成回归用例）
 
 ---
 
@@ -250,7 +250,7 @@ pip install -e .              # 依赖声明在 pyproject.toml（仓库里没有
 
 ## 人格蒸馏流水线（离线工具箱）
 
-从直播素材到人格数据的全链路：`python scripts/run_tool.py <工具>` 统一入口（18 个子命令按阶段分组）。
+从直播素材到人格数据的全链路：`python scripts/run_tool.py <工具>` 统一入口（20 个子命令按阶段分组）。
 
 ```
 【流水线】persona-pipeline corpus|behaviors
@@ -259,7 +259,7 @@ pip install -e .              # 依赖声明在 pyproject.toml（仓库里没有
 【生成】generate-statements / generate-vectors / generate-persona(--danger) / extract-persona
 【向量】precompute core-stories
 【评测】regression --check / persona-eval / retrieval-eval / problems
-【工具】bili-check / bili-login / vision-test / mine-theme
+【工具】bili-check / bili-login / vision-test / mine-theme / memory-audit / memory-replay
 不在 run_tool（独立运行）：watchdog.py（假死自愈进程）/ notifier.py（SMTP，被 watchdog 用）
                      / update_schedule.py（把周表图丢 data/schedule_inbox/ 后无参跑即 OCR 更新周表）
 ```
@@ -309,7 +309,7 @@ docs/                        # 全部说明文档
     ├── 已删机制登记.md      #     每个被删机制为什么删、实测数据（★★）
     ├── 待办清单.md / 交接文档.md / 版本史.md / 包装语审计.md / 调研-角色对话AI架构.md / ROADMAP.md
 video/                       # Remotion 注入链路说明视频（场景、旁白、字幕、渲染）
-src/plugins/chatbot/         # 运行时核心（25 个 .py）
+src/plugins/chatbot/         # 运行时核心（26 个 .py）
 ├── core.py                  # 主循环（拼 messages + 生成 + 记忆更新 + 防复读）
 ├── chat_window.py           # 读秒攒批窗口 + 分批发送 + 插话取消 + 表情包
 ├── reply_style.py           # 纯函数后处理（clean_reply / split_reply / 防复读检测）
@@ -324,6 +324,7 @@ src/plugins/chatbot/         # 运行时核心（25 个 .py）
 ├── memory.py                # 短期记忆（带锁，每轮带时间戳）
 ├── session_memory.py        # 会话级记忆（话题追踪 + 指代补全）
 ├── group_memory.py          # 群级记忆（成员 id→昵称 + 群近况）
+├── memory_v2.py             # 新记忆契约影子管线（默认不影响回复）
 ├── context_probe.py         # 时间/农历/天气/直播状态感知
 ├── vision.py                # glm-4.6v 看图
 ├── bili_bridge.py           # B站开播/动态 → 私聊广播
@@ -342,12 +343,14 @@ user_memory/                 # 对用户/群的记忆（不入库）
 ├── short_term.json          #   短期（最近几轮原文，每条带时间戳）
 ├── long_term.json           #   长期（用户画像 + 承诺 + last_seen）
 ├── session.json             #   会话级（当前话题 + 本场事件）
-└── groups.json              #   群级（成员身份 + 群近况）
+├── groups.json              #   群级（成员身份 + 群近况）
+├── memory_v2_shadow.json    #   V2 影子状态（开启 MEMORY_V2_SHADOW=1 后产生）
+└── memory_v2_audit.jsonl    #   V2 提取决策审计
 outputs/                     # 分析产物（按阶段分文件夹，不入库）
 assets/                      # 素材（音频、参考音频 voice_refs、表情 emotes）+ 展示图
 data/                        # 运行时状态：bili_state / weibo_state / weibo_cookies(会话jar) / heartbeat / voice_cache / schedule_inbox
 scripts/                     # 离线工具箱 + 自愈：run_tool.py 统一入口；watchdog.py / notifier.py / update_schedule.py 独立运行
-tests/                       # 746 个单元测试
+tests/                       # 797 个单元测试
 ```
 
 ## 结语

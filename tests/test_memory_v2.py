@@ -101,6 +101,26 @@ def test_inferred_preference_needs_three_observations_across_two_sessions(store,
     assert third["session_count"] == 2
 
 
+def test_replaying_same_evidence_does_not_inflate_preference_confidence(store, clock):
+    item = {
+        "kind": "interaction_preference",
+        "key": "banter_tolerance",
+        "value": "high",
+        "explicit": False,
+        "confidence": 0.75,
+    }
+    source = _source("session-a", clock, user="用户继续和灰泽满互怼")
+
+    first = store.ingest("u1", [item], source=source, now=clock)
+    replayed = store.ingest("u1", [item], source=source, now=clock)
+
+    assert first[0]["evidence_count"] == 1
+    assert replayed == []
+    memory = store.snapshot("u1")["memories"][0]
+    assert memory["evidence_count"] == 1
+    assert memory["status"] == "candidate"
+
+
 def test_explicit_interaction_preference_confirms_immediately(store, clock):
     accepted = store.ingest(
         "u1",
@@ -138,6 +158,56 @@ def test_emotional_state_expires_after_six_hours(store, clock):
     assert "很失落" not in store.build_context(
         "u1", "陪我说说话", now=clock + timedelta(hours=6, seconds=1)
     )
+
+
+def test_emotional_state_expires_when_conversation_scope_changes(store, clock):
+    store.ingest(
+        "u1",
+        [{
+            "kind": "emotional_state",
+            "key": "current_emotion",
+            "value": "因为考试结果很失落",
+            "explicit": True,
+            "confidence": 0.95,
+        }],
+        source=_source("scope-a", clock),
+        now=clock,
+    )
+
+    store.ingest(
+        "u1", [],
+        source=_source("scope-b", clock + timedelta(hours=1), user="换个话题"),
+        now=clock + timedelta(hours=1),
+    )
+
+    memory = store.snapshot("u1")["memories"][0]
+    assert memory["status"] == "expired"
+    assert memory["invalidated_at"] == (clock + timedelta(hours=1)).isoformat()
+    assert "很失落" not in store.build_context(
+        "u1", "换个话题", now=clock + timedelta(hours=1), session_id="scope-b"
+    )
+
+
+def test_past_fact_is_not_rendered_as_current_core_profile(store, clock):
+    store.ingest(
+        "u1",
+        [{
+            "kind": "fact",
+            "key": "city",
+            "value": "以前住在广州，现在已经搬走",
+            "temporal_scope": "past",
+            "explicit": True,
+            "confidence": 0.98,
+        }],
+        source=_source(now=clock, user="我以前住广州，现在已经搬走了"),
+        now=clock,
+    )
+
+    memory = store.snapshot("u1")["memories"][0]
+    assert memory["temporal_scope"] == "past"
+    assert "广州" not in store.build_context("u1", "今天天气怎么样", now=clock)
+    assert "过去事实" in store.build_context("u1", "我以前住哪里", now=clock)
+    assert "广州" in store.build_context("u1", "我以前住哪里", now=clock)
 
 
 def test_user_plan_cannot_be_stored_as_assistant_commitment(store, clock):
@@ -202,6 +272,23 @@ def test_sensitive_facts_fail_closed(store, clock, key, value):
     )
 
     assert accepted == []
+
+
+def test_sensitive_data_is_redacted_from_otherwise_valid_source(store, clock):
+    accepted = store.ingest(
+        "u1",
+        [{
+            "kind": "fact",
+            "key": "preferred_name",
+            "value": "小明",
+            "explicit": True,
+            "confidence": 0.99,
+        }],
+        source=_source(now=clock, user="我叫小明，手机号是13800138000"),
+        now=clock,
+    )
+
+    assert accepted[0]["source"]["excerpt"] == "我叫小明，手机号是[redacted]"
 
 
 def test_invalid_preference_value_is_rejected(store, clock):

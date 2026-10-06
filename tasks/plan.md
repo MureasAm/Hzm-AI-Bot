@@ -39,14 +39,14 @@ Build a private-chat-only, disabled-by-default shadow memory pipeline. It extrac
 ### Phase 3: Developer Audit and Replay
 
 - [x] Task 5: Add developer-only `memory-audit` and bounded historical `memory-replay` tool commands.
-- [ ] Task 6: Document enablement, output locations, privacy constraints, and promotion criteria.
+- [x] Task 6: Document enablement, output locations, privacy constraints, and promotion criteria.
 
 ### Checkpoint: Complete
 
-- [ ] Focused memory/session/core tests pass.
-- [ ] Full pytest suite passes.
-- [ ] Ruff passes on touched Python files.
-- [ ] No secrets or real `user_memory/` / `data/chat_log/` contents appear in the diff.
+- [x] Focused memory/session/core tests pass.
+- [x] Full pytest suite passes.
+- [x] Ruff passes on touched Python files.
+- [x] No secrets or real `user_memory/` / `data/chat_log/` contents appear in the diff.
 
 ## Risks and Mitigations
 

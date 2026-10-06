@@ -34,6 +34,7 @@ MAX_SESSION_ID_CHARS = 96
 
 _KINDS = {"fact", "interaction_preference", "emotional_state", "commitment"}
 _ACTIONS = {"upsert", "retract"}
+_TEMPORAL_SCOPES = {"past", "current", "future", "timeless"}
 _PREFERENCE_VALUES = {
     "support_style": {"comfort", "problem_solving", "balanced"},
     "banter_tolerance": {"low", "light", "high"},
@@ -49,6 +50,9 @@ _SENSITIVE_VALUE_PATTERNS = (
     re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)"),
     re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"),
     re.compile(r"(?<!\d)\d{17}[\dXx](?!\d)"),
+)
+_SECRET_ASSIGNMENT_RE = re.compile(
+    r"(?i)(?:password|passwd|pwd|密码)\s*[:：=]?\s*\S+"
 )
 _KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,47}$")
 
@@ -96,6 +100,8 @@ MEMORY_V2_EXTRACT_PROMPT = """你是灰泽满私聊机器人的记忆候选提�
 
 隐私铁律：不要提取电话、邮箱、精确地址、证件、账户、密码、医疗诊断等敏感信息。
 时间铁律：保留“以前/现在/打算/已经结束”等状态，不把过去事实写成当前事实。
+temporal_scope 必须是 past/current/future/timeless：用户过去经历用 past，当前仍成立用 current，
+无时间属性的稳定偏好用 timeless，承诺或尚未发生的计划用 future。
 纠正铁律：用户明确否定或纠正旧信息时 action=retract；其他新增/确认使用 action=upsert。
 不确定就不提取。不要为了显得有记忆而凑内容。
 
@@ -107,6 +113,7 @@ MEMORY_V2_EXTRACT_PROMPT = """你是灰泽满私聊机器人的记忆候选提�
       "key": "小写英文键",
       "value": "简洁、保留限定词的中文内容",
       "action": "upsert|retract",
+      "temporal_scope": "past|current|future|timeless",
       "explicit": true,
       "confidence": 0.0,
       "actor": "assistant"
@@ -217,8 +224,6 @@ async def extract_and_ingest(
     except Exception:
         return []
     payload = parse_extraction_payload(_response_text(response))
-    if not payload["items"]:
-        return []
     return store.ingest(
         user_id,
         payload["items"],
@@ -245,7 +250,17 @@ def _bounded_text(value: Any, limit: int) -> str:
 
 
 def _contains_sensitive_value(value: str) -> bool:
-    return any(pattern.search(value) for pattern in _SENSITIVE_VALUE_PATTERNS)
+    return (
+        any(pattern.search(value) for pattern in _SENSITIVE_VALUE_PATTERNS)
+        or bool(_SECRET_ASSIGNMENT_RE.search(value))
+    )
+
+
+def _redact_sensitive_excerpt(value: str) -> str:
+    redacted = value
+    for pattern in _SENSITIVE_VALUE_PATTERNS:
+        redacted = pattern.sub("[redacted]", redacted)
+    return _SECRET_ASSIGNMENT_RE.sub("[redacted]", redacted)
 
 
 def _ngrams(text: str) -> set[str]:
@@ -314,7 +329,7 @@ class ShadowMemoryStore:
             return None
         observed = _iso(source.get("observed_at")) or now
         raw = source.get("assistant_text") if role == "assistant" else source.get("user_text")
-        excerpt = _bounded_text(raw, MAX_SOURCE_CHARS)
+        excerpt = _redact_sensitive_excerpt(_bounded_text(raw, MAX_SOURCE_CHARS))
         if not excerpt:
             return None
         return {
@@ -333,6 +348,7 @@ class ShadowMemoryStore:
         action = _bounded_text(item.get("action") or "upsert", 16)
         explicit = item.get("explicit")
         confidence = item.get("confidence")
+        temporal_scope = _bounded_text(item.get("temporal_scope"), 16)
 
         if kind not in _KINDS or action not in _ACTIONS:
             return None, "unsupported_kind_or_action"
@@ -347,6 +363,24 @@ class ShadowMemoryStore:
             return None, "confidence_out_of_range"
         if key in _SENSITIVE_KEYS or _contains_sensitive_value(value):
             return None, "sensitive_data_blocked"
+
+        default_scope = {
+            "fact": "current",
+            "interaction_preference": "timeless",
+            "emotional_state": "current",
+            "commitment": "future",
+        }[kind]
+        temporal_scope = temporal_scope or default_scope
+        if temporal_scope not in _TEMPORAL_SCOPES:
+            return None, "invalid_temporal_scope"
+        allowed_scopes = {
+            "fact": {"past", "current", "timeless"},
+            "interaction_preference": {"current", "timeless"},
+            "emotional_state": {"current"},
+            "commitment": {"future", "current"},
+        }[kind]
+        if temporal_scope not in allowed_scopes:
+            return None, "temporal_scope_mismatch"
 
         role = "assistant" if kind == "commitment" else "user"
         normalized_source = self._normalize_source(source, role, now)
@@ -371,6 +405,7 @@ class ShadowMemoryStore:
             "action": action,
             "explicit": explicit,
             "confidence": confidence,
+            "temporal_scope": temporal_scope,
             "source": normalized_source,
         }
         return normalized, "accepted"
@@ -378,6 +413,13 @@ class ShadowMemoryStore:
     @staticmethod
     def _memory_id(kind: str, key: str, value: str) -> str:
         raw = f"{kind}\0{key}\0{value}".encode("utf-8")
+        return hashlib.sha256(raw).hexdigest()[:20]
+
+    @staticmethod
+    def _evidence_id(source: dict) -> str:
+        raw = "\0".join(str(source.get(key) or "") for key in (
+            "role", "excerpt", "session_id", "observed_at",
+        )).encode("utf-8")
         return hashlib.sha256(raw).hexdigest()[:20]
 
     def ingest(self, user_id: str, items: list, *, source: dict, now: datetime | None = None) -> list[dict]:
@@ -391,6 +433,18 @@ class ShadowMemoryStore:
             state = self._load()
             user = state["users"].setdefault(user_id, {"memories": [], "updated_at": now.isoformat()})
             memories = user.setdefault("memories", [])
+            current_scope = _bounded_text(
+                source.get("session_id") if isinstance(source, dict) else "",
+                MAX_SESSION_ID_CHARS,
+            )
+            if current_scope:
+                for memory in memories:
+                    memory_scope = (memory.get("source") or {}).get("session_id")
+                    if (memory.get("kind") == "emotional_state"
+                            and memory.get("status") == "active"
+                            and memory_scope and memory_scope != current_scope):
+                        memory["status"] = "expired"
+                        memory["invalidated_at"] = now.isoformat()
 
             for raw_item in items[:20]:
                 item, reason = self._normalize_item(raw_item, source, now)
@@ -418,6 +472,7 @@ class ShadowMemoryStore:
                     continue
 
                 memory_id = self._memory_id(item["kind"], item["key"], item["value"])
+                evidence_id = self._evidence_id(item["source"])
                 existing = next((m for m in memories if m.get("id") == memory_id), None)
                 if existing is None:
                     if item["explicit"] and item["kind"] in {"fact", "interaction_preference"}:
@@ -434,7 +489,9 @@ class ShadowMemoryStore:
                         "status": status,
                         "explicit": item["explicit"],
                         "confidence": item["confidence"],
+                        "temporal_scope": item["temporal_scope"],
                         "evidence_count": 1,
+                        "evidence_ids": [evidence_id],
                         "session_ids": [item["source"]["session_id"]],
                         "session_count": 1,
                         "created_at": now.isoformat(),
@@ -445,6 +502,18 @@ class ShadowMemoryStore:
                         existing["expires_at"] = (now + EMOTION_TTL).isoformat()
                     memories.append(existing)
                 else:
+                    evidence_ids = list(existing.get("evidence_ids") or [])
+                    if not evidence_ids and isinstance(existing.get("source"), dict):
+                        evidence_ids.append(self._evidence_id(existing["source"]))
+                    if evidence_id in evidence_ids:
+                        self._audit({
+                            "t": now.isoformat(), "user_id": user_id,
+                            "decision": "duplicate_evidence",
+                            "memory_id": existing["id"],
+                        })
+                        continue
+                    evidence_ids.append(evidence_id)
+                    existing["evidence_ids"] = evidence_ids[-50:]
                     existing["evidence_count"] = int(existing.get("evidence_count", 1)) + 1
                     session_ids = list(existing.get("session_ids") or [])
                     if item["source"]["session_id"] not in session_ids:
@@ -454,6 +523,7 @@ class ShadowMemoryStore:
                     existing["last_observed_at"] = now.isoformat()
                     existing["source"] = item["source"]
                     existing["confidence"] = max(float(existing.get("confidence", 0)), item["confidence"])
+                    existing["temporal_scope"] = item["temporal_scope"]
                     if item["explicit"]:
                         existing["explicit"] = True
                         existing["status"] = "active" if item["kind"] in {"emotional_state", "commitment"} else "confirmed"
@@ -494,7 +564,14 @@ class ShadowMemoryStore:
         result.setdefault("memories", [])
         return result
 
-    def build_context(self, user_id: str, query: str, *, now: datetime | None = None) -> str:
+    def build_context(
+        self,
+        user_id: str,
+        query: str,
+        *,
+        now: datetime | None = None,
+        session_id: str | None = None,
+    ) -> str:
         now = now or datetime.now()
         memories = self.snapshot(user_id).get("memories", [])
         active = []
@@ -505,6 +582,9 @@ class ShadowMemoryStore:
             if memory.get("kind") == "emotional_state":
                 expires = _iso(memory.get("expires_at"))
                 if expires is None or expires <= now:
+                    continue
+                memory_scope = (memory.get("source") or {}).get("session_id")
+                if session_id and memory_scope and memory_scope != session_id:
                     continue
             active.append(memory)
 
@@ -524,9 +604,19 @@ class ShadowMemoryStore:
         core_keys = {"preferred_name", "name", "city"}
         facts = [m for m in active if m.get("kind") == "fact"]
         facts.sort(key=lambda m: (m.get("key") not in core_keys, -_relevance(query, m)))
-        selected_facts = [m for m in facts if m.get("key") in core_keys or _relevance(query, m) > 0][:4]
+        selected_facts = [
+            m for m in facts
+            if (
+                (m.get("key") in core_keys and m.get("temporal_scope") != "past")
+                or _relevance(query, m) > 0
+                or (m.get("temporal_scope") == "past" and any(k in query for k in ("以前", "过去", "曾经")))
+            )
+        ][:4]
         if selected_facts:
-            rendered = "；".join(f"{m.get('key')}：{m.get('value')}" for m in selected_facts)
+            rendered = "；".join(
+                f"{'过去事实/' if m.get('temporal_scope') == 'past' else ''}{m.get('key')}：{m.get('value')}"
+                for m in selected_facts
+            )
             lines.append(f"【相关用户事实】{rendered}")
 
         commitments = [m for m in active if m.get("kind") == "commitment" and _relevance(query, m) > 0]

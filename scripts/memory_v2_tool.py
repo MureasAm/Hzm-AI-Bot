@@ -189,27 +189,30 @@ async def replay(
 
     turns = 0
     accepted = 0
-    for record in iter_private_turns(paths, limit=limit):
-        turns += 1
-        try:
-            timestamp = float(record.get("t") or 0)
-        except (TypeError, ValueError):
-            timestamp = 0
-        observed_at = datetime.fromtimestamp(timestamp) if timestamp > 0 else datetime.now()
-        # A six-hour evidence bucket is only an offline replay scope.  Runtime
-        # shadow extraction uses the live topic/session timestamp from core.
-        scope = f"{record['session']}:{int(timestamp // (6 * 3600)) if timestamp else turns}"
-        items = await extract_and_ingest(
-            client=client,
-            model=_common.get_model_name(),
-            store=store,
-            user_id=str(record["session"]),
-            user_text=str(record["user"]),
-            assistant_text=str(record["reply"]),
-            session_id=scope,
-            observed_at=observed_at,
-        )
-        accepted += len(items)
+    try:
+        for record in iter_private_turns(paths, limit=limit):
+            turns += 1
+            try:
+                timestamp = float(record.get("t") or 0)
+            except (TypeError, ValueError):
+                timestamp = 0
+            observed_at = datetime.fromtimestamp(timestamp) if timestamp > 0 else datetime.now()
+            # A six-hour evidence bucket is only an offline replay scope.  Runtime
+            # shadow extraction uses the live topic/session timestamp from core.
+            scope = f"{record['session']}:{int(timestamp // (6 * 3600)) if timestamp else turns}"
+            items = await extract_and_ingest(
+                client=client,
+                model=_common.get_model_name(),
+                store=store,
+                user_id=str(record["session"]),
+                user_text=str(record["user"]),
+                assistant_text=str(record["reply"]),
+                session_id=scope,
+                observed_at=observed_at,
+            )
+            accepted += len(items)
+    finally:
+        await client.close()
 
     report = build_audit_report(load_state(out_dir / "replay_shadow.json"))
     report.update({"turns_replayed": turns, "accepted_updates": accepted})
