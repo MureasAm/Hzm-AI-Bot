@@ -3,7 +3,13 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from src.plugins.chatbot.memory_v2 import ShadowMemoryStore
+from src.plugins.chatbot.memory_v2 import (
+    ShadowMemoryStore,
+    build_extraction_prompt,
+    extract_and_ingest,
+    parse_extraction_payload,
+    shadow_enabled,
+)
 
 
 @pytest.fixture
@@ -310,3 +316,102 @@ def test_delete_user_removes_state_but_keeps_other_users(store, clock):
 
     assert store.snapshot("u1")["memories"] == []
     assert store.snapshot("u2")["memories"][0]["value"] == "小红"
+
+
+class TestShadowExtraction:
+    def test_feature_flag_is_disabled_by_default(self, monkeypatch):
+        monkeypatch.delenv("MEMORY_V2_SHADOW", raising=False)
+        assert shadow_enabled() is False
+
+    def test_feature_flag_requires_explicit_one(self, monkeypatch):
+        monkeypatch.setenv("MEMORY_V2_SHADOW", "1")
+        assert shadow_enabled() is True
+        monkeypatch.setenv("MEMORY_V2_SHADOW", "true")
+        assert shadow_enabled() is False
+
+    def test_parser_accepts_strict_json_or_json_fence(self):
+        payload = '{"items":[{"kind":"fact","key":"city","value":"广州"}]}'
+        assert parse_extraction_payload(payload)["items"][0]["key"] == "city"
+        assert parse_extraction_payload(f"```json\n{payload}\n```")["items"][0]["value"] == "广州"
+
+    @pytest.mark.parametrize("content", ["", "null", "[]", "{broken", '{"items":"no"}'])
+    def test_parser_fails_closed(self, content):
+        assert parse_extraction_payload(content) == {"items": []}
+
+    def test_prompt_separates_user_plan_from_assistant_commitment(self, store, clock):
+        prompt = build_extraction_prompt(
+            user_text="我打算周六直播",
+            assistant_text="那你加油",
+            current_summary="（无）",
+            session_id="session-a",
+            observed_at=clock,
+        )
+
+        assert "承诺只从灰泽满回复中提取" in prompt
+        assert "用户自己的计划不是灰泽满的承诺" in prompt
+        assert '"actor": "assistant"' in prompt
+
+    async def test_extract_and_ingest_uses_strict_schema(self, store, clock):
+        captured = {}
+
+        class FakeCompletions:
+            async def create(self, **kwargs):
+                captured.update(kwargs)
+                content = json.dumps({
+                    "items": [{
+                        "kind": "interaction_preference",
+                        "key": "support_style",
+                        "value": "comfort",
+                        "action": "upsert",
+                        "explicit": True,
+                        "confidence": 0.98,
+                    }]
+                }, ensure_ascii=False)
+                message = type("Message", (), {"content": content})()
+                choice = type("Choice", (), {"message": message})()
+                return type("Response", (), {"choices": [choice]})()
+
+        client = type(
+            "Client", (),
+            {"chat": type("Chat", (), {"completions": FakeCompletions()})()},
+        )()
+
+        accepted = await extract_and_ingest(
+            client=client,
+            model="test-model",
+            store=store,
+            user_id="u1",
+            user_text="我难受时你先安慰我就好",
+            assistant_text="知道了",
+            session_id="session-a",
+            observed_at=clock,
+        )
+
+        assert accepted[0]["status"] == "confirmed"
+        assert captured["temperature"] == 0.1
+        assert captured["max_tokens"] >= 400
+        assert captured["extra_body"]["thinking"]["type"] == "disabled"
+
+    async def test_extract_failure_does_not_write(self, store, clock):
+        class BrokenCompletions:
+            async def create(self, **kwargs):
+                raise RuntimeError("upstream unavailable")
+
+        client = type(
+            "Client", (),
+            {"chat": type("Chat", (), {"completions": BrokenCompletions()})()},
+        )()
+
+        accepted = await extract_and_ingest(
+            client=client,
+            model="test-model",
+            store=store,
+            user_id="u1",
+            user_text="我叫小明",
+            assistant_text="知道了",
+            session_id="session-a",
+            observed_at=clock,
+        )
+
+        assert accepted == []
+        assert store.snapshot("u1")["memories"] == []

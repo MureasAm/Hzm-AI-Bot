@@ -742,6 +742,51 @@ class TestUpdateMemoryTaskRetry:
         assert called == []  # 无新信息，不写卡
 
 
+class TestMemoryV2ShadowTask:
+    async def test_disabled_flag_does_not_initialize_client(self, monkeypatch):
+        monkeypatch.setattr(core.memory_v2, "shadow_enabled", lambda: False)
+
+        def fail_clients():
+            raise AssertionError("影子开关关闭时不应初始化客户端")
+
+        monkeypatch.setattr(core, "_get_clients", fail_clients)
+        result = await core.update_memory_v2_shadow_task(
+            "u", "我叫小明", "知道了", "scope-a"
+        )
+        assert result == []
+
+    async def test_enabled_flag_passes_private_turn_to_extractor(self, monkeypatch):
+        monkeypatch.setattr(core.memory_v2, "shadow_enabled", lambda: True)
+        fake_client = object()
+        monkeypatch.setattr(core, "_get_clients", lambda: (fake_client, None))
+        monkeypatch.setattr(core, "_get_model_name", lambda: "test-model")
+        captured = {}
+
+        async def fake_extract(**kwargs):
+            captured.update(kwargs)
+            return [{"kind": "fact"}]
+
+        monkeypatch.setattr(core.memory_v2, "extract_and_ingest", fake_extract)
+        result = await core.update_memory_v2_shadow_task(
+            "u", "我叫小明", "知道了", "scope-a"
+        )
+
+        assert result == [{"kind": "fact"}]
+        assert captured["client"] is fake_client
+        assert captured["model"] == "test-model"
+        assert captured["user_id"] == "u"
+        assert captured["session_id"] == "scope-a"
+
+    async def test_pure_emoji_is_skipped(self, monkeypatch):
+        monkeypatch.setattr(core.memory_v2, "shadow_enabled", lambda: True)
+
+        def fail_clients():
+            raise AssertionError("纯表情不应产生记忆提取调用")
+
+        monkeypatch.setattr(core, "_get_clients", fail_clients)
+        assert await core.update_memory_v2_shadow_task("u", "😭", "咋了", "scope-a") == []
+
+
 class TestEmotionOnlyQuery:
     """纯情绪补全句检测：'可惜🤭'被 probe 补全成'用户发了个X的表情'时跳过语义检索。"""
 

@@ -3,7 +3,16 @@ from datetime import date, datetime, timedelta
 
 import pytest
 
-from memory_manager import merge_memory_card, update_user_memory, build_memory_context
+from memory_manager import (
+    MEMORY_EXTRACT_PROMPT,
+    build_memory_context,
+    merge_memory_card,
+)
+
+
+def test_memory_prompt_does_not_turn_user_plan_into_assistant_promise():
+    assert '"我打算周六直播" → new_promise="周六直播"' not in MEMORY_EXTRACT_PROMPT
+    assert "用户自己的计划不是灰泽满的承诺" in MEMORY_EXTRACT_PROMPT
 
 
 class TestMergeMemoryCard:

@@ -28,13 +28,13 @@ Build a private-chat-only, disabled-by-default shadow memory pipeline. It extrac
 
 ### Phase 2: Runtime Shadow Slice
 
-- [ ] Task 3: Add the structured extraction prompt and asynchronous private-chat shadow hook behind `MEMORY_V2_SHADOW=1`.
-- [ ] Task 4: Correct the legacy promise example so user plans cannot be recorded as assistant commitments.
+- [x] Task 3: Add the structured extraction prompt and asynchronous private-chat shadow hook behind `MEMORY_V2_SHADOW=1`.
+- [x] Task 4: Correct the legacy promise example so user plans cannot be recorded as assistant commitments.
 
 ### Checkpoint: Runtime
 
-- [ ] Existing legacy replies and memory injection are unchanged when the flag is absent.
-- [ ] Invalid or failed extraction silently degrades without affecting replies.
+- [x] Existing legacy replies and memory injection are unchanged when the flag is absent.
+- [x] Invalid or failed extraction silently degrades without affecting replies.
 
 ### Phase 3: Developer Audit and Replay
 

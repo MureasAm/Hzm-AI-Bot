@@ -12,13 +12,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from .constants import PROJECT_ROOT
+from .constants import PROJECT_ROOT, THINKING_DISABLED
 
 
 DEFAULT_STATE_FILE = PROJECT_ROOT / "user_memory" / "memory_v2_shadow.json"
@@ -65,6 +66,170 @@ _PREFERENCE_BEHAVIORS = {
     ("care_initiative", "reserved"): "用户没有主动展开时不要追问隐私或情绪原因。",
     ("care_initiative", "balanced"): "可以关心一次；用户不展开就自然换回当前话题。",
 }
+
+
+MEMORY_V2_EXTRACT_PROMPT = """你是灰泽满私聊机器人的记忆候选提取器。你的输出不会直接成为事实，
+还会经过代码校验和影子审计。只根据下面这一次真实对话提取，不要脑补。
+
+【时间与会话】
+观测时间：{observed_at}
+证据会话：{session_id}
+
+【当前影子记忆摘要】
+{current_summary}
+
+【本轮对话】
+用户：{user_text}
+灰泽满：{assistant_text}
+
+只允许四种 kind：
+1. fact：用户明确说出的稳定事实。一次性状态、推断身份不提取；explicit 必须为 true。
+2. interaction_preference：用户喜欢怎样被回应。key/value 只能是：
+   support_style=comfort|problem_solving|balanced
+   banter_tolerance=low|light|high
+   directness=gentle|direct|balanced
+   care_initiative=proactive|reserved|balanced
+   用户明确说喜欢/不喜欢时 explicit=true；仅从互动表现推断时 explicit=false。
+3. emotional_state：本场临时情绪，key 固定 current_emotion。不要写成长期性格。
+4. commitment：灰泽满本轮明确答应用户、需要以后兑现的事。承诺只从灰泽满回复中提取，
+   用户自己的计划不是灰泽满的承诺；actor 必须是 assistant，explicit 必须为 true。
+
+隐私铁律：不要提取电话、邮箱、精确地址、证件、账户、密码、医疗诊断等敏感信息。
+时间铁律：保留“以前/现在/打算/已经结束”等状态，不把过去事实写成当前事实。
+纠正铁律：用户明确否定或纠正旧信息时 action=retract；其他新增/确认使用 action=upsert。
+不确定就不提取。不要为了显得有记忆而凑内容。
+
+只输出严格 JSON：
+{{
+  "items": [
+    {{
+      "kind": "fact|interaction_preference|emotional_state|commitment",
+      "key": "小写英文键",
+      "value": "简洁、保留限定词的中文内容",
+      "action": "upsert|retract",
+      "explicit": true,
+      "confidence": 0.0,
+      "actor": "assistant"
+    }}
+  ]
+}}
+没有候选时返回 {{"items":[]}}。不要 markdown，不要额外文字。
+"""
+
+
+def shadow_enabled() -> bool:
+    """Shadow extraction is opt-in; only the literal value ``1`` enables it."""
+    return os.environ.get("MEMORY_V2_SHADOW", "0") == "1"
+
+
+def parse_extraction_payload(content: str) -> dict:
+    """Parse model output without repairing or guessing malformed data."""
+    raw = (content or "").strip()
+    if raw.startswith("```json"):
+        raw = raw[len("```json"):]
+    elif raw.startswith("```"):
+        raw = raw[3:]
+    if raw.endswith("```"):
+        raw = raw[:-3]
+    raw = raw.strip()
+    if not raw or raw == "null":
+        return {"items": []}
+    try:
+        payload = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return {"items": []}
+    if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+        return {"items": []}
+    return {"items": payload["items"][:20]}
+
+
+def build_extraction_prompt(
+    *,
+    user_text: str,
+    assistant_text: str,
+    current_summary: str,
+    session_id: str,
+    observed_at: datetime,
+) -> str:
+    """Render the strict write-path prompt with bounded untrusted text."""
+    return MEMORY_V2_EXTRACT_PROMPT.format(
+        observed_at=observed_at.isoformat(),
+        session_id=_bounded_text(session_id, MAX_SESSION_ID_CHARS),
+        current_summary=_bounded_text(current_summary, 1200) or "（无）",
+        user_text=_bounded_text(user_text, 1000),
+        assistant_text=_bounded_text(assistant_text, 1000),
+    )
+
+
+def _response_text(response: Any) -> str:
+    try:
+        content = response.choices[0].message.content
+    except (AttributeError, IndexError, TypeError):
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            str(part.get("text", "")) if isinstance(part, dict) else str(getattr(part, "text", ""))
+            for part in content
+        )
+    return ""
+
+
+def _extraction_summary(store: "ShadowMemoryStore", user_id: str) -> str:
+    memories = store.snapshot(user_id).get("memories", [])
+    visible = [
+        f"{m.get('kind')}/{m.get('key')}={m.get('value')}({m.get('status')})"
+        for m in memories
+        if m.get("status") not in {"superseded", "expired"}
+    ]
+    return "；".join(visible)[:1200] or "（无）"
+
+
+async def extract_and_ingest(
+    *,
+    client: Any,
+    model: str,
+    store: "ShadowMemoryStore",
+    user_id: str,
+    user_text: str,
+    assistant_text: str,
+    session_id: str,
+    observed_at: datetime | None = None,
+) -> list[dict]:
+    """Run one strict shadow extraction; failures never escape to chat flow."""
+    observed_at = observed_at or datetime.now()
+    prompt = build_extraction_prompt(
+        user_text=user_text,
+        assistant_text=assistant_text,
+        current_summary=_extraction_summary(store, user_id),
+        session_id=session_id,
+        observed_at=observed_at,
+    )
+    try:
+        response = await client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+            max_tokens=500,
+            **THINKING_DISABLED,
+        )
+    except Exception:
+        return []
+    payload = parse_extraction_payload(_response_text(response))
+    if not payload["items"]:
+        return []
+    return store.ingest(
+        user_id,
+        payload["items"],
+        source={
+            "session_id": session_id,
+            "observed_at": observed_at.isoformat(),
+            "user_text": user_text,
+            "assistant_text": assistant_text,
+        },
+        now=observed_at,
+    )
 
 
 def _iso(value: Any) -> datetime | None:
@@ -401,4 +566,13 @@ class ShadowMemoryStore:
             })
 
 
-__all__ = ["ShadowMemoryStore", "DEFAULT_STATE_FILE", "DEFAULT_AUDIT_FILE"]
+__all__ = [
+    "ShadowMemoryStore",
+    "DEFAULT_STATE_FILE",
+    "DEFAULT_AUDIT_FILE",
+    "MEMORY_V2_EXTRACT_PROMPT",
+    "shadow_enabled",
+    "parse_extraction_payload",
+    "build_extraction_prompt",
+    "extract_and_ingest",
+]

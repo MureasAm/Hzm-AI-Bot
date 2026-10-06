@@ -27,23 +27,23 @@
 ## Task 3: Integrate disabled-by-default extraction
 
 **Acceptance criteria:**
-- [ ] Only private chats are eligible.
-- [ ] The absent feature flag produces zero Memory V2 calls/writes.
-- [ ] Extraction failure never affects the user reply.
+- [x] Only private chats are eligible.
+- [x] The absent feature flag produces zero Memory V2 calls/writes.
+- [x] Extraction failure never affects the user reply.
 
 **Verification:**
-- [ ] `.venv\Scripts\python.exe -m pytest tests\test_memory_v2.py tests\test_core.py -q`
+- [x] `.venv\Scripts\python.exe -m pytest tests\test_memory_v2.py tests\test_core.py -q`
 
 **Dependencies:** Task 2
 
 ## Task 4: Fix legacy commitment extraction ambiguity
 
 **Acceptance criteria:**
-- [ ] The prompt never treats a user's plan as an assistant promise.
-- [ ] A regression test guards the distinction.
+- [x] The prompt never treats a user's plan as an assistant promise.
+- [x] A regression test guards the distinction.
 
 **Verification:**
-- [ ] `.venv\Scripts\python.exe -m pytest tests\test_memory.py -q`
+- [x] `.venv\Scripts\python.exe -m pytest tests\test_memory.py -q`
 
 **Dependencies:** None
 

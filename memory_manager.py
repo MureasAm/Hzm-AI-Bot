@@ -2,7 +2,6 @@ import json
 import threading
 from pathlib import Path
 from datetime import date, datetime
-from typing import Optional, Dict, Any
 
 MEMORY_FILE = Path(__file__).resolve().parent / "user_memory" / "long_term.json"
 
@@ -411,7 +410,7 @@ MEMORY_EXTRACT_PROMPT = """
 该提取：
 - "我平时挺喜欢熬夜的" → new_impression="夜猫子"
 - "我在广州上班" → new_user_fact="在广州上班"，new_city="广州"
-- "我打算周六直播" → new_promise="周六直播"
+- 用户问"下次能唱吗"，灰泽满明确回答"行，下次给你唱" → new_promise="下次给用户唱一段"
 不该提取（返回 null）：
 - "今天好累啊"（一次性状态）
 - "哈哈哈""晚安""你吃饭了吗"（寒暄，无新信息）
@@ -423,6 +422,7 @@ MEMORY_EXTRACT_PROMPT = """
 
 **关于承诺（new_promise）**：
 - 记录灰泽满对用户明确做出的承诺/约定（如"明天一定直播""这周不鸽""下次补翻唱"）。
+- **用户自己的计划不是灰泽满的承诺**：用户说"我打算周六直播/明天提醒我学习"，不能仅凭用户这句话写入 new_promise；必须以灰泽满本轮回复里确实答应了什么为准。
 - 判断标准：对用户明确承诺的、值得跨会话记住的事才记录；随口客套（"以后再说吧""有机会一起"）不记。
 
 **关于用户城市（new_city）**：

@@ -33,6 +33,7 @@ from .corpus_judge import judge_corpus
 from .constants import SPLIT_DELAY_MIN_MS, SPLIT_DELAY_MAX_MS  # noqa: F401 — test_core 校验分段延迟上下限时读它
 from . import context_probe
 from . import group_memory
+from . import memory_v2
 from .routing import (
     LEGENDARY_REPLIES, LEGENDARY_CONFIRMS, legendary_confirmed, legendary_hit, classify_l3,
     _repair_llm_json,
@@ -41,8 +42,11 @@ from .reply_style import (
     clean_reply, is_echo_reply, is_emotion_only_query,
 )
 from .session_memory import (
-    probe_session, build_session_context, is_emoji_msg, previous_session_note,
+    probe_session, build_session_context, get_session, is_emoji_msg, previous_session_note,
 )
+
+
+_MEMORY_V2_STORE = memory_v2.ShadowMemoryStore()
 
 
 # ==================== 🎭 基础人设提示词 ====================
@@ -667,6 +671,38 @@ async def update_memory_task(user_id: str, user_msg: str, reply: str, user_memor
             traceback.print_exc()
 
 
+async def update_memory_v2_shadow_task(
+    user_id: str,
+    user_msg: str,
+    reply: str,
+    session_id: str,
+) -> list[dict]:
+    """Extract one private turn into the opt-in V2 shadow store.
+
+    This path is deliberately fail-closed and has no influence on the reply.
+    Keeping the feature check inside the task also makes direct/offline callers
+    safe when the environment flag is absent.
+    """
+    if not memory_v2.shadow_enabled():
+        return []
+    msg = (user_msg or "").strip()
+    if not msg or is_emoji_msg(msg):
+        return []
+    try:
+        deepseek_client, _ = _get_clients()
+        return await memory_v2.extract_and_ingest(
+            client=deepseek_client,
+            model=_get_model_name(),
+            store=_MEMORY_V2_STORE,
+            user_id=user_id,
+            user_text=user_msg,
+            assistant_text=reply,
+            session_id=session_id,
+        )
+    except Exception:
+        return []
+
+
 async def gather_retrieval(query_text: str, retrieval_query: str, history_text: str,
                            deepseek_client, zhipu_client,
                            is_user_msg: bool = True) -> dict:
@@ -771,7 +807,6 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     # --- 会话级记忆：对话前同步探测（判断话题延续/转换 + 短 query 扩充） ---
     # 必须在组装消息前完成，这样本轮注入的就是本轮自己的话题，不滞后一轮。
     query_text = user_msg.strip()
-    user_history = get_user_history(user_id)
     # ⚠️ 带每条时间戳的版本（2026-10-05）：让模型看出"刚说完"和"三小时前说的"。
     #    两个消费者都用它：① 注入层（【最近对话记录】）② L3 判 same_request
     #    ——L3 必须知道那几轮之间隔了多久，否则隔 8 小时的一句会被算成"连着"。
@@ -802,6 +837,12 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         print(f"[表情] 按字面含义注入（不猜）: {retrieval_query}")
     # 话题/事件已在本轮探测中更新，取最新会话状态
     session_context = build_session_context(user_id)
+    _session_state = get_session(user_id)
+    memory_scope_id = str(
+        _session_state.get("topic_since")
+        or _session_state.get("last_active")
+        or f"turn-{int(time.time())}"
+    )
 
     # --- 🃏 经典梗硬匹配（双路由：关键词粗筛 + LLM 语境确认，防误触发） ---
     _confirm_history = ""
@@ -823,6 +864,10 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
             if not is_group:  # 群会话不建用户记忆卡
                 card = get_user_memory(user_id)
                 asyncio.create_task(update_memory_task(user_id, user_msg, reply, card))
+                if memory_v2.shadow_enabled():
+                    asyncio.create_task(update_memory_v2_shadow_task(
+                        user_id, user_msg, reply, memory_scope_id,
+                    ))
             return reply
 
     # --- 🎭 人格规则 + 🔍 检索融合（query 只算 1 次 embedding）---
@@ -910,5 +955,9 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     # --- 📝 异步更新长期记忆（会话级记忆已在对话前 probe_session 同步更新） ---
     if not is_group:  # 群会话不建用户记忆卡
         asyncio.create_task(update_memory_task(user_id, record_msg, reply, user_memory_card))
+        if memory_v2.shadow_enabled():
+            asyncio.create_task(update_memory_v2_shadow_task(
+                user_id, record_msg, reply, memory_scope_id,
+            ))
 
     return reply
