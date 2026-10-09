@@ -14,10 +14,15 @@ import src.plugins.chatbot.session_memory as sm
 
 @pytest.fixture(autouse=True)
 def _isolate_file(tmp_path, monkeypatch):
-    """把 SESSION_MEMORY_FILE 指向临时文件，避免污染线上数据。"""
-    f = tmp_path / "session_memory.json"
-    monkeypatch.setattr(sm, "SESSION_MEMORY_FILE", f)
-    yield f
+    """整个会话记忆指到临时目录（2026-10-09 起**按会话分文件**）。
+
+    `use_storage` 一次改齐目录/旧单文件路径/迁移标志——只改文件路径的话，
+    用例里那条 `SESSION_MEMORY_FILE = ...` 就成了"半隔离"，写会落到真实
+    `user_memory/session/` 去。yield 的那个路径是**旧单文件**，
+    用例仍可以用它 preload 老格式数据（正好顺带测迁移）。
+    """
+    sm.use_storage(tmp_path)
+    yield tmp_path / "session.json"
 
 
 class TestGetSession:
@@ -175,8 +180,7 @@ class TestProbeSession:
         monkeypatch.setattr(sm, "_llm", fake_llm)
         out = await sm.probe_session("u1", "你好", "历史", object())
 
-        data = json.loads(f.read_text(encoding="utf-8"))
-        sess = data["u1"]
+        sess = json.loads(sm._file_for("u1").read_text(encoding="utf-8"))   # 按会话分文件
         assert sess["topic"] == "香水"
         assert "聊了檀香" in sess["events"]
         assert "被夸香水好闻" in sess["events"]
@@ -201,8 +205,7 @@ class TestProbeSession:
         monkeypatch.setattr(sm, "_llm", fake_llm)
         await sm.probe_session("u1", "你会游泳吗", "历史", object())
 
-        data = json.loads(f.read_text(encoding="utf-8"))
-        sess = data["u1"]
+        sess = json.loads(sm._file_for("u1").read_text(encoding="utf-8"))
         assert sess["topic"] == "聊起游泳"
         assert sess["events"] == ["说想去游泳"]  # 旧事件被清空
 
@@ -320,3 +323,30 @@ class TestTopicAge:
         assert sm.build_session_context("u1") == ""
 
 
+
+
+class TestPerSessionFiles:
+    """会话记忆也按会话分文件（2026-10-09，与短期记忆/聊天落盘同一套路）。"""
+
+    def test_each_session_own_file(self, _isolate_file):
+        sm._write_json(sm._file_for("111"), {"topic": "A", "events": [], "last_active": ""})
+        sm._write_json(sm._file_for("222"), {"topic": "B", "events": [], "last_active": ""})
+        assert sm._raw_session("111")["topic"] == "A"
+        assert sm._raw_session("222")["topic"] == "B"
+
+    def test_new_user_gets_a_file_on_first_write(self, _isolate_file):
+        # 新用户第一次来：目录/文件都应该自动建出来，不能抛错
+        assert not sm.SESSION_DIR.exists()
+        sm._write_json(sm._file_for("999999"), {"topic": "新来的", "events": []})
+        assert sm._file_for("999999").exists()
+        assert sm._raw_session("999999")["topic"] == "新来的"
+
+    def test_legacy_single_file_is_split_once(self, _isolate_file, monkeypatch):
+        # fixture 里的 use_storage 关掉了迁移（临时目录没老文件可拆）；这里把它打开
+        monkeypatch.setattr(sm, "_migrated", False)
+        _isolate_file.write_text(json.dumps({
+            "u1": {"topic": "老话题", "events": ["老事件"], "last_active": datetime.now().isoformat()}
+        }, ensure_ascii=False), encoding="utf-8")
+        assert sm._raw_session("u1")["topic"] == "老话题"      # 触发迁移
+        assert sm._file_for("u1").exists()
+        assert _isolate_file.with_suffix(".json.migrated").exists()

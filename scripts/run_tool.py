@@ -529,7 +529,7 @@ def _add_memory_replay(sub):
     p = sub.add_parser("memory-replay", help="有界回放历史私聊到隔离的 Memory V2 影子文件")
     p.add_argument(
         "-i", "--input", nargs="*", default=None,
-        help="chat JSONL；缺省读取 data/chat_log/chat*.jsonl",
+        help="chat JSONL；缺省读取 data/chat_log/*.jsonl（按会话分文件，2026-10-09 起）",
     )
     p.add_argument(
         "--limit", type=memory_v2_tool.positive_limit, required=True,

@@ -72,6 +72,26 @@ def parse_json_block(content: str):
     return json.loads(text)
 
 
+def log_cache_usage(resp, tag: str) -> None:
+    """打一行 DeepSeek 缓存用量（命中/未命中/命中率）。
+
+    为什么要它（2026-10-09）：缓存命中是**按前缀**算的，只有打出来才能看见——
+    "感觉命中低"没法排查。实测教训：提示词里**变量放前面**会让后面整段静态正文
+    永远不命中（同一条判据实测 0% vs 68%），而这种问题在日志里一眼就能看出来。
+
+    上游不返回这两个字段时静默跳过（不同模型/网关不一定有）。
+    """
+    u = getattr(resp, "usage", None)
+    if u is None:
+        return
+    hit = getattr(u, "prompt_cache_hit_tokens", None)
+    if hit is None:
+        return
+    pt = getattr(u, "prompt_tokens", 0) or 0
+    miss = getattr(u, "prompt_cache_miss_tokens", "?")
+    print(f"[缓存] {tag}: prompt={pt} 命中={hit} 未命中={miss} ({hit / max(pt, 1):.0%})")
+
+
 def extract_chat_content(resp) -> str:
     """从 chat completion 响应里安全取正文；取不到就抛一个**看得懂**的错误。
 

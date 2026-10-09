@@ -12,7 +12,8 @@ SYSTEM_PROMPT_FILE = PROJECT_ROOT / "persona" / "core" / "system_prompt.txt"
 BEHAVIORS_FILE = PROJECT_ROOT / "persona" / "behavior" / "behaviors.json"
 TERMS_FILE = PROJECT_ROOT / "persona" / "world" / "terms.json"                 # 灰泽满名词库(lorebook)：核心词always注入+命中注入
 
-MEMORY_FILE = PROJECT_ROOT / "user_memory" / "short_term.json"                 # 用户短期记忆
+MEMORY_FILE = PROJECT_ROOT / "user_memory" / "short_term.json"                 # 【旧】单文件：已拆，留作迁移源
+MEMORY_DIR = PROJECT_ROOT / "user_memory" / "short_term"                       # 【现】短期记忆：一个会话一个文件
 GROUP_MEMORY_FILE = PROJECT_ROOT / "user_memory" / "groups.json"              # 群级记忆（成员身份 + 群近况/梗，按群号）
 
 # ==================== 群聊：群近况记忆 ====================

@@ -36,7 +36,6 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-CHAT_LOG = ROOT / "data" / "chat_log" / "chat.jsonl"
 EVALDIR = ROOT / "outputs" / "eval"
 
 SELF = re.compile(r"(灰泽满|hzm|小满|满姐)")
@@ -81,7 +80,7 @@ def distance(a: dict, b: dict) -> tuple:
 
 def _baseline_texts() -> list:
     out = []
-    for line in CHAT_LOG.read_text(encoding="utf-8", errors="replace").splitlines():
+    for line in _common.chatlog_lines():
         line = line.strip()
         if not line:
             continue

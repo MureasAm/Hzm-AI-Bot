@@ -49,7 +49,6 @@ from pathlib import Path
 import _common
 
 ROOT = Path(__file__).resolve().parent.parent
-LOG = ROOT / "data" / "chat_log" / "chat.jsonl"
 OUT = ROOT / "outputs" / "spot_check.md"
 
 # 她主动提起经历的说法——**幻觉高发信号**（可能把某次的事当"现在"）
@@ -112,7 +111,7 @@ def main():
     if not LOG.exists():
         print(f"❌ 没有聊天记录 {LOG}")
         return
-    rows = [json.loads(l) for l in LOG.read_text(encoding="utf-8").splitlines() if l.strip()]
+    rows = [json.loads(l) for l in _common.chatlog_lines()]
     turns = [t for t in rows if (t.get("user") or "").strip()
              and (args.all or str(t.get("session", "")).isdigit())]
     if args.recent:

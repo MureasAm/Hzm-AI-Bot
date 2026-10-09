@@ -15,16 +15,19 @@
 数据：user_memory/session.json，按 user_id 存 {"topic","events","last_active"}
 """
 import json
+import os
+import re
 import threading
 from pathlib import Path
 from datetime import datetime
 
 from .constants import PROJECT_ROOT, THINKING_DISABLED
-from .config import _get_model_name, extract_chat_content
+from .config import log_cache_usage, _get_model_name, extract_chat_content
 # 时长措辞（"3天"/"2小时"）与长期/短期记忆共用一份，别各写一套（memory re-export 自根模块）
 from .memory import humanize_gap
 
-SESSION_MEMORY_FILE = PROJECT_ROOT / "user_memory" / "session.json"
+SESSION_MEMORY_FILE = PROJECT_ROOT / "user_memory" / "session.json"   # 【旧】单文件：已拆，留作迁移源
+SESSION_DIR = PROJECT_ROOT / "user_memory" / "session"                # 【现】会话记忆：一个会话一个文件
 
 # 短消息阈值：≤4 字视为"口语回应"，需要上下文扩充
 SHORT_QUERY_MAX_CHARS = 4
@@ -41,26 +44,98 @@ PREV_SESSION_EVENTS_MAX = 2
 _lock = threading.Lock()
 
 # ==================== 存储 ====================
+# 一个会话一个文件（2026-10-09）：跟短期记忆/聊天落盘同一套路，理由也一样——
+# 每次读写只碰一个会话（O(1)），人工查看方便，删某人的记录＝删一个文件。
+# 旧单文件 session.json 首次运行自动拆分，原件改名 .migrated 留档。
+
+_migrated = False
+
+
+def _file_for(user_id: str) -> Path:
+    """某个会话的文件。id 只可能是 QQ 号/群号，仍然过滤一遍防路径穿越。"""
+    return SESSION_DIR / f"{re.sub(r'[^\w.-]', '_', str(user_id))}.json"
+
+
+def _read_json(path: Path):
+    """读一个 JSON 文件；缺失/空/坏 → None。"""
+    if not path.exists():
+        return None
+    try:
+        content = path.read_text(encoding="utf-8").strip()
+        return json.loads(content) if content else None
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _write_json(path: Path, data) -> None:
+    """写 JSON 文件（先写 .tmp 再 replace，避免写一半被读到半个文件）。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _ensure_migrated() -> None:
+    """把旧的单文件 session.json 拆成一人一个文件（只跑一次，原件改名存档，不删）。"""
+    global _migrated
+    if _migrated:
+        return
+    _migrated = True
+    if not SESSION_MEMORY_FILE.exists():
+        return
+    data = _read_json(SESSION_MEMORY_FILE)
+    if not isinstance(data, dict):
+        return
+    n = 0
+    try:
+        for uid, sess in data.items():
+            if not isinstance(sess, dict) or not sess:
+                continue
+            f = _file_for(uid)
+            if f.exists():      # 已经拆过就别覆盖
+                continue
+            _write_json(f, sess)
+            n += 1
+        SESSION_MEMORY_FILE.rename(SESSION_MEMORY_FILE.with_suffix(".json.migrated"))
+        print(f"[会话记忆] 旧单文件已拆分：{n} 个会话 → {SESSION_DIR}"
+              f"（原件存为 {SESSION_MEMORY_FILE.name}.migrated）")
+    except OSError as e:
+        print(f"⚠️ 会话记忆拆分失败（退回旧单文件读，不影响聊天）: {e}")
+
+
+def use_storage(root) -> None:
+    """把会话记忆整体指到 `root` 目录下（**测试/离线脚本专用**）。
+
+    一次改齐三样（目录 / 旧单文件路径 / 迁移标志）——只改一个会漏掉隔离，
+    或更糟：让迁移去动真实那份 session.json。
+    """
+    global SESSION_DIR, SESSION_MEMORY_FILE, _migrated
+    root = Path(root)
+    SESSION_DIR = root / "session"
+    SESSION_MEMORY_FILE = root / "session.json"
+    _migrated = True
+
 
 def _load() -> dict:
-    if not SESSION_MEMORY_FILE.exists():
-        return {}
-    try:
-        content = SESSION_MEMORY_FILE.read_text(encoding="utf-8").strip()
-        return json.loads(content) if content else {}
-    except (json.JSONDecodeError, OSError):
-        return {}
-
-
-def _save(data: dict) -> None:
-    SESSION_MEMORY_FILE.parent.mkdir(parents=True, exist_ok=True)
-    SESSION_MEMORY_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    """**调试/兼容**用：合并所有会话（生产路径不用它，只用 `_raw_session`）。"""
+    _ensure_migrated()
+    out = {}
+    if SESSION_DIR.exists():
+        for f in SESSION_DIR.glob("*.json"):
+            v = _read_json(f)
+            if isinstance(v, dict) and v:
+                out[f.stem] = v
+    return out
 
 
 def _raw_session(user_id: str) -> dict:
     """读**原始**记录——不做过期过滤。过期判定和「上次聊过」都要用它自己算。"""
-    data = _load()
-    sess = data.get(user_id) if isinstance(data, dict) else None
+    _ensure_migrated()
+    sess = _read_json(_file_for(user_id))
+    if not isinstance(sess, dict) and SESSION_MEMORY_FILE.exists():
+        # 兜底：万一旧单文件还没拆成功，仍能从它里面读到这个会话
+        legacy = _read_json(SESSION_MEMORY_FILE)
+        sess = legacy.get(str(user_id)) if isinstance(legacy, dict) else None
     return sess if isinstance(sess, dict) else {}
 
 
@@ -144,12 +219,6 @@ SESSION_PROBE_PROMPT = """你是会话话题追踪器。用户在聊天中刚发
 
 任务：判断这条新消息在当前语境下的完整含义，以及它是否带来了话题转变。
 
-【上一轮已知话题】{prev_topic}（为空表示新会话）
-
-【最近对话】
-{history}
-
-【用户刚发的消息】{user_msg}
 
 输出 JSON：
 {{
@@ -174,6 +243,15 @@ SESSION_PROBE_PROMPT = """你是会话话题追踪器。用户在聊天中刚发
   · 🤔 = 疑惑
   补全句应表达"用户发了【表情含义】"这个意思（如"用户发了个无语的表情"），用于检索记忆理解用户情绪，不要加引号。
 - 非表情的短消息（如"咋这样""真的吗"）**或指代性消息**（如"能读给我听听吗""那个呢"——单看不知道指什么）才结合语境补全成完整句；普通长消息（自带话题）返回 null。
+【下面是要判的那一轮】
+
+【上一轮已知话题】{prev_topic}（为空表示新会话）
+
+【最近对话】
+{history}
+
+【用户刚发的消息】{user_msg}
+
 只输出 JSON，不要多余内容。"""
 
 
@@ -189,6 +267,7 @@ async def _llm(client, prompt: str, max_tokens: int = 200, temperature: float = 
             max_tokens=max_tokens,
             **THINKING_DISABLED,
         )
+        log_cache_usage(resp, "话题探测")
         content = extract_chat_content(resp)
         if "```json" in content:
             content = content.split("```json")[1].split("```")[0].strip()
@@ -248,7 +327,6 @@ async def probe_session(user_id: str, user_msg: str, history_text: str, client) 
     events = events[-MAX_EVENTS_PER_SESSION:]
 
     with _lock:
-        data = _load()
         # topic_since = **这个话题是什么时候开始的**（2026-10-05 加）。
         # 为什么需要：last_active 每轮都刷新，所以它只等于"距上一条消息多久"，
         # **不表示"这个话题有多旧"**。没有它，模型就算拿到时间也无法判断
@@ -259,13 +337,12 @@ async def probe_session(user_id: str, user_msg: str, history_text: str, client) 
             topic_since = prev_since
         else:
             topic_since = datetime.now().isoformat()
-        data[user_id] = {
+        _write_json(_file_for(user_id), {
             "topic": topic or prev_topic,
             "events": events,
             "last_active": datetime.now().isoformat(),
             "topic_since": topic_since,
-        }
-        _save(data)
+        })
 
     # 检索 query 扩充：短消息（≤4字）或指代性消息（必须结合话题才能懂，如"能读给我听听吗"）
     # 时，用模型补全的完整句做检索——否则指代性消息检索不到任何记忆（曾导致"念乌色月"时模型没

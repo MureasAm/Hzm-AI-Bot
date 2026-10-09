@@ -114,7 +114,7 @@ async def main():
 
     core.update_memory_task = lambda *a, **k: asyncio.sleep(0)
     tmp = tempfile.mkdtemp(prefix="seccorr_")
-    mem.MEMORY_FILE = Path(tmp) / "short_term.json"
+    mem.use_storage(Path(tmp))
     global _ORIG
     _ORIG = core.generate_reply
     core.generate_reply = _capture

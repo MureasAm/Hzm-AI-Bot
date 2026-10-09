@@ -21,6 +21,14 @@ try:  # direct script via run_tool.py
 except ModuleNotFoundError:  # imported as scripts.memory_v2_tool in tests/tools
     from . import _common
 
+# 回放要 import `src.plugins.chatbot.memory_v2`，而 run_tool 只把 scripts/ 加进 sys.path
+# ——项目根得自己补（其他离线脚本如 regression_test 也是这么做的）。
+# 不补就会 `ModuleNotFoundError: No module named 'src'`（这个命令以前没跑通过）。
+import sys as _sys  # noqa: E402
+
+if str(_common.PROJECT_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(_common.PROJECT_ROOT))
+
 
 DEFAULT_STATE_FILE = _common.PROJECT_ROOT / "user_memory" / "memory_v2_shadow.json"
 DEFAULT_REPLAY_DIR = _common.OUTPUTS_DIR / "memory_v2"
@@ -132,7 +140,9 @@ def _resolve_inputs(raw_paths: list[str] | None) -> list[Path]:
     if raw_paths:
         return [Path(value) for value in raw_paths]
     log_dir = _common.DATA_DIR / "chat_log"
-    return sorted(log_dir.glob("chat*.jsonl"), key=lambda path: path.stat().st_mtime)
+    # 2026-10-09 起聊天落盘**按会话分文件**（`<QQ号>.jsonl`），
+    # 所以不能再 glob `chat*.jsonl`（那只匹配拆分前那个单文件，会静默回放 0 条）。
+    return sorted(log_dir.glob("*.jsonl"), key=lambda path: path.stat().st_mtime)
 
 
 def _safe_replay_dir(path: Path) -> Path:

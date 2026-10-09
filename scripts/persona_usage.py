@@ -39,7 +39,6 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-CHAT_LOG = ROOT / "data" / "chat_log" / "chat.jsonl"
 PERSONA = ROOT / "persona"
 
 
@@ -134,11 +133,11 @@ def main():
     except Exception:
         pass
 
-    if not CHAT_LOG.exists():
-        print(f"❌ 没有 {CHAT_LOG}（CHATLOG=0 时不会落盘）")
+    if not (_common.DATA_DIR / "chat_log").exists():
+        print("❌ 没有 data/chat_log/（CHATLOG=0 时不会落盘）")
         return 1
     replies = []
-    for line in CHAT_LOG.read_text(encoding="utf-8", errors="replace").splitlines():
+    for line in _common.chatlog_lines():
         line = line.strip()
         if not line:
             continue

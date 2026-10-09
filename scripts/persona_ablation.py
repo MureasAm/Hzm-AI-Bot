@@ -63,7 +63,6 @@ import src.plugins.chatbot.core as core            # noqa: E402
 import src.plugins.chatbot.memory as mem           # noqa: E402
 
 OUT = ROOT / "outputs" / "eval" / "persona_ablation.json"
-CHAT_LOG = ROOT / "data" / "chat_log" / "chat.jsonl"
 
 # 自称：她最独特的特征（第三人称自我保护）
 SELF = re.compile(r"(灰泽满|hzm|小满|满姐)")
@@ -148,10 +147,8 @@ def _load_messages(n: int, from_synthetic: bool, mix_synthetic: int = 0) -> list
 
 
 def _load_real(n: int) -> list:
-    if not CHAT_LOG.exists():
-        return []
     rows = []
-    for line in CHAT_LOG.read_text(encoding="utf-8", errors="replace").splitlines():
+    for line in _common.chatlog_lines():
         line = line.strip()
         if not line:
             continue
@@ -303,7 +300,7 @@ async def run_skeleton(n: int, from_synthetic: bool, min_chars: int, per_unit: i
     """**骨架按小节消融**：一次检索 → 逐个删掉骨架的每一小节 → 看她的风格偏了多少。"""
     core.update_memory_task = lambda *a, **k: asyncio.sleep(0)
     tmp = tempfile.mkdtemp(prefix="skelabl_")
-    mem.MEMORY_FILE = Path(tmp) / "short_term.json"
+    mem.use_storage(Path(tmp))
     global _ORIG_REPLY
     _ORIG_REPLY = core.generate_reply
     core.generate_reply = _capture
@@ -387,7 +384,7 @@ async def run_compress(n: int, short_path: str, from_synthetic: bool) -> int:
 
     core.update_memory_task = lambda *a, **k: asyncio.sleep(0)
     tmp = tempfile.mkdtemp(prefix="compress_")
-    mem.MEMORY_FILE = Path(tmp) / "short_term.json"
+    mem.use_storage(Path(tmp))
     global _ORIG_REPLY
     _ORIG_REPLY = core.generate_reply
     core.generate_reply = _capture
@@ -442,7 +439,7 @@ async def run_sections(n: int, from_synthetic: bool, min_section_chars: int,
     """
     core.update_memory_task = lambda *a, **k: asyncio.sleep(0)
     tmp = tempfile.mkdtemp(prefix="sectabl_")
-    mem.MEMORY_FILE = Path(tmp) / "short_term.json"
+    mem.use_storage(Path(tmp))
     global _ORIG_REPLY
     _ORIG_REPLY = core.generate_reply
     core.generate_reply = _capture
@@ -595,7 +592,7 @@ async def main():
     # 临时记忆：不污染线上（长期提取关掉，只测回复本身）
     core.update_memory_task = lambda *a, **k: asyncio.sleep(0)
     tmp = tempfile.mkdtemp(prefix="ablation_")
-    mem.MEMORY_FILE = Path(tmp) / "short_term.json"
+    mem.use_storage(Path(tmp))
     # ⚠️ 先把**真正的** generate_reply 存起来：下面要用它生成两遍。
     # 踩过的坑：光把 core.generate_reply 换成截获器就往下跑 → 两个条件调的都是截获器，
     # 拿回一堆"（占位）"，指标差异全是 0，**看起来像"traits/styles 完全没用"——那是假的**。

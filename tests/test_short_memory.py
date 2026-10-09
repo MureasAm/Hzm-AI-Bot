@@ -14,10 +14,22 @@ from src.plugins.chatbot import memory
 
 @pytest.fixture
 def tmp_memory(tmp_path, monkeypatch):
-    """把短期记忆指向临时文件，别碰线上 user_memory/short_term.json。"""
-    f = tmp_path / "short_term.json"
-    monkeypatch.setattr(memory, "MEMORY_FILE", f)
-    return f
+    """把短期记忆指向临时目录，别碰线上 user_memory/。
+
+    ⚠️ **两个都要改**（MEMORY_DIR + MEMORY_FILE）：只改 DIR 的话，
+    `_ensure_migrated()` 会去动真实那份 short_term.json（拆完还改名）——测试会毁线上记忆。
+    `_migrated` 也要复位，否则同一个进程里第一个用例跑完就再不迁移了。
+    """
+    monkeypatch.setattr(memory, "MEMORY_DIR", tmp_path / "short_term")
+    legacy = tmp_path / "short_term.json"
+    monkeypatch.setattr(memory, "MEMORY_FILE", legacy)
+    monkeypatch.setattr(memory, "_migrated", False)
+    return legacy
+
+
+def _raw(uid):
+    """读某个会话的落盘内容（拆分后：一个会话一个文件，内容就是行列表）。"""
+    return json.loads(memory._file_for(uid).read_text(encoding="utf-8"))
 
 
 def _write(path, data):
@@ -40,7 +52,7 @@ class TestHistoryBackCompat:
 
     def test_append_writes_timestamps(self, tmp_memory):
         memory.append_user_history("u1", "在吗", "在呢")
-        raw = json.loads(tmp_memory.read_text(encoding="utf-8"))["u1"]
+        raw = _raw("u1")
         assert len(raw) == 2
         assert all(isinstance(it, dict) and "t" in it for it in raw)
         # 对外仍是字符串行——core 的 ln[4:] 剥"灰泽满："前缀依赖这个
@@ -49,7 +61,7 @@ class TestHistoryBackCompat:
     def test_append_still_caps_length(self, tmp_memory):
         for i in range(10):
             memory.append_user_history("u1", f"消息{i}", f"回复{i}")
-        raw = json.loads(tmp_memory.read_text(encoding="utf-8"))["u1"]
+        raw = _raw("u1")
         assert len(raw) == memory.SHORT_MEMORY_LINES
         assert memory.get_user_history("u1")[-1] == "灰泽满：回复9"
 
@@ -71,7 +83,7 @@ class TestHistoryBackCompat:
     def test_silent_batch_still_caps_length(self, tmp_memory):
         for i in range(12):
             memory.append_user_history("g1", f"群消息{i}", "")
-        raw = json.loads(tmp_memory.read_text(encoding="utf-8"))["g1"]
+        raw = _raw("g1")
         assert len(raw) == memory.SHORT_MEMORY_LINES
 
 
@@ -171,7 +183,7 @@ class TestAppendBotMessage:
 
     def test_has_timestamp(self, tmp_memory):
         memory.append_bot_message("u1", "晚安")
-        raw = json.loads(tmp_memory.read_text(encoding="utf-8"))["u1"]
+        raw = _raw("u1")
         assert "t" in raw[0] and raw[0]["text"] == "灰泽满：晚安"
 
     def test_appends_after_existing_history(self, tmp_memory):
@@ -187,3 +199,40 @@ class TestAppendBotMessage:
     def test_empty_text_writes_nothing(self, tmp_memory):
         memory.append_bot_message("u1", "   ")
         assert memory.get_user_history("u1") == []
+
+
+class TestPerSessionFiles:
+    """按会话拆文件（2026-10-08）：一次读写只碰一个会话，删某人的历史＝删一个文件。"""
+
+    def test_each_session_gets_its_own_file(self, tmp_memory):
+        memory.append_user_history("111", "在吗", "在")
+        memory.append_user_history("222", "hello", "hi")
+        assert memory._file_for("111") != memory._file_for("222")
+        assert memory._file_for("111").exists() and memory._file_for("222").exists()
+        assert memory.get_user_history("111") == ["用户：在吗", "灰泽满：在"]
+        assert memory.get_user_history("222") == ["用户：hello", "灰泽满：hi"]
+
+    def test_writing_one_session_does_not_touch_another(self, tmp_memory):
+        memory.append_user_history("111", "第一次", "好")
+        before = memory._file_for("222").stat().st_mtime if memory._file_for("222").exists() else None
+        memory.append_user_history("111", "第二次", "嗯")
+        after = memory._file_for("222").stat().st_mtime if memory._file_for("222").exists() else None
+        assert before == after          # 别人的文件根本没被碰
+
+    def test_user_id_is_sanitised(self, tmp_memory):
+        # id 只可能是 QQ 号/群号，仍然过滤一遍防路径穿越
+        f = memory._file_for("../evil")
+        assert f.parent == memory.MEMORY_DIR
+
+    def test_legacy_single_file_is_split_once(self, tmp_memory):
+        """老单文件自动拆分，原件改名留下（**不删数据**）。"""
+        _write(tmp_memory, {"u1": [{"t": 1.0, "text": "用户：在吗"}], "u2": ["用户：喂"]})
+        assert memory.get_user_history("u1") == ["用户：在吗"]     # 先触发迁移
+        assert memory._file_for("u1").exists() and memory._file_for("u2").exists()
+        assert not tmp_memory.exists()                            # 原件已改名
+        assert tmp_memory.with_suffix(".json.migrated").exists()
+
+    def test_broken_legacy_file_does_not_break_chat(self, tmp_memory):
+        tmp_memory.write_text("{坏掉的 json", encoding="utf-8")
+        memory.append_user_history("u1", "在吗", "在")
+        assert memory.get_user_history("u1") == ["用户：在吗", "灰泽满：在"]

@@ -1,35 +1,116 @@
 import json
+import os
+import re
 import threading
 from pathlib import Path
 from datetime import date, datetime
 
-MEMORY_FILE = Path(__file__).resolve().parent / "user_memory" / "long_term.json"
+MEMORY_FILE = Path(__file__).resolve().parent / "user_memory" / "long_term.json"   # 【旧】单文件：已拆，留作迁移源
+MEMORY_DIR = Path(__file__).resolve().parent / "user_memory" / "long_term"         # 【现】一人一个文件
 
 # 长期记忆文件锁：保证「读-改-写」原子化，防止多消息并发互相覆盖
 _memory_lock = threading.Lock()
 
-def load_memory() -> dict:
-    """加载整个记忆文件，空文件或格式错误时返回空字典"""
-    if not MEMORY_FILE.exists():
-        return {}
+_migrated = False
+
+
+def _file_for(user_id) -> Path:
+    """某个用户的记忆卡文件。id 只可能是 QQ 号，仍然过滤一遍防路径穿越。"""
+    return MEMORY_DIR / f"{re.sub(r'[^\w.-]', '_', str(user_id))}.json"
+
+
+def _read_json(path: Path):
+    """读一个 JSON 文件；缺失/空/坏 → None。"""
+    if not path.exists():
+        return None
     try:
-        with open(MEMORY_FILE, "r", encoding="utf-8") as f:
-            content = f.read().strip()
-            if not content:
-                return {}
-            return json.loads(content)
-    except (json.JSONDecodeError, Exception):
-        return {}
+        content = path.read_text(encoding="utf-8").strip()
+        return json.loads(content) if content else None
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _write_json(path: Path, data) -> None:
+    """写 JSON 文件（先写 .tmp 再 replace，避免写一半被读到半个文件）。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _ensure_migrated() -> None:
+    """把旧的单文件 long_term.json 拆成一人一个文件（只跑一次，原件改名存档，不删）。"""
+    global _migrated
+    if _migrated:
+        return
+    _migrated = True
+    if not MEMORY_FILE.exists():
+        return
+    data = _read_json(MEMORY_FILE)
+    if not isinstance(data, dict):
+        return
+    n = 0
+    try:
+        for uid, card in data.items():
+            if not isinstance(card, dict) or not card:
+                continue
+            f = _file_for(uid)
+            if f.exists():      # 已经拆过就别覆盖
+                continue
+            _write_json(f, card)
+            n += 1
+        MEMORY_FILE.rename(MEMORY_FILE.with_suffix(".json.migrated"))
+        print(f"[长期记忆] 旧单文件已拆分：{n} 张记忆卡 → {MEMORY_DIR}"
+              f"（原件存为 {MEMORY_FILE.name}.migrated）")
+    except OSError as e:
+        print(f"⚠️ 长期记忆拆分失败（退回旧单文件读，不影响聊天）: {e}")
+
+
+def use_storage(root) -> None:
+    """把长期记忆整体指到 `root` 目录下（**测试/离线脚本专用**）。
+
+    一次改齐三样（目录 / 旧单文件路径 / 迁移标志）——只改一个会漏隔离，
+    或让迁移去动真实那份 long_term.json。
+    """
+    global MEMORY_DIR, MEMORY_FILE, _migrated
+    root = Path(root)
+    MEMORY_DIR = root / "long_term"
+    MEMORY_FILE = root / "long_term.json"
+    _migrated = True
+
+
+def load_memory() -> dict:
+    """**调试/兼容**用：把所有用户的记忆卡合并成一个 dict。
+
+    生产路径只用 `get_user_memory`（读一个人）——那正是拆分的原因：
+    原来每轮都要把所有人的卡读出来再整份写回去。
+    """
+    _ensure_migrated()
+    out = {}
+    if MEMORY_DIR.exists():
+        for f in MEMORY_DIR.glob("*.json"):
+            v = _read_json(f)
+            if isinstance(v, dict) and v:
+                out[f.stem] = v
+    return out
+
 
 def save_memory(memory: dict) -> None:
-    """保存整个记忆文件"""
-    with open(MEMORY_FILE, "w", encoding="utf-8") as f:
-        json.dump(memory, f, ensure_ascii=False, indent=2)
+    """**兼容**用：把一整份 dict 按用户写开。"""
+    for uid, card in (memory or {}).items():
+        if isinstance(card, dict) and card:
+            _write_json(_file_for(uid), card)
+
 
 def get_user_memory(user_id: str) -> dict:
     """获取指定用户的记忆卡，不存在则返回空卡片"""
-    memory = load_memory()
-    return memory.get(user_id, {})
+    _ensure_migrated()
+    card = _read_json(_file_for(user_id))
+    if not isinstance(card, dict) and MEMORY_FILE.exists():
+        # 兜底：万一旧单文件还没拆成功，仍能从它里面读到这个人
+        legacy = _read_json(MEMORY_FILE)
+        card = legacy.get(str(user_id)) if isinstance(legacy, dict) else None
+    return card if isinstance(card, dict) else {}
 
 _NULL_STRINGS = ("", "null", "none")
 
@@ -245,13 +326,10 @@ def merge_memory_card(card: dict, updates: dict) -> dict:
 
 
 def update_user_memory(user_id: str, updates: dict) -> None:
-    """增量合并更新用户记忆（读-改-写全程持锁）"""
+    """增量合并更新用户记忆（读-改-写全程持锁，**只碰这个人的文件**）"""
     with _memory_lock:
-        memory = load_memory()
-        card = memory.get(user_id, {})
-        card = merge_memory_card(card, updates)
-        memory[user_id] = card
-        save_memory(memory)
+        card = get_user_memory(user_id)
+        _write_json(_file_for(user_id), merge_memory_card(card, updates))
 
 def build_memory_context(card: dict) -> str:
     """将记忆卡转化为提示文本"""
@@ -382,12 +460,6 @@ def _format_profile_summary(card: dict) -> str:
 MEMORY_EXTRACT_PROMPT = """
 你是一个记忆提取助手。分析以下对话，只提取**值得长期记住的新信息**。忽略日常寒暄。
 
-【当前已知画像】
-{current_summary}
-
-【本轮对话】
-用户：{user_msg}
-灰泽满：{reply}
 
 【提取要求】
 - **JSON 格式铁律**：某个字段"没有"时，输出真正的 JSON `null`（值直接写 null，**不带引号**）。禁止输出字符串 "null" 或 "None"——字符串 "null" 会被当有效内容存卡（曾导致上下文出现"这个绿冻在null"）。
@@ -437,6 +509,15 @@ MEMORY_EXTRACT_PROMPT = """
 
 **提取示例补充**：
 - "我叫小明，你以后叫我小明就行" → new_name="小明"
+
+【下面是这一轮要分析的】
+
+【当前已知画像】
+{current_summary}
+
+【本轮对话】
+用户：{user_msg}
+灰泽满：{reply}
 
 返回 JSON（不要多余内容）：
 {{

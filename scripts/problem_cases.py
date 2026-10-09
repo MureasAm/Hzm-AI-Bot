@@ -76,7 +76,6 @@ sys.path.insert(0, str(ROOT))
 
 RETRIEVAL_CASES = ROOT / "scripts" / "retrieval_eval_cases.json"
 REGRESSION_CASES = ROOT / "scripts" / "regression_cases.json"
-CHAT_LOG = ROOT / "data" / "chat_log" / "chat.jsonl"
 SPOT_MD = ROOT / "outputs" / "spot_check.md"
 NOTES_MD = ROOT / "问题记录.md"
 
@@ -167,7 +166,7 @@ def parse_spot_marks(text: str) -> list:
     """解析 `outputs/spot_check.md` 里**勾了「有」**的条目。
 
     只认 `[x] 有：...`（`[ ] 没有` 里也有 checkbox，所以必须钉 `有：` 前面那个）。
-    条目的 user/reply 可能是截断的 —— 真正的全文靠 `(session, t)` 回 `chat.jsonl` 取
+    条目的 user/reply 可能是截断的 —— 真正的全文靠 `(session, t)` 回 `data/chat_log/<QQ号>.jsonl` 取（2026-10-08 起按会话分文件）
     （`t` 是毫秒级时间戳，实测全库零重复；**别用行号**，轮转会重排）。
     """
     text = text or ""
@@ -196,11 +195,20 @@ def parse_spot_marks(text: str) -> list:
     return out
 
 
+def chat_lines():
+    """聊天记录读口（跨所有会话）。**单独抽出来是为了可测**（测试打桩它）。
+
+    真实实现走 `_common.chatlog_lines()` —— 聊天落盘 2026-10-08 起按会话分文件，
+    脚本里别再自己拼 `chat_log/chat.jsonl`（那路径已经不存在了，写死会静默读空）。
+    """
+    return _common.chatlog_lines()
+
+
 def lookup_turn(session: str, t: float):
     """按 `(session, t)` 从聊天落盘里取那一轮原文。取不到返回 None。"""
-    if not CHAT_LOG.exists() or not t:
+    if not t:
         return None
-    for line in CHAT_LOG.read_text(encoding="utf-8", errors="replace").splitlines():
+    for line in chat_lines():
         line = line.strip()
         if not line:
             continue

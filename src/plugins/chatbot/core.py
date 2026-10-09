@@ -58,7 +58,7 @@ else:
 
 # ==================== 🛠️ API 客户端（惰性初始化） ====================
 # 挪到了 config.py（基础设施层）。core 从这里 import，routing 也从 config 取，避免循环依赖。
-from .config import _get_clients, _get_model_name, extract_chat_content  # noqa: E402
+from .config import log_cache_usage, _get_clients, _get_model_name, extract_chat_content  # noqa: E402
 
 
 def _detach_behavior_from_rrf() -> bool:
@@ -135,6 +135,7 @@ async def summarize_batch(msgs: list) -> str:
             max_tokens=80,
             **THINKING_DISABLED,
         )
+        log_cache_usage(resp, "主回复")
         return extract_chat_content(resp)
     except Exception as e:
         print(f"⚠️ 批量归纳失败（忽略）: {e}")
@@ -170,6 +171,7 @@ async def summarize_forward(raw: str) -> str:
             max_tokens=120,
             **THINKING_DISABLED,
         )
+        log_cache_usage(resp, "主回复")
         return extract_chat_content(resp).strip()
     except Exception as e:
         print(f"⚠️ 转发摘要失败（忽略）: {e}")
@@ -328,6 +330,7 @@ async def confirm_ambiguous_terms(user_msg: str, deepseek_client=None) -> set:
             max_tokens=200,
             **THINKING_DISABLED,
         )
+        log_cache_usage(resp, "主回复")
         content = extract_chat_content(resp)
         if "```" in content:
             content = content.split("```")[1].split("```")[0].strip()
@@ -429,10 +432,10 @@ def build_message_list(user_msg: str, fused_items: list,
     if prev_session_note:
         messages.append({"role": "system", "content": prev_session_note})
 
-    # 感知源①：当前时间/农历/天气（始终注入，占预算极少；天气按该用户所在城市）
-    now_context = context_probe.get_now_context(city=weather_city)
-    if now_context:
-        messages.append({"role": "system", "content": now_context})
+    # ⚠️ 感知（当前时间/农历/天气）**挪到最末尾**（2026-10-08），见下面 final_user 之前那处。
+    #    它是唯一"每分钟必变"的块：原来坐在第 5 位，导致它后面的**每一块**
+    #    （行为指令/直播记忆/长期记忆/短期记忆…）在 DeepSeek 的**前缀缓存**里永远 miss。
+    #    实测（同一次会话、仅时间戳不同）：把它挪到最后，那条分界线从"第 5 块"推到"倒数第二块"。
 
     behaviors, corpus = _split_fused(fused_items)
 
@@ -553,6 +556,14 @@ def build_message_list(user_msg: str, fused_items: list,
                 "content": f"【用户这条消息的语境】{query_hint}\n（上面是这条消息在当前语境下的完整意思——短消息或指代性消息（如'能读给我听听吗'）需要结合前文才能理解，按这个理解回复）"
             })
 
+    # 感知源①：当前时间/农历/天气（始终注入，占预算极少；天气按该用户所在城市）。
+    # **放在最后**：它是唯一"每分钟必变"的块，而 DeepSeek 的缓存按**前缀**匹配——
+    # 它放中间会把后面所有块（行为/直播记忆/长期短期记忆…）一起拖成 miss。
+    # 语义上也更顺：紧挨着用户这句，"现在几点"最贴近此刻。
+    now_context = context_probe.get_now_context(city=weather_city)
+    if now_context:
+        messages.append({"role": "system", "content": now_context})
+
     messages.append({"role": "user", "content": final_user})
     return messages
 
@@ -639,6 +650,7 @@ async def update_memory_task(user_id: str, user_msg: str, reply: str, user_memor
             max_tokens=MEMORY_EXTRACT_MAX_TOKENS,
             **THINKING_DISABLED,
         )
+        log_cache_usage(resp, "主回复")
         content = extract_chat_content(resp)
         print(f"[长期记忆] 提取结果: {content}")
         if content and content.strip() != "null":

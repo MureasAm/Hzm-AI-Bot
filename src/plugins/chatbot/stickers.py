@@ -15,24 +15,27 @@ import json
 import os
 
 from .constants import PROJECT_ROOT, THINKING_DISABLED
-from .config import _get_model_name, extract_chat_content
+from .config import log_cache_usage, _get_model_name, extract_chat_content
 
 STICKER_FILE = PROJECT_ROOT / "persona" / "media" / "stickers.json"
 
 _stickers_cache = None
 
+# ⚠️ **别重排这段提示词**（2026-10-09）：`{{reply}}/{{avoid}}` 这些**每轮都变**的变量必须留在
+# 后面。DeepSeek 的缓存按**前缀**匹配，变量放前面（原来在 14%）会让后面整份表情目录
+# （~1700 字）永远不命中——实测变量在前的写法命中率 **0%**，挪到后面 **68%**。
 STICKER_PROMPT = """灰泽满刚说了一句话，判断要不要给她配一张表情包。
-
-【她刚说的】
-{reply}
-
-【可选表情包】
-{options}{avoid}
 
 规则：
 - **只有表情和这句话十分对应时才发。宁可不发**——发错比不发难看得多。
 - 大多数回复都不配表情包（真人也是聊好几轮才用一张）。
 - 表情是**配她自己这句话的情绪**，不是评论别人。
+
+【可选表情包】
+{options}
+
+【她刚说的】
+{reply}{avoid}
 
 只输出 JSON：{{"id": "选中的表情 id" 或 null, "why": "不超过15字"}}"""
 
@@ -102,6 +105,7 @@ async def pick_sticker(deepseek_client, reply: str, avoid_groups: list | None = 
             max_tokens=80,
             **THINKING_DISABLED,
         )
+        log_cache_usage(resp, "表情包")
         content = extract_chat_content(resp)
         if "```" in content:
             parts = content.split("```")

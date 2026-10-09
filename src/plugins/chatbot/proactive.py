@@ -32,7 +32,7 @@ import re
 from pathlib import Path
 
 from .constants import THINKING_DISABLED
-from .config import _get_clients, _get_model_name, extract_chat_content, parse_json_block
+from .config import log_cache_usage, _get_clients, _get_model_name, extract_chat_content, parse_json_block
 from .core import gather_retrieval, build_message_list
 from .vision import describe_image_bytes
 
@@ -179,6 +179,7 @@ async def content_is_clear(deepseek_client, text: str) -> bool:
             max_tokens=80,
             **THINKING_DISABLED,
         )
+        log_cache_usage(resp, "主动发言")
         data = parse_json_block(extract_chat_content(resp))
         enough = bool(data.get("enough"))
         why = str(data.get("why") or "")[:25]
@@ -265,6 +266,7 @@ async def compose_proactive(content: str, source: str = "B站",
             max_tokens=120,
             **THINKING_DISABLED,
         )
+        log_cache_usage(resp, "主动发言")
         out = extract_chat_content(resp).strip().strip('"').strip("“”")
         if not out or out.upper().startswith("NULL"):
             print("[主动发言] 判定不适合主动说")

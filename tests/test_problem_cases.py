@@ -138,22 +138,23 @@ class TestParseSpotMarks:
 
 
 class TestLookupTurn:
-    def test_按会话加时间戳取回原文(self, tmp_path, monkeypatch):
-        log = tmp_path / "chat.jsonl"
-        log.write_text(json.dumps({"t": 1.5, "session": "9", "kind": "private",
-                                   "user": "原话", "reply": "回复"}, ensure_ascii=False) + "\n",
-                       encoding="utf-8")
-        monkeypatch.setattr(PC, "CHAT_LOG", log)
+    """按 (session, t) 回原文。读口是 `problem_cases.chat_lines`（拆分后可打桩）。"""
+
+    def _patch(self, monkeypatch, rows):
+        monkeypatch.setattr(PC, "chat_lines",
+                            lambda: iter([json.dumps(r, ensure_ascii=False) for r in rows]))
+
+    def test_按会话加时间戳取回原文(self, monkeypatch):
+        self._patch(monkeypatch, [{"t": 1.5, "session": "9", "kind": "private",
+                                   "user": "原话", "reply": "回复"}])
         assert PC.lookup_turn("9", 1.5)["user"] == "原话"
 
-    def test_会话对但时间戳不对_取不到(self, tmp_path, monkeypatch):
-        log = tmp_path / "chat.jsonl"
-        log.write_text(json.dumps({"t": 1.5, "session": "9"}, ensure_ascii=False) + "\n", encoding="utf-8")
-        monkeypatch.setattr(PC, "CHAT_LOG", log)
+    def test_会话对但时间戳不对_取不到(self, monkeypatch):
+        self._patch(monkeypatch, [{"t": 1.5, "session": "9", "user": "原话", "reply": "回复"}])
         assert PC.lookup_turn("9", 2.5) is None
 
-    def test_没有日志文件时取不到而不是崩(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(PC, "CHAT_LOG", tmp_path / "nope.jsonl")
+    def test_没有日志时取不到而不是崩(self, monkeypatch):
+        self._patch(monkeypatch, [])
         assert PC.lookup_turn("1", 1.0) is None
 
 

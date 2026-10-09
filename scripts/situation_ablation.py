@@ -147,7 +147,7 @@ async def run(per_scenario: int, scenarios: list, seed: int) -> int:
     core.update_memory_task = lambda *a, **k: asyncio.sleep(0)
     import tempfile
     tmp = tempfile.mkdtemp(prefix="sitabl_")
-    pa.mem.MEMORY_FILE = Path(tmp) / "short_term.json"
+    pa.mem.use_storage(Path(tmp))
     pa._ORIG_REPLY = core.generate_reply
     core.generate_reply = pa._capture
     gen = pa._ORIG_REPLY

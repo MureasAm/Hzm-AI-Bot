@@ -101,27 +101,25 @@ def main() -> int:
     # ==================== ★ 用**真实对话**验证入口 ====================
     # 「有入口」和「真的被勾出来过」是两回事（文档原话：判据"能不能"工作 vs 用户"会不会"这么说）。
     # 前者是 LLM 造的问法/生成的钩子表（都**没经过真实数据检验**），后者只有真实对话能答。
-    chat = _common.PROJECT_ROOT / "data" / "chat_log" / "chat.jsonl"
     real_hits, real_entries = {}, set()
     n_msgs = 0
-    if chat.exists():
-        for line in chat.read_text(encoding="utf-8", errors="replace").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                r = json.loads(line)
-            except Exception:
-                continue
-            u = (r.get("user") or "").strip()
-            if not u:
-                continue
-            n_msgs += 1
-            for i in range(len(st)):
-                words = kw.get(str(i)) or []
-                if any(w and w in u for w in words):
-                    real_hits[i] = real_hits.get(i, 0) + 1
-                    real_entries.add(i)
+    for line in _common.chatlog_lines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            r = json.loads(line)
+        except Exception:
+            continue
+        u = (r.get("user") or "").strip()
+        if not u:
+            continue
+        n_msgs += 1
+        for i in range(len(st)):
+            words = kw.get(str(i)) or []
+            if any(w and w in u for w in words):
+                real_hits[i] = real_hits.get(i, 0) + 1
+                real_entries.add(i)
     print(f"\n【★ 真实对话验证】扫了 {n_msgs} 条真实用户消息")
     if n_msgs:
         print(f"  钩子词**真的被用户说到过**的条目：{len(real_entries)} / {len(st)} 条"

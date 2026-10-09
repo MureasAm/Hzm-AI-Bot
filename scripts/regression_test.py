@@ -32,7 +32,6 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CASES_FILE = PROJECT_ROOT / "scripts" / "regression_cases.json"
 # 她本人的真实私聊回复：判"措辞固化"时要拿它当基线（见 _baseline_openers）
-CHAT_LOG = PROJECT_ROOT / "data" / "chat_log" / "chat.jsonl"
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -74,9 +73,9 @@ def _init():
     # 把记忆文件指向临时目录，避免污染线上数据
     tmp = tempfile.mkdtemp(prefix="hzm_test_")
     import memory_manager as mm
-    mm.MEMORY_FILE = Path(tmp) / "long_term.json"
+    mm.use_storage(Path(tmp))
     import src.plugins.chatbot.memory as mem
-    mem.MEMORY_FILE = Path(tmp) / "short_term.json"
+    mem.use_storage(Path(tmp))
     return core
 
 
@@ -150,17 +149,16 @@ def _baseline_openers():
         return _BASELINE_OPENERS or None
     out = set()
     try:
-        if CHAT_LOG.exists():
-            for line in CHAT_LOG.read_text(encoding="utf-8", errors="replace").splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    r = json.loads(line)
-                except Exception:
-                    continue
-                if str(r.get("session", "")).isdigit() and (r.get("reply") or "").strip():
-                    out.add(_opener(r["reply"]))
+        for line in _common.chatlog_lines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                r = json.loads(line)
+            except Exception:
+                continue
+            if str(r.get("session", "")).isdigit() and (r.get("reply") or "").strip():
+                out.add(_opener(r["reply"]))
     except Exception:
         out = set()
     if len(out) < 100:          # 太少 → 不能用（会把"她没说过"当成"她不会说"）

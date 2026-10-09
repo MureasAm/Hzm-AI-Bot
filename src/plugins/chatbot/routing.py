@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 
 from .constants import THINKING_DISABLED, PROJECT_ROOT
-from .config import _get_clients, _get_model_name, extract_chat_content
+from .config import log_cache_usage, _get_clients, _get_model_name, extract_chat_content
 
 LEGENDARY_FILE = PROJECT_ROOT / "persona" / "world" / "legendary.json"
 
@@ -93,6 +93,7 @@ async def legendary_confirmed(user_msg: str, prompt_template: str, history: str 
             max_tokens=10,
             **THINKING_DISABLED,
         )
+        log_cache_usage(resp, "行为分类")
         c = extract_chat_content(resp)
         # 确认模板要求只答"是/否"：以"是"开头且不是"不是/是不是"这类否定/疑问才放行
         return c.startswith("是") and not c.startswith("不是") and not c.startswith("是不是")
@@ -201,6 +202,7 @@ async def classify_l3(deepseek_client, user_msg: str, history_text: str,
             max_tokens=200,
             **THINKING_DISABLED,
         )
+        log_cache_usage(resp, "行为分类")
         content = extract_chat_content(resp)
         if "```json" in content:
             content = content.split("```json")[1].split("```")[0].strip()

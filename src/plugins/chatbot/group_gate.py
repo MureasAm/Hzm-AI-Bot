@@ -24,17 +24,14 @@ import os
 import random
 
 from .constants import THINKING_DISABLED, AT_SELF_MARK, GROUP_EVENT_REPLY_PROB
-from .config import _get_model_name, extract_chat_content
+from .config import log_cache_usage, _get_model_name, extract_chat_content
 
+# ⚠️ **别重排这段提示词**（2026-10-09）：`{{history}}/{{batch}}` 这些每批都变的变量必须留在
+# 判据**之后**。DeepSeek 的缓存按**前缀**匹配，变量放前面（原来在 8%）会让后面整段判据
+# 永远不命中——实测同一条判据：变量在前 **0%**，挪到后面 **68%**。
 GROUP_GATE_PROMPT = """灰泽满是一个 QQ 群里的虚拟主播，正混在这个群里。她本人不在下面这些发言者里。
 
-【群里刚才聊的】
-{history}
-
-【刚安静下来的一批】
-{batch}
-
-\
+下面会给你【群里刚才聊的】和【刚安静下来的一批】。
 这一批消息发完了、群里安静下来了。判断：**她要开口说一句吗？**
 
 判断对象是**整批**——看这段话聊完，她作为一个群友想不想插一句。
@@ -50,6 +47,13 @@ GROUP_GATE_PROMPT = """灰泽满是一个 QQ 群里的虚拟主播，正混在�
 
 kind 填最贴近的那**一档**（一档就好，别自己造新词）。
 
+【群里刚才聊的】
+{history}
+
+【刚安静下来的一批】
+{batch}
+
+\
 只输出 JSON：{{"reply": true 或 false, "kind": "点名|情绪|经历|事件|事务", "why": "不超过25字"}}"""
 
 
@@ -107,6 +111,7 @@ async def should_reply_in_group(deepseek_client, history_text: str, batch_text: 
             max_tokens=100,
             **THINKING_DISABLED,
         )
+        log_cache_usage(resp, "接话门")
         content = extract_chat_content(resp)
         # 剥 ``` 围栏。**要连语言标签一起剥**（模型常返回 ```json），
         # 只取 ``` 之间那段的话，剩下的 `json\n{...}` 会让 json.loads 直接失败。

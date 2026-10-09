@@ -179,6 +179,9 @@ user_memory/*.json
 # 同理，备份后缀（如 `short_term.json.bak-20260915-101436`）不以 .json 结尾，上面两条盖不住，
 # 但里面同样是完整的真实聊天记录 —— 单独收掉。
 user_memory/*.bak*
+# 同理，**拆分迁移的存档**（如 `long_term.json.migrated`，2026-10-09 起四层记忆按会话分文件）
+# 也不以 .json 结尾，而它就是**拆分前的那份原件**——真实用户记忆，绝不能进公开仓库。
+user_memory/*.migrated
 # Playwright MCP 的临时快照（工具产物）
 .playwright-mcp/
 # 微博会话 jar（敏感，运行时生成）

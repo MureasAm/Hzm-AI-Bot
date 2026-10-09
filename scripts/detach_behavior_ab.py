@@ -52,7 +52,6 @@ import _common                              # noqa: E402
 from src.plugins.chatbot import core         # noqa: E402
 from src.plugins.chatbot import memory as mem  # noqa: E402
 
-CHAT = ROOT / "data" / "chat_log" / "chat.jsonl"
 OUT = _common.OUTPUTS_DIR / "eval" / "detach_behavior_ab.json"
 
 _cap, _orig = {}, None
@@ -64,10 +63,8 @@ async def _capture(messages):
 
 
 def _load_real(n: int) -> list:
-    if not CHAT.exists():
-        return []
     rows = []
-    for line in CHAT.read_text(encoding="utf-8", errors="replace").splitlines():
+    for line in _common.chatlog_lines():
         line = line.strip()
         if not line:
             continue
@@ -132,7 +129,7 @@ async def main() -> int:
     global _orig
     core.update_memory_task = lambda *a, **k: asyncio.sleep(0)
     tmp = tempfile.mkdtemp(prefix="detachab_")
-    mem.MEMORY_FILE = Path(tmp) / "short_term.json"
+    mem.use_storage(Path(tmp))
     _orig = core.generate_reply
     core.generate_reply = _capture
 

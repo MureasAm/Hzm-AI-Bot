@@ -88,3 +88,27 @@ def report_saved(*paths):
 def warn_fixed_path(path) -> None:
     """提示某个路径是机器人启动要读的固定位置。"""
     print(f"   ⚠️ {path} 是机器人启动要读的固定位置，如需改输出请用 --out 并手动迁移")
+
+
+def chatlog_lines():
+    """跨所有会话产出聊天记录行（JSON 文本）—— 分析脚本**统一走这个**。
+
+    聊天落盘 2026-10-08 起**按会话分文件**（`data/chat_log/<QQ号>.jsonl`），
+    原来那个 `chat_log/chat.jsonl` 单文件已经拆开并改名为 `.migrated`。
+    所以脚本里**不要再写死 `chat_log/chat.jsonl`**（那个路径已经不存在了，
+    写死就再也读不到东西，而且不报错——静默空结果）。
+
+    放这里而不是复用 `chatlog.iter_lines`：插件包一导入就会拉起 NoneBot
+    （这些分析脚本刻意不启动它）。
+    """
+    log_dir = DATA_DIR / "chat_log"
+    if not log_dir.exists():
+        return
+    for f in sorted(log_dir.glob("*.jsonl")):
+        try:
+            content = f.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for line in content.splitlines():
+            if line.strip():
+                yield line

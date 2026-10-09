@@ -1,4 +1,11 @@
-"""短期记忆（short_term.json）读写，带进程内文件锁。
+"""短期记忆读写，带进程内文件锁。**一个会话一个文件**（`user_memory/short_term/<id>.json`）。
+
+为什么按会话拆文件（2026-10-08）：
+- 原来全挤在 `short_term.json` 一个文件里 —— 每条消息都要**把全部会话读出来、整份写回去**，
+  写放大随用户数线性增长（实测已经 175 会话 / 223KB，还在涨）。
+- 单文件也不方便人工查看：谁的对话都糊在一起。
+- 拆开之后：一次读写只碰一个会话（O(1)）；**删某人的历史 = 删一个文件**。
+- 旧单文件首次运行会自动拆分，原件改名为 `.json.migrated` 留下（不删数据）。
 
 NoneBot 单进程运行，同一时刻可能有多条消息触发写入，
 用 threading.Lock 保证「读-改-写」原子化，防止并发互相覆盖。
@@ -8,11 +15,13 @@ NoneBot 单进程运行，同一时刻可能有多条消息触发写入，
 """
 import importlib.util
 import json
+import os
 import re
 import threading
 import time
+from pathlib import Path
 
-from .constants import PROJECT_ROOT, MEMORY_FILE, SHORT_MEMORY_LINES
+from .constants import PROJECT_ROOT, MEMORY_FILE, MEMORY_DIR, SHORT_MEMORY_LINES
 
 _mm_spec = importlib.util.spec_from_file_location("memory_manager", PROJECT_ROOT / "memory_manager.py")
 _mm = importlib.util.module_from_spec(_mm_spec)
@@ -29,19 +38,92 @@ humanize_gap = _mm.humanize_gap
 # 短期记忆文件锁（进程内）
 _memory_lock = threading.Lock()
 
+_migrated = False
+
+
+def _file_for(user_id: str) -> Path:
+    """某个会话的历史文件。id 只可能是 QQ 号/群号，仍然过滤一遍防路径穿越。"""
+    return MEMORY_DIR / f"{re.sub(r'[^\w.-]', '_', str(user_id))}.json"
+
+
+def _read_json(path: Path):
+    """读一个 JSON 文件；缺失/空/坏 → None（调用方决定怎么兜底）。"""
+    if not path.exists():
+        return None
+    try:
+        content = path.read_text(encoding="utf-8").strip()
+        return json.loads(content) if content else None
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _write_json(path: Path, data) -> None:
+    """写 JSON 文件（先写 .tmp 再 replace：避免写一半被读到半个文件）。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _ensure_migrated() -> None:
+    """把旧的单文件 short_term.json 拆成一人一个文件（只跑一次，拆完改名存档）。"""
+    global _migrated
+    if _migrated:
+        return
+    _migrated = True
+    if not MEMORY_FILE.exists():
+        return
+    data = _read_json(MEMORY_FILE)
+    if not isinstance(data, dict):
+        return
+    n = 0
+    try:
+        for uid, hist in data.items():
+            # 老数据两种形态都要搬：行列表，或整个 key 存成一个字符串（更早的遗留形态）
+            if isinstance(hist, str):
+                hist = [hist] if hist.strip() else []
+            if not isinstance(hist, list) or not hist:
+                continue
+            f = _file_for(uid)
+            if f.exists():        # 已经拆过就别覆盖（防分几次迁移时丢新数据）
+                continue
+            _write_json(f, hist)
+            n += 1
+        MEMORY_FILE.rename(MEMORY_FILE.with_suffix(".json.migrated"))
+        print(f"[记忆] 旧单文件已拆分：{n} 个会话 → {MEMORY_DIR}"
+              f"（原件存为 {MEMORY_FILE.name}.migrated）")
+    except OSError as e:
+        print(f"⚠️ 旧记忆拆分失败（会退回旧单文件读，不影响聊天）: {e}")
+
+
+def use_storage(root) -> None:
+    """把短期记忆整体指到 `root` 目录下（**测试/离线脚本专用**）。
+
+    一次改齐三样（目录 / 旧单文件路径 / 迁移标志）——历史上只改 `MEMORY_FILE`
+    等于没隔离；**只改 `MEMORY_DIR` 更糟**：`_ensure_migrated()` 会去拆真实那份
+    `short_term.json`（拆完还改名）。要隔离就调这个，别自己 assign。
+    """
+    global MEMORY_DIR, MEMORY_FILE, _migrated
+    root = Path(root)
+    MEMORY_DIR = root / "short_term"
+    MEMORY_FILE = root / "short_term.json"
+    _migrated = True          # 临时目录里没有旧单文件要拆
+
 
 def load_short_memory() -> dict:
-    """读取 short_term.json；文件缺失/空/格式错误时返回空字典。"""
-    if not MEMORY_FILE.exists():
-        return {}
-    try:
-        with open(MEMORY_FILE, "r", encoding="utf-8") as f:
-            content = f.read().strip()
-            if not content:
-                return {}
-            return json.loads(content)
-    except (json.JSONDecodeError, OSError):
-        return {}
+    """**调试/兼容**用：把所有会话合并成一个 dict。
+
+    生产路径**不用它**（那正是被拆掉的原因：每次都要读写全部）。分析脚本要看全量
+    聊天记录请用 `chatlog`，这里只在排查记忆问题时手动看一眼。
+    """
+    _ensure_migrated()
+    out = {}
+    if MEMORY_DIR.exists():
+        for f in MEMORY_DIR.glob("*.json"):
+            v = _read_json(f)
+            if isinstance(v, list) and v:
+                out[f.stem] = v
+    return out
 
 
 def _entry_text(item) -> str:
@@ -112,12 +194,17 @@ def get_user_history_timed(user_id: str) -> list:
 
 
 def _load_raw_history(user_id: str) -> list:
-    """读原始历史（保留 {t,text} 结构），供需要时间戳的调用方用。"""
-    memory = load_short_memory()
-    history = memory.get(user_id, [])
-    if isinstance(history, str):
-        return [history] if history else []
-    return list(history) if isinstance(history, list) else []
+    """读某个会话的原始历史（保留 {t,text} 结构），供需要时间戳的调用方用。"""
+    _ensure_migrated()
+    hist = _read_json(_file_for(user_id))
+    if hist is None and MEMORY_FILE.exists():
+        # 兜底：万一旧单文件还没拆成功，仍能从里面读到这个会话（不影响聊天）
+        legacy = _read_json(MEMORY_FILE)
+        if isinstance(legacy, dict):
+            hist = legacy.get(str(user_id))
+    if isinstance(hist, str):
+        return [hist] if hist else []
+    return list(hist) if isinstance(hist, list) else []
 
 
 def get_last_turn_gap_seconds(user_id: str) -> float | None:
@@ -139,22 +226,18 @@ def get_last_turn_gap_seconds(user_id: str) -> float | None:
 
 
 def _append_lines(user_id: str, lines: list) -> None:
-    """往某会话的短期记忆尾部追加若干行（持锁 + 截断到窗口）。空串行自动丢掉。"""
+    """往某会话的短期记忆尾部追加若干行（持锁 + 截断到窗口）。空串行自动丢掉。
+
+    只读写**这一个会话的文件**（O(1)）——原来是把全部会话读出来整份写回去。
+    """
     lines = [ln for ln in lines if ln]
     if not lines:
         return
     with _memory_lock:
-        memory = load_short_memory()
-        history = memory.get(user_id, [])
-        if isinstance(history, str):
-            history = [history] if history else []
-        elif not isinstance(history, list):
-            history = []
+        history = _load_raw_history(user_id)
         now = time.time()
         history.extend({"t": now, "text": ln} for ln in lines)
-        memory[user_id] = history[-SHORT_MEMORY_LINES:]
-        with open(MEMORY_FILE, "w", encoding="utf-8") as f:
-            json.dump(memory, f, ensure_ascii=False, indent=2)
+        _write_json(_file_for(user_id), history[-SHORT_MEMORY_LINES:])
 
 
 def append_user_history(user_id: str, user_msg: str, reply: str) -> None:

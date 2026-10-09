@@ -24,15 +24,10 @@ import json
 import os
 
 from .constants import CORPUS_JUDGE_MAX_KEEP, MAX_RETRIEVAL_ITEM_CHARS, THINKING_DISABLED
-from .config import _get_model_name, extract_chat_content
+from .config import log_cache_usage, _get_model_name, extract_chat_content
 
 CORPUS_JUDGE_PROMPT = """灰泽满是一个虚拟主播。下面是**她本人真实经历过的片段**（不是编的，是她直播里发生过的事）。
 
-【用户刚说的话】
-{query}
-
-【候选经历】
-{candidates}
 
 \
 判断：用户这句话，是不是在**问她、或者聊到**上面哪段经历里的事？
@@ -50,6 +45,12 @@ CORPUS_JUDGE_PROMPT = """灰泽满是一个虚拟主播。下面是**她本人�
 ⚠️ 只"提到同一个词/同一个话题"**不算**——必须是**冲着她来的**。
 ⚠️ **拿不准 → 不保留**。她想不起来只是没加分，**想起错的**是让她说一件没发生过的事
    （例：用户问"感冒吃什么药"，她想起自己感冒那段 → 她会说"我最近也感冒了" → 那是错的）。
+
+【用户刚说的话】
+{query}
+
+【候选经历】
+{candidates}
 
 只输出 JSON：{{"keep": [编号, …]}}；一段都不相关就 {{"keep": []}}"""
 
@@ -90,6 +91,7 @@ async def judge_corpus(deepseek_client, query: str, candidates: list) -> list:
             max_tokens=60,
             **THINKING_DISABLED,
         )
+        log_cache_usage(resp, "直播记忆判")
         content = extract_chat_content(resp)
         # 剥 ``` 围栏。**要连语言标签一起剥**（模型常返回 ```json），
         # 只取 ``` 之间那段的话，剩下的 `json\n{...}` 会让 json.loads 直接失败。
