@@ -247,13 +247,105 @@ def run_replay(args) -> None:
     print(json.dumps(report, ensure_ascii=False, indent=2))
 
 
+# ==================== 用真实聊天记录重建 v2 真实库 ====================
+
+REAL_AUDIT_FILE = _common.PROJECT_ROOT / "user_memory" / "memory_v2_audit.jsonl"
+
+
+def density_gate(msg: str) -> bool:
+    """这条消息值不值得提取（和线上 v1 的密度门控一致）：太短 / 纯表情 → 跳过。"""
+    text = (msg or "").strip()
+    if not text or len(text) < 4:
+        return False
+    return not (text.startswith("[表情：") and text.endswith("]"))
+
+
+async def rebuild(*, paths, limit: int | None = None, gate: bool = True) -> dict:
+    """用真实聊天记录**重建** v2 记忆库（写真实 `user_memory/`，先备份旧库再覆盖）。
+
+    这就是设计文档 §五 的"回放重建"：v2 的条目**从真实证据长出来**（带证据 / 时间 /
+    隐私闸门 / 作废），而不是把 v1 的自由文本卡机械搬过去。
+    成本 = 每个过门控的轮一次提取调用（全量约 4000 次）。
+    """
+    from openai import AsyncOpenAI
+
+    import nonebot
+
+    try:
+        nonebot.get_driver()
+    except ValueError:
+        nonebot.init()
+
+    from src.plugins.chatbot.memory_v2 import ShadowMemoryStore, extract_and_ingest
+
+    api_key = _common.get_api_key("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("未检测到 OPENAI_API_KEY")
+    client = AsyncOpenAI(api_key=api_key, base_url=_common.get_openai_base_url())
+
+    # 覆盖前先备份旧库（真实数据，别无声抹掉）。
+    if DEFAULT_STATE_FILE.exists():
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        DEFAULT_STATE_FILE.replace(DEFAULT_STATE_FILE.with_name(f"memory_v2_shadow.json.bak-{stamp}"))
+    for stale in (DEFAULT_STATE_FILE, REAL_AUDIT_FILE):
+        if stale.exists():
+            stale.unlink()
+    store = ShadowMemoryStore(state_file=DEFAULT_STATE_FILE, audit_file=REAL_AUDIT_FILE)
+
+    turns = 0
+    accepted = 0
+    try:
+        for record in iter_private_turns(paths, limit=limit or 10**9):
+            user_text = str(record.get("user") or "")
+            if gate and not density_gate(user_text):
+                continue
+            turns += 1
+            if turns % 200 == 0:
+                print(f"[rebuild] 已处理 {turns} 轮 / 累计 {accepted} 条…", flush=True)
+            try:
+                timestamp = float(record.get("t") or 0)
+            except (TypeError, ValueError):
+                timestamp = 0
+            observed_at = datetime.fromtimestamp(timestamp) if timestamp > 0 else datetime.now()
+            scope = f"{record['session']}:{int(timestamp // (6 * 3600)) if timestamp else turns}"
+            try:
+                items = await extract_and_ingest(
+                    client=client,
+                    model=_common.get_model_name(),
+                    store=store,
+                    user_id=str(record["session"]),
+                    user_text=user_text,
+                    assistant_text=str(record.get("reply") or ""),
+                    session_id=scope,
+                    observed_at=observed_at,
+                )
+                accepted += len(items)
+            except Exception as exc:  # 单轮失败不影响整体重建
+                print(f"[rebuild] 一轮失败（跳过）: {exc!r}")
+    finally:
+        await client.close()
+
+    report = build_audit_report(load_state(DEFAULT_STATE_FILE))
+    report.update({"turns_rebuilt": turns, "accepted_updates": accepted})
+    return report
+
+
+def run_rebuild(args) -> None:
+    paths = _resolve_inputs(args.input)
+    report = asyncio.run(rebuild(paths=paths, limit=args.limit, gate=not args.no_gate))
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+
+
 __all__ = [
     "redact_user_id",
     "load_state",
     "build_audit_report",
     "positive_limit",
     "iter_private_turns",
+    "density_gate",
     "run_audit",
     "run_replay",
     "replay",
+    "run_rebuild",
+    "rebuild",
 ]

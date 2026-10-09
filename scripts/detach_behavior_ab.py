@@ -128,6 +128,7 @@ async def main() -> int:
 
     global _orig
     core.update_memory_task = lambda *a, **k: asyncio.sleep(0)
+    core.update_memory_v2_shadow_task = lambda *a, **k: asyncio.sleep(0)
     tmp = tempfile.mkdtemp(prefix="detachab_")
     mem.use_storage(Path(tmp))
     _orig = core.generate_reply

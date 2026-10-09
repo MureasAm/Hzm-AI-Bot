@@ -110,22 +110,15 @@ _PREFERENCE_BEHAVIORS = {
 }
 
 
+# ⚠️ **变量一律放最后**（2026-10-10 修）：DeepSeek 缓存按**前缀**匹配——把 {observed_at} /
+#    {current_summary} / 对话放到前面，会让**它后面的整段静态指令永远 miss**。原来第一个变量
+#    在第 130 字（共 2630 字）→ 只有 5% 可缓存；跑几千次重建就攒出 400 万+ 未命中 token。
+#    改成"指令在前、数据在后"后有 ~95% 可缓存（v1 的提取提示词一直是这个排法）。
 MEMORY_V2_EXTRACT_PROMPT = """你是灰泽满私聊机器人的记忆候选提取器。你的输出不会直接成为事实，
 还会经过代码校验和影子审计。只根据下面这一次真实对话提取，不要脑补。
 
 【唯一的准入标准】
 把这条信息抽出来，**会不会改变灰泽满下一次回复**？不会的，一律不记。
-
-【时间与会话】
-观测时间：{observed_at}
-证据会话：{session_id}
-
-【当前影子记忆摘要】
-{current_summary}
-
-【本轮对话】
-用户：{user_text}
-灰泽满：{assistant_text}
 
 只允许三种 kind（**情绪不在长期记忆里**——它住在会话记忆，跟话题一起 3 小时消散）：
 1. fact：关于**用户本人**的、会影响回应的稳定事实——称呼/昵称、地域时区、身份（学生/社畜）、
@@ -186,22 +179,34 @@ temporal_scope 必须是 past/current/future/timeless：用户过去经历用 pa
   ]
 }}
 没有候选时返回 {{"items":[]}}。不要 markdown，不要额外文字。
+
+【本轮对话】
+用户：{user_text}
+灰泽满：{assistant_text}
+
+【观测时间与会话】
+观测时间：{observed_at}
+证据会话：{session_id}
+
+【当前已知记忆摘要（避免重复提取）】
+{current_summary}
 """
 
 
 def shadow_enabled() -> bool:
-    """Shadow extraction is opt-in; only the literal value ``1`` enables it."""
-    return os.environ.get("MEMORY_V2_SHADOW", "0") == "1"
+    """V2 提取**默认开启**（2026-10-10 转正：真实聊天已用它重建过一整库）。
+
+    要临时关掉（回退排查）在 `.env.prod` 设 `MEMORY_V2_SHADOW=0`，不用改代码。
+    """
+    return os.environ.get("MEMORY_V2_SHADOW", "1") != "0"
 
 
 def injection_enabled() -> bool:
-    """V2 context injection is opt-in and separate from shadow extraction.
+    """V2 注入**默认开启**（同上转正）。临时关掉设 `MEMORY_V2_INJECT=0`。
 
-    Shadow extraction (``MEMORY_V2_SHADOW``) only writes the store; injection
-    actually changes replies, so it stays behind its own flag until the shadow
-    rollout is validated (see ``docs/记忆v2设计.md`` §上线路径).
+    注入的都是长期适配（相处方式靠前 / 未完成约定中段）；情绪走会话记忆，不在这里。
     """
-    return os.environ.get("MEMORY_V2_INJECT", "0") == "1"
+    return os.environ.get("MEMORY_V2_INJECT", "1") != "0"
 
 
 def parse_extraction_payload(content: str) -> dict:

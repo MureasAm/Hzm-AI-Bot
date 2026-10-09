@@ -39,7 +39,7 @@ from .routing import (
     _repair_llm_json,
 )
 from .reply_style import (
-    clean_reply, is_echo_reply, is_emotion_only_query,
+    clean_reply, is_echo_reply, is_emotion_only_query, uses_time_hook,
 )
 from .session_memory import (
     probe_session, build_session_context, get_session, is_emoji_msg, previous_session_note,
@@ -892,12 +892,9 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
             # 梗匹配也记入短期记忆 + 异步长期记忆，避免后续对话"失忆"
             append_user_history(user_id, user_msg, reply)
             if not is_group:  # 群会话不建用户记忆卡
-                card = get_user_memory(user_id)
-                asyncio.create_task(update_memory_task(user_id, user_msg, reply, card))
-                if memory_v2.shadow_enabled():
-                    asyncio.create_task(update_memory_v2_shadow_task(
-                        user_id, user_msg, reply, memory_scope_id,
-                    ))
+                asyncio.create_task(update_memory_v2_shadow_task(
+                    user_id, user_msg, reply, memory_scope_id,
+                ))
             return reply
 
     # --- 🎭 人格规则 + 🔍 检索融合（query 只算 1 次 embedding）---
@@ -908,9 +905,12 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     preference_items = ctx["preference_items"]
     core_stories = ctx["core_stories"]
 
-    # --- 🧠 确定性两路记忆 ---
+    # --- 🧠 长期记忆：2026-10-10 起 **V2 正位**，v1 的卡不再注入 ---
+    # v1 的 update_memory_task 也停写了（见本函数末尾）；卡文件仍留在 user_memory/long_term/，
+    # 现在只读它拿 weather_city（城市感知）。要回退 v1：把下面 memory_context 还原成
+    # `build_memory_context(user_memory_card)`、并把末尾的 update_memory_task 加回去。
     user_memory_card = {} if is_group else get_user_memory(user_id)
-    memory_context = "" if is_group else build_memory_context(user_memory_card)
+    memory_context = ""
     # 群聊现场事实：在场成员 + 群内近况（轻量群记忆，只在本群注入）
     group_context = ""
     if is_group:
@@ -981,6 +981,23 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
             if not is_echo_reply(reply, recent_bot, window=8):
                 break
 
+    # 「时间钩子」重复：熬夜场景下她反复拿"现在几点了/还不睡"当开头（逐字复读抓不到——
+    # 说法不同、公共子串不够长）。触发条件很窄：**这条提了时间 且 最近两条里也提过**。
+    # 只换一句更具体的提醒，重生 2 次；判据本身只认时间词，不碰她别的口癖。
+    if uses_time_hook(reply) and any(uses_time_hook(prev) for prev in recent_bot[-2:]):
+        print(f"[防复读] 又拿时间当切入点『{reply[:20]}』，换角度")
+        nudge = {
+            "role": "system",
+            "content": "你最近几条回复都在拿'几点了/还不睡'当开头（'凌晨三点…'那类）。"
+                       "对方已经听过了，再说一遍很腻。这条**不许提时间**、也不要点评对方熬夜，"
+                       "换一个完全不同的切入点重新回复。",
+        }
+        for _ in range(2):
+            candidate = await generate_reply(list(messages) + [nudge])
+            reply = candidate
+            if not (uses_time_hook(reply) and any(uses_time_hook(prev) for prev in recent_bot[-2:])):
+                break
+
     # --- 💾 更新短期记忆（带锁）：图片消息把视觉描述记进去，后续才记得聊过什么图 ---
     # 存**清洗后**的版本（clean_reply 平时在 chat_window 里、本函数返回之后才跑）：
     # 否则她带换行/多括号的原始输出会存进记忆，再作为"她自己怎么说话"的 few-shot 喂回去，
@@ -994,12 +1011,10 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         return reply
     append_user_history(user_id, record_msg, clean_reply(reply))
 
-    # --- 📝 异步更新长期记忆（会话级记忆已在对话前 probe_session 同步更新） ---
+    # --- 📝 异步更新长期记忆（V2；会话级记忆已在对话前 probe_session 同步更新） ---
     if not is_group:  # 群会话不建用户记忆卡
-        asyncio.create_task(update_memory_task(user_id, record_msg, reply, user_memory_card))
-        if memory_v2.shadow_enabled():
-            asyncio.create_task(update_memory_v2_shadow_task(
-                user_id, record_msg, reply, memory_scope_id,
-            ))
+        asyncio.create_task(update_memory_v2_shadow_task(
+            user_id, record_msg, reply, memory_scope_id,
+        ))
 
     return reply

@@ -111,6 +111,7 @@ async def main():
         print("❌ 没有可测的规矩用例"); return 1
 
     core.update_memory_task = lambda *a, **k: asyncio.sleep(0)
+    core.update_memory_v2_shadow_task = lambda *a, **k: asyncio.sleep(0)
     tmp = tempfile.mkdtemp(prefix="skelrule_")
     mem.use_storage(Path(tmp))
     global _ORIG

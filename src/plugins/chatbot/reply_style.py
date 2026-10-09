@@ -69,6 +69,18 @@ def _lcs_len(a: str, b: str) -> int:
     return best
 
 
+# 「时间钩子」：她在熬夜场景下会反复拿"现在几点了/该睡了"当切入点（实测某用户 10 条回复里
+# 5 条如此）。逐字复读检测抓不到（说法不同、公共子串不够长），所以单列一条**只认时间词**的窄判据。
+# 窄是故意的：历史上"防措辞固化"就是死在误伤她自己的口癖（75% 触发都在拦自称"灰泽满"），
+# 所以这条只管"又提时间"，别的词一概不认。
+_TIME_HOOK_RE = re.compile(r"凌晨|半夜|深夜|大半夜|大清早|一大早|[0-9]{1,2}\s*点")
+
+
+def uses_time_hook(reply: str) -> bool:
+    """这条回复是不是又在拿"时间"当切入点（用于拦熬夜场景下的反复开场）。"""
+    return bool(_TIME_HOOK_RE.search(reply or ""))
+
+
 def is_echo_reply(reply: str, recent_bot_replies: list, min_ratio: float = 0.6,
                   window: int = 3) -> bool:
     """判断新回复是否复读了最近自己说过的话（复读机防护）。

@@ -100,6 +100,16 @@ class TestPreviousSessionNote:
         self._write_stale(_isolate_file, 1)
         assert sm.previous_session_note("u1") == ""
 
+    def test_between_decay_and_note_thresholds_no_note(self, _isolate_file):
+        """两个阈值已拆开：话题 3h 就消散，但没隔够 12h 不发「上次聊过」。"""
+        self._write_stale(_isolate_file, 5)
+        assert sm.get_session("u1")["topic"] == ""       # 话题已消散
+        assert sm.previous_session_note("u1") == ""      # 但还不到念"上次聊过"的时候
+
+    def test_clearly_old_session_gets_note(self, _isolate_file):
+        self._write_stale(_isolate_file, 13)
+        assert "上次聊过" in sm.previous_session_note("u1")
+
     def test_no_record_returns_empty(self):
         assert sm.previous_session_note("nobody") == ""
 

@@ -42,6 +42,11 @@ MAX_EVENTS_PER_SESSION = 6
 SESSION_STALE_SECONDS = 3 * 3600
 # 情绪（mood）与话题同寿命：一起在 3 小时后消散（2026-10-10，用户定）。
 MOOD_STALE_SECONDS = SESSION_STALE_SECONDS
+# ⚠️「上次聊过」提示的阈值**单独**一条，别复用话题消散那条（2026-10-10）：
+#    话题 3h 就消散（会话记忆不再注入），但**提示**如果也按 3h，隔几小时回来就念一句
+#    "上次聊过…"，大半会话开头都带它，太吵。所以提示保持 **12 小时**——
+#    只有真的隔了半天的旧事才降级成【上次聊过】提示。
+PREV_SESSION_NOTE_SECONDS = 12 * 3600
 # 「上次聊过」最多带几条当时的事件（整场搬进来会挤上下文，只要够唤起记忆就行）
 PREV_SESSION_EVENTS_MAX = 2
 
@@ -181,7 +186,10 @@ def get_session(user_id: str) -> dict:
 
 
 def previous_session_note(user_id: str) -> str:
-    """上一场会话**已经过期**时，给一条带时间的「上次聊过」提示；否则空串。
+    """隔得够久（> `PREV_SESSION_NOTE_SECONDS`，12h）时，给一条带时间的「上次聊过」提示；否则空串。
+
+    ⚠️ 阈值**不是**话题消散那条（3h）：话题 3h 就不注入了，但提示要 12h 才发——
+    否则隔几小时回来就念一句"上次聊过"，太吵。
 
     ⚠️ **必须在 probe_session 之前调用**：probe 会把这条记录的 last_active
     改写成"现在"，之后再问就永远得到"没过期"。
@@ -197,8 +205,8 @@ def previous_session_note(user_id: str) -> str:
     if not topic and not events:
         return ""
     gap = session_gap_seconds(user_id)
-    if gap is not None and gap <= SESSION_STALE_SECONDS:
-        return ""   # 还在有效期内 → 走正常的【当前会话】注入，别重复说一遍
+    if gap is not None and gap <= PREV_SESSION_NOTE_SECONDS:
+        return ""   # 没隔够久 → 不提示（话题可能已按 3h 消散，但那不算"旧事重提"）
     when = f"{humanize_gap(gap)}前" if gap is not None else ""
     body = []
     if topic:

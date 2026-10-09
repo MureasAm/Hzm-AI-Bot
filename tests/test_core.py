@@ -123,6 +123,22 @@ class TestEchoReply:
         assert reply_style.is_echo_reply(reply, recent, window=8) is True   # 放宽拦住
 
 
+class TestTimeHook:
+    """「时间钩子」判据：只认时间词，别的口癖一概不碰（防误伤，见函数注释）。"""
+
+    def test_detects_night_time_phrases(self):
+        assert reply_style.uses_time_hook("凌晨三点了还不睡")
+        assert reply_style.uses_time_hook("大半夜的说这个干嘛")
+        assert reply_style.uses_time_hook("3点了你咋还没睡")
+        assert reply_style.uses_time_hook("") is False
+
+    def test_does_not_fire_on_her_other_tics(self):
+        # 她的自称/嘴硬等口癖绝不能触发——历史教训：防措辞固化就是死在误伤自称"灰泽满"
+        assert reply_style.uses_time_hook("灰泽满才没有呢") is False
+        assert reply_style.uses_time_hook("行行行，你说了算") is False
+        assert reply_style.uses_time_hook("明天直播记得来") is False
+
+
 class TestSummarizeBatch:
     async def test_single_message_skips(self, monkeypatch):
         def _fail(*a, **k):
@@ -333,7 +349,8 @@ class TestFallbackReplyNotRemembered:
         monkeypatch.setattr(core, "get_user_history", lambda uid: [])
         monkeypatch.setattr(core, "get_last_turn_gap_seconds", lambda uid: None)
         monkeypatch.setattr(core, "append_user_history", fake_append)
-        monkeypatch.setattr(core, "update_memory_task", fake_update)
+        # 长期记忆已换成 V2（2026-10-10）：数它的提取任务即可
+        monkeypatch.setattr(core, "update_memory_v2_shadow_task", fake_update)
         monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
 
         out = await core.handle_chat("u", "可惜🤭")

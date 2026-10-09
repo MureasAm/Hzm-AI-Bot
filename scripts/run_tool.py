@@ -575,6 +575,22 @@ def _run_memory_ab(args):
     memory_ab.run_ab_cli(args)
 
 
+def _add_memory_rebuild(sub):
+    p = sub.add_parser("memory-rebuild",
+                       help="用真实聊天记录**重建** v2 记忆库（写真实 user_memory/，先备份旧库）")
+    p.add_argument("-i", "--input", nargs="*", default=None,
+                   help="chat JSONL；缺省读取 data/chat_log/*.jsonl")
+    p.add_argument("--limit", type=int, default=None,
+                   help="最多处理多少轮（缺省=全部过门控的轮次）")
+    p.add_argument("--no-gate", action="store_true", help="不过密度门控（太短/纯表情也提取）")
+    p.set_defaults(func=_run_memory_rebuild)
+
+
+def _run_memory_rebuild(args):
+    import memory_v2_tool
+    memory_v2_tool.run_rebuild(args)
+
+
 # ==================== 主入口 ====================
 
 def build_parser() -> argparse.ArgumentParser:
@@ -612,6 +628,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_memory_audit(sub)
     _add_memory_replay(sub)
     _add_memory_ab(sub)
+    _add_memory_rebuild(sub)
     return parser
 
 

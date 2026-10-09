@@ -104,6 +104,7 @@ async def main():
         pass
 
     core.update_memory_task = lambda *a, **k: asyncio.sleep(0)
+    core.update_memory_v2_shadow_task = lambda *a, **k: asyncio.sleep(0)
     tmp = tempfile.mkdtemp(prefix="schedabl_")
     mem.use_storage(Path(tmp))
     global _ORIG

@@ -182,6 +182,10 @@ user_memory/*.bak*
 # 同理，**拆分迁移的存档**（如 `long_term.json.migrated`，2026-10-09 起四层记忆按会话分文件）
 # 也不以 .json 结尾，而它就是**拆分前的那份原件**——真实用户记忆，绝不能进公开仓库。
 user_memory/*.migrated
+# 同理，**审计日志**（`memory_v2_audit.jsonl` 等）**以 .jsonl 结尾**，上面两条 .json 盖不住，
+# 而里面有 user_id 和逐条决策记录——同样是真实数据，单独收掉（2026-10-10 补）。
+user_memory/*.jsonl
+user_memory/**/*.jsonl
 # Playwright MCP 的临时快照（工具产物）
 .playwright-mcp/
 # 微博会话 jar（敏感，运行时生成）

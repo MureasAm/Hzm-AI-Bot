@@ -507,14 +507,12 @@ class TestContextSegments:
 
 
 class TestInjectionFlag:
-    def test_injection_disabled_by_default(self, monkeypatch):
+    def test_injection_enabled_by_default(self, monkeypatch):
         monkeypatch.delenv("MEMORY_V2_INJECT", raising=False)
-        assert injection_enabled() is False
-
-    def test_injection_requires_explicit_one(self, monkeypatch):
-        monkeypatch.setenv("MEMORY_V2_INJECT", "1")
         assert injection_enabled() is True
-        monkeypatch.setenv("MEMORY_V2_INJECT", "true")
+
+    def test_injection_can_be_disabled(self, monkeypatch):
+        monkeypatch.setenv("MEMORY_V2_INJECT", "0")
         assert injection_enabled() is False
 
 
@@ -557,14 +555,12 @@ def test_delete_user_removes_state_but_keeps_other_users(store, clock):
 
 
 class TestShadowExtraction:
-    def test_feature_flag_is_disabled_by_default(self, monkeypatch):
+    def test_shadow_enabled_by_default(self, monkeypatch):
         monkeypatch.delenv("MEMORY_V2_SHADOW", raising=False)
-        assert shadow_enabled() is False
-
-    def test_feature_flag_requires_explicit_one(self, monkeypatch):
-        monkeypatch.setenv("MEMORY_V2_SHADOW", "1")
         assert shadow_enabled() is True
-        monkeypatch.setenv("MEMORY_V2_SHADOW", "true")
+
+    def test_shadow_can_be_disabled(self, monkeypatch):
+        monkeypatch.setenv("MEMORY_V2_SHADOW", "0")
         assert shadow_enabled() is False
 
     def test_parser_accepts_strict_json_or_json_fence(self):

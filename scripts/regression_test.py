@@ -67,8 +67,11 @@ def _init():
     nonebot.load_plugins("src/plugins")
 
     import src.plugins.chatbot.core as core
-    # 禁用长期记忆提取副作用（只测回复质量）
+    # 禁用长期记忆提取副作用（只测回复质量）。
+    # ⚠️ **v1 / v2 两路都要禁**：只禁 v1 的话，v2 提取（2026-10-10 起默认开）会往
+    #    **真实** user_memory/memory_v2_shadow.json 里写一堆 regr_* 测试用户。
     core.update_memory_task = lambda *a, **k: asyncio.sleep(0)
+    core.update_memory_v2_shadow_task = lambda *a, **k: asyncio.sleep(0)
 
     # 把记忆文件指向临时目录，避免污染线上数据
     tmp = tempfile.mkdtemp(prefix="hzm_test_")
@@ -76,6 +79,12 @@ def _init():
     mm.use_storage(Path(tmp))
     import src.plugins.chatbot.memory as mem
     mem.use_storage(Path(tmp))
+    # v2 的影子库同样指到临时目录（否则注入会读到真实库里的真人记忆）
+    import src.plugins.chatbot.memory_v2 as mv2
+    core._MEMORY_V2_STORE = mv2.ShadowMemoryStore(
+        state_file=Path(tmp) / "memory_v2_shadow.json",
+        audit_file=Path(tmp) / "memory_v2_audit.jsonl",
+    )
     return core
 
 
