@@ -43,6 +43,7 @@ from .reply_style import (
 )
 from .session_memory import (
     probe_session, build_session_context, get_session, is_emoji_msg, previous_session_note,
+    mood_note,
 )
 
 
@@ -349,7 +350,9 @@ def build_message_list(user_msg: str, fused_items: list,
                        core_stories: list = None, session_context: str = "",
                        query_hint: str = "", denied_terms: set | None = None,
                        group_context: str = "", history_gap_note: str = "",
-                       prev_session_note: str = "", same_request: dict = None) -> list:
+                       prev_session_note: str = "", same_request: dict = None,
+                       profile_context: str = "", commitment_context: str = "",
+                       emotion_context: str = "") -> list:
     """按优先级组装发送给模型的消息列表。
 
     fused_items 为融合后的 RetrievalItem 列表（corpus + behavior），按源分组注入。
@@ -360,6 +363,8 @@ def build_message_list(user_msg: str, fused_items: list,
     core_stories 为命中的核心记忆（印象最深的结晶，可选）。
     session_context 为会话级记忆（当前话题 + 本场事件，可选）。
     query_hint 为短消息的语境扩充（可选）：模型理解短消息用，正文仍是原 msg。
+    profile_context / commitment_context / emotion_context 为 Memory V2 的三段注入
+    （见 docs/记忆v2设计.md §三）：相处方式靠前、未完成约定中段、当下情绪紧挨用户消息。
     """
     messages = []
     messages.append({"role": "system", "content": SYSTEM_PROMPT})
@@ -377,6 +382,11 @@ def build_message_list(user_msg: str, fused_items: list,
                        f"被问'明天/这周/几点播/来不来直播'时，以这个周表为准回答（带她的嘴硬风格），"
                        f"不要拿直播记忆里过去某场的旧安排当现在的计划。",
         })
+
+    # Memory V2【靠前】相处方式：偏好→行为句 + 话题相关事实（个体适配，优先级最高）。
+    # 位置靠前是有意的：它是"针对这个人的长期适配"，不该被后面的通用素材盖过。
+    if profile_context:
+        messages.append({"role": "system", "content": profile_context})
 
     # 偏好档案（第 5 路语义检索）：聊到相关话题才注入；与语料/记忆冲突时以偏好为准
     if preference_items:
@@ -463,6 +473,10 @@ def build_message_list(user_msg: str, fused_items: list,
                            f"若确实在说当下且感知没给原因，就大方说不知道/打哈哈，别从旧事现编一个。"
                            f"\n{context}"
             })
+
+    # Memory V2【中段】未完成约定：别忘、要兑现（system 中段，紧挨记忆区）。
+    if commitment_context:
+        messages.append({"role": "system", "content": commitment_context})
 
     # 长期记忆注入
     if memory_context:
@@ -563,6 +577,10 @@ def build_message_list(user_msg: str, fused_items: list,
     now_context = context_probe.get_now_context(city=weather_city)
     if now_context:
         messages.append({"role": "system", "content": now_context})
+
+    # Memory V2【最后】当下情绪：紧挨用户消息（跟【当前时间】一样放尾部），只影响这一轮语气。
+    if emotion_context:
+        messages.append({"role": "system", "content": emotion_context})
 
     messages.append({"role": "user", "content": final_user})
     return messages
@@ -912,6 +930,16 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         group_context = f"在场成员：{names}。群内近况：{evtxt}"
     weather_city = (user_memory_card or {}).get("weather_city", "") or ""
 
+    # --- 🧠 Memory V2 注入（可选；与影子提取分开的开关，默认关，见 docs/记忆v2设计.md §上线路径）---
+    # 两段分开放：相处方式靠前 / 未完成约定中段。
+    profile_context = commitment_context = ""
+    if not is_group and memory_v2.injection_enabled():
+        profile_context = _MEMORY_V2_STORE.build_preference_context(user_id, retrieval_query)
+        commitment_context = _MEMORY_V2_STORE.build_commitment_context(user_id, retrieval_query)
+    # 当下情绪住在**会话记忆**里（2026-10-10 从长期记忆搬来），跟话题一起 3h 消散。
+    # 它**不受 v2 开关控制**——情绪是会话级感知，生产里就该生效；注入位置仍是紧挨用户消息。
+    emotion_context = "" if is_group else mood_note(user_id)
+
     # --- 🧩 构建消息列表 ---
     # 天气预热：组消息前异步把城市 LocationID+天气取进缓存，build 时同步读缓存零阻塞
     await context_probe.warm_weather(weather_city)
@@ -927,6 +955,8 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         denied_terms=denied_terms, group_context=group_context,
         history_gap_note=history_gap_note, prev_session_note=_prev_session_note,
         same_request=ctx.get("same_request"),
+        profile_context=profile_context, commitment_context=commitment_context,
+        emotion_context=emotion_context,
     )
 
     # --- 🤖 调用大模型 ---

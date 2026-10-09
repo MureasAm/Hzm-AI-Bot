@@ -7,6 +7,7 @@ from src.plugins.chatbot.memory_v2 import (
     ShadowMemoryStore,
     build_extraction_prompt,
     extract_and_ingest,
+    injection_enabled,
     parse_extraction_payload,
     shadow_enabled,
 )
@@ -138,54 +139,66 @@ def test_explicit_interaction_preference_confirms_immediately(store, clock):
     assert accepted[0]["status"] == "confirmed"
 
 
-def test_emotional_state_expires_after_six_hours(store, clock):
-    accepted = store.ingest(
+def test_timebound_fact_expires_but_stable_fact_survives(store, clock):
+    """时效性近况：`valid_for` 给期限，到期后不再注入；长期事实不受影响。"""
+    store.ingest(
         "u1",
-        [{
-            "kind": "emotional_state",
-            "key": "current_emotion",
-            "value": "因为考试结果很失落",
-            "explicit": True,
-            "confidence": 0.95,
-        }],
-        source=_source(now=clock, user="成绩出来了，我现在真的很失落"),
+        [
+            {"kind": "fact", "key": "exam_status", "value": "正在准备考试",
+             "temporal_scope": "current", "valid_for": "3d",
+             "explicit": True, "confidence": 0.9},
+            {"kind": "fact", "key": "location", "value": "在曼谷",
+             "temporal_scope": "timeless", "valid_for": "none",
+             "explicit": True, "confidence": 0.9},
+        ],
+        source=_source(now=clock, user="我在曼谷，这几天在准备考试"),
         now=clock,
     )
 
-    assert accepted[0]["status"] == "active"
-    assert accepted[0]["expires_at"] == (clock + timedelta(hours=6)).isoformat()
-    assert "很失落" in store.build_context("u1", "陪我说说话", now=clock)
-    assert "很失落" not in store.build_context(
-        "u1", "陪我说说话", now=clock + timedelta(hours=6, seconds=1)
-    )
+    assert "准备考试" in store.build_context("u1", "你考试准备得怎么样了", now=clock)
+    later = clock + timedelta(days=3, seconds=1)
+    context = store.build_context("u1", "你考试准备得怎么样了", now=later)
+    assert "准备考试" not in context        # 近况到期
+    assert "曼谷" in context                # 长期事实 + always-on key 仍在
 
 
-def test_emotional_state_expires_when_conversation_scope_changes(store, clock):
+def test_past_facts_accumulate_instead_of_superseding(store, clock):
+    """经历（past）累积——后来的经历不能顶掉先前的（通用 key 冲突曾真丢过数据）。"""
     store.ingest(
         "u1",
-        [{
-            "kind": "emotional_state",
-            "key": "current_emotion",
-            "value": "因为考试结果很失落",
-            "explicit": True,
-            "confidence": 0.95,
-        }],
-        source=_source("scope-a", clock),
-        now=clock,
+        [{"kind": "fact", "key": "past_experience", "value": "小时候被霸凌",
+          "temporal_scope": "past", "explicit": True, "confidence": 0.9}],
+        source=_source(now=clock), now=clock,
     )
-
     store.ingest(
-        "u1", [],
-        source=_source("scope-b", clock + timedelta(hours=1), user="换个话题"),
-        now=clock + timedelta(hours=1),
+        "u1",
+        [{"kind": "fact", "key": "past_experience", "value": "高考前遭遇车祸",
+          "temporal_scope": "past", "explicit": True, "confidence": 0.9}],
+        source=_source(now=clock + timedelta(minutes=5)), now=clock + timedelta(minutes=5),
     )
 
-    memory = store.snapshot("u1")["memories"][0]
-    assert memory["status"] == "expired"
-    assert memory["invalidated_at"] == (clock + timedelta(hours=1)).isoformat()
-    assert "很失落" not in store.build_context(
-        "u1", "换个话题", now=clock + timedelta(hours=1), session_id="scope-b"
+    kept = [m["value"] for m in store.snapshot("u1")["memories"] if m["status"] != "superseded"]
+    assert any("霸凌" in v for v in kept)
+    assert any("车祸" in v for v in kept)
+
+
+def test_current_facts_supersede_same_key(store, clock):
+    """当前状态（current）是单值槽：同一 key 的新值顶掉旧的（换城市）。"""
+    store.ingest(
+        "u1",
+        [{"kind": "fact", "key": "location", "value": "在广州",
+          "temporal_scope": "current", "explicit": True, "confidence": 0.9}],
+        source=_source(now=clock), now=clock,
     )
+    store.ingest(
+        "u1",
+        [{"kind": "fact", "key": "location", "value": "搬到深圳了",
+          "temporal_scope": "current", "explicit": True, "confidence": 0.9}],
+        source=_source(now=clock + timedelta(minutes=5)), now=clock + timedelta(minutes=5),
+    )
+
+    kept = [m["value"] for m in store.snapshot("u1")["memories"] if m["status"] != "superseded"]
+    assert kept == ["搬到深圳了"]
 
 
 def test_past_fact_is_not_rendered_as_current_core_profile(store, clock):
@@ -208,6 +221,24 @@ def test_past_fact_is_not_rendered_as_current_core_profile(store, clock):
     assert "广州" not in store.build_context("u1", "今天天气怎么样", now=clock)
     assert "过去事实" in store.build_context("u1", "我以前住哪里", now=clock)
     assert "广州" in store.build_context("u1", "我以前住哪里", now=clock)
+
+
+def test_bot_self_facts_are_rejected_and_user_facts_survive(store, clock):
+    accepted = store.ingest(
+        "u1",
+        [
+            {"kind": "fact", "key": "bot_version", "value": "V8.0",
+             "explicit": True, "confidence": 0.99},
+            {"kind": "fact", "key": "identity", "value": "灰泽满自己是澳洲留学生",
+             "explicit": True, "confidence": 0.9},
+            {"kind": "fact", "key": "preferred_name", "value": "小明",
+             "explicit": True, "confidence": 0.99},
+        ],
+        source=_source(now=clock, user="你更新了 V8.0，我叫小明"),
+        now=clock,
+    )
+
+    assert [m["key"] for m in accepted] == ["preferred_name"]
 
 
 def test_user_plan_cannot_be_stored_as_assistant_commitment(store, clock):
@@ -367,6 +398,126 @@ def test_context_budget_is_hard_cap(store, clock):
     assert len(context) <= 700
 
 
+class TestPreferenceDimensions:
+    """偏好维度从 4 个扩到 8 个（2026-10-10）——每个维度都是"枚举值 → 行为句"。"""
+
+    NEW_DIMENSIONS = [
+        ("address_style", "plain"),
+        ("reply_length", "short"),
+        ("topic_preference", "avoid"),
+        ("self_reference", "first_person"),
+    ]
+
+    def test_new_dimensions_validate_and_render_as_behavior(self, store, clock):
+        accepted = store.ingest(
+            "u1",
+            [
+                {"kind": "interaction_preference", "key": key, "value": value,
+                 "explicit": True, "confidence": 0.9}
+                for key, value in self.NEW_DIMENSIONS
+            ],
+            source=_source(now=clock),
+            now=clock,
+        )
+
+        assert len(accepted) == 4
+        assert all(item["status"] == "confirmed" for item in accepted)
+
+        context = store.build_preference_context("u1", "在吗", now=clock)
+        assert "别用亲昵称谓" in context
+        assert "回复尽量短" in context
+        assert "被带到就自然岔开" in context
+        assert "自称时用'我'" in context
+
+    def test_unknown_value_is_rejected_for_new_dimensions(self, store, clock):
+        accepted = store.ingest(
+            "u1",
+            [{"kind": "interaction_preference", "key": "reply_length", "value": "epic",
+              "explicit": True, "confidence": 0.9}],
+            source=_source(now=clock),
+            now=clock,
+        )
+
+        assert accepted == []
+
+    def test_all_dimension_values_have_behavior_sentences(self):
+        from src.plugins.chatbot import memory_v2
+
+        assert len(memory_v2._PREFERENCE_VALUES) == 8
+        for key, values in memory_v2._PREFERENCE_VALUES.items():
+            for value in values:
+                behavior = memory_v2._PREFERENCE_BEHAVIORS.get((key, value))
+                assert behavior, f"缺少行为句：{key}={value}"
+
+
+class TestContextSegments:
+    """`build_context` 拆成两段：靠前相处方式 / 中段约定（情绪已搬去会话记忆）。"""
+
+    def _seed(self, store, clock):
+        store.ingest(
+            "u1",
+            [
+                {"kind": "interaction_preference", "key": "support_style", "value": "comfort",
+                 "explicit": True, "confidence": 0.95},
+                {"kind": "fact", "key": "preferred_name", "value": "小明",
+                 "explicit": True, "confidence": 0.99},
+                {"kind": "commitment", "key": "promise", "value": "下次给用户唱一段",
+                 "actor": "assistant", "explicit": True, "confidence": 0.96},
+            ],
+            source=_source(now=clock, reply="行，下次给你唱一段"),
+            now=clock,
+        )
+
+    def test_preference_segment_holds_behaviors_and_facts_only(self, store, clock):
+        self._seed(store, clock)
+
+        profile = store.build_preference_context("u1", "陪我说说话", now=clock)
+
+        assert "先接住情绪" in profile
+        assert "小明" in profile
+        assert "未完成约定" not in profile
+        assert "考试很失落" not in profile
+
+    def test_commitment_segment_only_when_query_related(self, store, clock):
+        self._seed(store, clock)
+
+        assert "唱一段" in store.build_commitment_context("u1", "下次能唱吗，唱一段", now=clock)
+        assert store.build_commitment_context("u1", "今天天气怎么样", now=clock) == ""
+
+    def test_emotion_lives_in_session_memory_not_here(self, store, clock):
+        """情绪不再是 v2 的 kind：抽到 emotional_state 一律拒收（它住在会话记忆）。"""
+        accepted = store.ingest(
+            "u1",
+            [{"kind": "emotional_state", "key": "current_emotion", "value": "很失落",
+              "explicit": True, "confidence": 0.9}],
+            source=_source(now=clock),
+            now=clock,
+        )
+        assert accepted == []
+
+    def test_aggregate_context_includes_both_segments(self, store, clock):
+        self._seed(store, clock)
+
+        context = store.build_context("u1", "下次能唱吗，唱一段", now=clock)
+
+        assert "先接住情绪" in context
+        assert "唱一段" in context
+        assert "考试很失落" not in context
+        assert len(context) <= 700
+
+
+class TestInjectionFlag:
+    def test_injection_disabled_by_default(self, monkeypatch):
+        monkeypatch.delenv("MEMORY_V2_INJECT", raising=False)
+        assert injection_enabled() is False
+
+    def test_injection_requires_explicit_one(self, monkeypatch):
+        monkeypatch.setenv("MEMORY_V2_INJECT", "1")
+        assert injection_enabled() is True
+        monkeypatch.setenv("MEMORY_V2_INJECT", "true")
+        assert injection_enabled() is False
+
+
 def test_audit_log_is_jsonl_and_does_not_escape_user_partition(store, clock, tmp_path):
     store.ingest(
         "u1",
@@ -437,6 +588,23 @@ class TestShadowExtraction:
         assert "承诺只从灰泽满回复中提取" in prompt
         assert "用户自己的计划不是灰泽满的承诺" in prompt
         assert '"actor": "assistant"' in prompt
+
+    def test_prompt_carries_admission_rule_and_counter_examples(self, store, clock):
+        prompt = build_extraction_prompt(
+            user_text="你更新了 V8.0 吗",
+            assistant_text="嗯更新了",
+            current_summary="（无）",
+            session_id="session-a",
+            observed_at=clock,
+        )
+
+        assert "会不会改变灰泽满下一次回复" in prompt
+        assert "反例清单" in prompt
+        assert "版本号" in prompt  # bot_version 那类误记的正面拦截
+        assert "感知模块的活" in prompt  # 时间/天气交给 context_probe
+        # 8 个偏好维度都要在提示词里（否则模型不会产出新维度）
+        for key in ("address_style", "reply_length", "topic_preference", "self_reference"):
+            assert key in prompt
 
     async def test_extract_and_ingest_uses_strict_schema(self, store, clock):
         captured = {}

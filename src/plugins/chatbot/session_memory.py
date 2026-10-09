@@ -33,11 +33,15 @@ SESSION_DIR = PROJECT_ROOT / "user_memory" / "session"                # 【现�
 SHORT_QUERY_MAX_CHARS = 4
 # 单用户保留的最大事件数（防无限膨胀）
 MAX_EVENTS_PER_SESSION = 6
-# 话题无活动多久视为冷场（秒），跨天对话重新起话题
-# ⚠️ 这不是"话题结束"的判定阈值（2026-10-05 改）——"话题有没有自然结束"**交给模型判**：
-#    我们只把「话题 + 它什么时候开始的」如实注入，模型自己看时间下判断。
-#    这个值只是**很长的兜底**：隔了这么久，连记录都不值得一提了。
-SESSION_STALE_SECONDS = 24 * 3600
+# 会话冷场阈值（秒）：**按"距上一条消息"算，3 小时**。
+# ⚠️ 2026-10-10 改（推翻 2026-10-05 的"按话题年龄 topic_since、24h"）：
+#    原顾虑是"last_active 每轮刷新 → 话题永不老化"，但那是把"话题跨天延续"当成常态了。
+#    真实对话是**一阵一阵的**：停几个小时再回来，就是新的一场。所以改成
+#    "几小时内没消息 → 这场过去了"，阈值也从 24h 收到 3h。
+#    topic_since 仍保留（用于"这个话题几点开始的"），但**不再决定过期**。
+SESSION_STALE_SECONDS = 3 * 3600
+# 情绪（mood）与话题同寿命：一起在 3 小时后消散（2026-10-10，用户定）。
+MOOD_STALE_SECONDS = SESSION_STALE_SECONDS
 # 「上次聊过」最多带几条当时的事件（整场搬进来会挤上下文，只要够唤起记忆就行）
 PREV_SESSION_EVENTS_MAX = 2
 
@@ -153,13 +157,9 @@ def session_gap_seconds(user_id: str) -> float | None:
 def get_session(user_id: str) -> dict:
     """读取某用户的会话状态。没有、或已冷场时返回空会话。
 
-    冷场判定（2026-10-05 改）：**按"话题年龄"（topic_since）而不是"距上次说话"**。
-    为什么改：last_active 每轮都被 probe_session 刷新，所以按它判**永远不会过期**——
-    一个话题哪怕已经持续好几天、中间断过无数次，也永远算"新鲜"。
-    改为看话题**开始**多久了（SESSION_STALE_SECONDS = 24h 兜底），才真的会老化。
-
-    ⚠️ 这个阈值**不是"话题结束"的判定**——"有没有自然结束"交给模型看时间自己判
-    （注入里会如实写"这个话题是X前开始的"）。这里只是很长的兜底。
+    冷场判定（2026-10-10 改）：**按"距上一条消息"（last_active）**，阈值 3 小时。
+    停几小时没说话 = 这一场已经过去了（见 SESSION_STALE_SECONDS 的说明）。
+    旧写法按"话题年龄"（topic_since, 24h），对"聊一阵停一阵"的日常太宽松。
 
     ⚠️ **拿不到时间戳的一律按冷场处理**（老记录/手改记录没有时间字段）。
     旧写法是 `if last:` 才做判定——缺字段的记录**直接跳过检查、永久免疫**。2026-09-27 查过
@@ -168,15 +168,14 @@ def get_session(user_id: str) -> dict:
     sess = _raw_session(user_id)
     if not sess:
         return {"topic": "", "events": [], "last_active": ""}
-    # 话题年龄优先（新字段）；老记录没有 topic_since 就退回 last_active
-    since = str(sess.get("topic_since") or sess.get("last_active") or "")
-    if not since:
+    last = str(sess.get("last_active") or "")
+    if not last:
         return {"topic": "", "events": [], "last_active": ""}
     try:
-        age = (datetime.now() - datetime.fromisoformat(since)).total_seconds()
+        gap = (datetime.now() - datetime.fromisoformat(last)).total_seconds()
     except (ValueError, TypeError):
         return {"topic": "", "events": [], "last_active": ""}
-    if age > SESSION_STALE_SECONDS:
+    if gap > SESSION_STALE_SECONDS:
         return {"topic": "", "events": [], "last_active": ""}
     return sess
 
@@ -213,6 +212,50 @@ def previous_session_note(user_id: str) -> str:
     )
 
 
+def set_mood(user_id: str, mood: str, *, now: datetime | None = None) -> None:
+    """写入当下情绪（手动/测试用；生产路径由 probe_session 顺带写入）。"""
+    text = (mood or "").strip()
+    if not text:
+        return
+    now = now or datetime.now()
+    with _lock:
+        sess = _raw_session(user_id)
+        if not isinstance(sess, dict):
+            sess = {}
+        sess["mood"] = text
+        sess["mood_at"] = now.isoformat()
+        sess.setdefault("topic", "")
+        sess.setdefault("events", [])
+        sess.setdefault("last_active", now.isoformat())
+        _write_json(_file_for(user_id), sess)
+
+
+def mood_note(user_id: str) -> str:
+    """当下情绪的注入文本；超过 3 小时（或没有）返回空串。
+
+    注入位置**紧挨用户消息**（跟【当前时间】一样放尾部）——它只影响这一轮语气，
+    不该跟【会话记忆】那类中段内容混在一起。
+    """
+    sess = _raw_session(user_id)
+    mood = str(sess.get("mood") or "").strip()
+    if not mood:
+        return ""
+    at = str(sess.get("mood_at") or "")
+    gap = ""
+    if at:
+        try:
+            secs = (datetime.now() - datetime.fromisoformat(at)).total_seconds()
+        except (ValueError, TypeError):
+            secs = None
+        if secs is not None and secs > MOOD_STALE_SECONDS:
+            return ""
+        if secs is not None:
+            g = humanize_gap(secs)
+            if g:
+                gap = f"（{g}前说的）"
+    return f"【用户此刻的情绪】{mood}{gap}；本轮语气先照顾这个情绪，必要时暂停互怼。"
+
+
 # ==================== 提示词 ====================
 
 SESSION_PROBE_PROMPT = """你是会话话题追踪器。用户在聊天中刚发了一条新消息，下面给出【上一轮已知话题】和【最近对话】。
@@ -225,6 +268,7 @@ SESSION_PROBE_PROMPT = """你是会话话题追踪器。用户在聊天中刚发
   "topic": "当前话题的一句话概括（如'用户在撒娇，灰泽满在傲娇推拉''聊灰泽满的香水'；话题没变就沿用上一轮的，变了就换成新的）",
   "topic_changed": true 或 false,
   "new_event": "这条消息值得记住的关键事件，一句话（如'用户发比爱心示好'）；纯寒暄无事件则 null",
+  "mood": "用户**此刻**的情绪状态，一句话（如'因为考试失利而失落''和队友闹别扭后很委屈'）；看不出来 / 没有明显情绪则 null",
   "expanded_query": "如果这条消息很短（≤4字）**或是指代性的**（必须结合前面聊的话题才能理解，如'能读给我听听吗''那个呢''然后呢'——单看这句不知道指什么），补全成既能检索到相关记忆、又能帮模型理解的一句话（如'用户让灰泽满念她写的小说乌色月'）；其他情况则 null"
 }}
 要求：
@@ -232,6 +276,8 @@ SESSION_PROBE_PROMPT = """你是会话话题追踪器。用户在聊天中刚发
 - **topic 只概括双方实际说的话，不要添加对话里没有的设定或推断**：用户没提"时差/异地/对方在哪/身份"，就别写"时差/异地"——用户只说时间是几点，就写"聊时间/几点/作息"；拿不准就平实地概括内容，宁可朴素不要加戏（曾踩坑：用户说"现在是墨尔本时间凌晨六点"，被脑补成"调侃时差"并注入带偏回复）
 - topic_changed 判定标准（**新主题优先**）：只要用户这条消息是在**问/聊一个新的具体主题**（如"你最近有在用香水吗""你会不会游泳"），即使语气还延续之前的氛围，也视为转话题 → topic_changed=true，topic 换成这个新主题。只有当消息是**同一主题下的继续**（如上一轮聊香水、这轮"那你喜欢哪个牌子"）才 topic_changed=false 沿用。
 - new_event 只记有意义的互动（示好/情绪/承诺/分享），寒暄问候不记
+- mood 只在用户**明显**带情绪时写（失落/焦虑/兴奋/委屈…）；纯寒暄、看不出情绪就 null。
+  **别把"话题"当情绪**（聊考试 ≠ 焦虑），也**别把灰泽满自己的语气**算成用户的情绪。
 - **expanded_query 表情识别铁律**：如果消息是**纯表情/纯符号**（emoji 或[表情：xx]），必须先按**表情的标准含义**识别，不要从对话历史臆测：
   · 😅 = 无语/无奈/尴尬（不是傲娇调侃）
   · 😭 = 委屈/难过/哭
@@ -318,6 +364,11 @@ async def probe_session(user_id: str, user_msg: str, history_text: str, client) 
     new_event = parsed.get("new_event")
     if new_event and isinstance(new_event, str):
         new_event = new_event.strip()
+    # 当下情绪（2026-10-10 从长期记忆搬到这里）：只在这一轮确实读出情绪时覆盖。
+    mood = parsed.get("mood")
+    mood = mood.strip() if isinstance(mood, str) else ""
+    if mood.lower() in ("null", "none"):
+        mood = ""
 
     # 转话题：清空旧事件，起新话题
     events = [] if changed else list(prev.get("events", []))
@@ -337,12 +388,22 @@ async def probe_session(user_id: str, user_msg: str, history_text: str, client) 
             topic_since = prev_since
         else:
             topic_since = datetime.now().isoformat()
-        _write_json(_file_for(user_id), {
+        now_iso = datetime.now().isoformat()
+        record = {
             "topic": topic or prev_topic,
             "events": events,
-            "last_active": datetime.now().isoformat(),
+            "last_active": now_iso,
             "topic_since": topic_since,
-        })
+        }
+        # mood 只在读出情绪时覆盖；没读出就沿用上一轮的（直到 3h 自然消散）。
+        # 注意：cold session 时 prev 是空的 → 旧 mood 也随之丢弃，符合"和话题一起消散"。
+        if mood:
+            record["mood"] = mood
+            record["mood_at"] = now_iso
+        elif prev.get("mood"):
+            record["mood"] = str(prev.get("mood"))
+            record["mood_at"] = str(prev.get("mood_at") or "")
+        _write_json(_file_for(user_id), record)
 
     # 检索 query 扩充：短消息（≤4字）或指代性消息（必须结合话题才能懂，如"能读给我听听吗"）
     # 时，用模型补全的完整句做检索——否则指代性消息检索不到任何记忆（曾导致"念乌色月"时模型没

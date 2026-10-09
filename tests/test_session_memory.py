@@ -273,12 +273,11 @@ class TestBuildSessionContext:
 
 
 class TestTopicAge:
-    """2026-10-05：话题要带**年龄**，且兜底按"话题年龄"而不是"距上次说话"判。
+    """话题要带**年龄**；冷场兜底按"距上一条消息"，3 小时（2026-10-10 改）。
 
-    用户指出的结构问题：会话记忆只随"话题变了"而变，不随时间变——
-    结果隔几小时回来说话，上次那个话题**依旧被当"当前会话"注入**。
-    改法：记住话题**什么时候开始的**（topic_since），如实注入年龄；
-    "有没有自然结束"交给模型判；只留 24h 兜底。
+    2026-10-05 曾按"话题年龄 topic_since、24h"兜底，理由是"last_active 每轮刷新 →
+    话题永不老化"。但那把"话题跨天延续"当常态了——真实对话是一阵一阵的，
+    停几小时再回来就是新的一场。所以改回"几小时内没消息 → 这场过去了"（3h）。
     """
 
     def _write(self, tmp_path, monkeypatch, **sess):
@@ -288,10 +287,10 @@ class TestTopicAge:
 
     def test_age_is_stated(self, tmp_path, monkeypatch):
         self._write(tmp_path, monkeypatch, topic="香水", events=[],
-                    topic_since=(datetime.now() - timedelta(hours=3)).isoformat(),
+                    topic_since=(datetime.now() - timedelta(hours=2)).isoformat(),
                     last_active=datetime.now().isoformat())
         ctx = sm.build_session_context("u1")
-        assert "这个话题是3小时前开始的" in ctx
+        assert "这个话题是2小时前开始的" in ctx
         # 不再断言"当前/本场"（旧措辞在断言"这是正在进行的对话"）
         assert "当前话题" not in ctx
         assert "本场发生" not in ctx
@@ -304,25 +303,87 @@ class TestTopicAge:
         ctx = sm.build_session_context("u1")
         assert "香水" in ctx and "前开始的" not in ctx
 
-    def test_backstop_uses_topic_age_not_last_active(self, tmp_path, monkeypatch):
-        """⚠️ 关键：last_active 每轮都刷新 → 按它判永远不过期。
+    def test_stale_by_silence(self, tmp_path, monkeypatch):
+        """停够久没说话（>3h）→ 这场过去了（按 last_active 判）。"""
+        self._write(tmp_path, monkeypatch, topic="香水", events=[],
+                    topic_since=datetime.now().isoformat(),
+                    last_active=(datetime.now() - timedelta(hours=4)).isoformat())
+        assert sm.get_session("u1") == {"topic": "", "events": [], "last_active": ""}
+        assert sm.build_session_context("u1") == ""
 
-        所以兜底必须看 topic_since。这里构造"话题 30 小时前开始、
-        但 last_active 是刚刚"——旧逻辑不会拦（gap≈0），新逻辑应该拦。
+    def test_long_running_topic_with_recent_message_is_alive(self, tmp_path, monkeypatch):
+        """话题开了很久，但**一直在聊**（last_active 刚刷新）→ 仍然算活着。
+
+        这正是推翻"按话题年龄判"的原因：连续聊一下午不该因为话题"年龄"大而被判死。
         """
         self._write(tmp_path, monkeypatch, topic="香水", events=[],
                     topic_since=(datetime.now() - timedelta(hours=30)).isoformat(),
                     last_active=datetime.now().isoformat())
-        assert sm.build_session_context("u1") == ""
-        assert sm.get_session("u1") == {"topic": "", "events": [], "last_active": ""}
+        assert "香水" in sm.build_session_context("u1")
 
     def test_old_record_without_topic_since_falls_back(self, tmp_path, monkeypatch):
-        """老记录没有 topic_since → 退回 last_active，不能因此被当成"永久有效"。"""
+        """老记录没有 topic_since → 靠 last_active 判；30 小时前 → 冷场。"""
         self._write(tmp_path, monkeypatch, topic="香水", events=[],
                     last_active=(datetime.now() - timedelta(hours=30)).isoformat())
         assert sm.build_session_context("u1") == ""
 
 
+
+
+class TestMood:
+    """当下情绪住在会话记忆里，和话题同寿命 3 小时（2026-10-10 从长期记忆搬来）。"""
+
+    def test_no_mood_returns_empty(self, _isolate_file):
+        assert sm.mood_note("nobody") == ""
+
+    def test_set_and_read_mood(self, _isolate_file):
+        sm.set_mood("u1", "因为考试失利而失落")
+        note = sm.mood_note("u1")
+        assert "考试失利" in note
+        assert "此刻的情绪" in note
+
+    def test_mood_expires_after_three_hours(self, _isolate_file):
+        sm.set_mood("u1", "失落", now=datetime.now() - timedelta(hours=4))
+        assert sm.mood_note("u1") == ""
+
+    def test_mood_gone_when_session_goes_stale(self, _isolate_file):
+        """mood 和 last_active 同一次写入 → 整场冷场后情绪也读不到（一起消散）。"""
+        sm.set_mood("u1", "失落", now=datetime.now() - timedelta(hours=5))
+        assert sm.get_session("u1")["topic"] == ""
+        assert sm.mood_note("u1") == ""
+
+    async def test_probe_records_mood(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sm, "SESSION_MEMORY_FILE", tmp_path / "s.json")
+
+        async def fake_llm(client, prompt, max_tokens=250, temperature=0.2):
+            return json.dumps({
+                "topic": "聊考试", "topic_changed": True,
+                "new_event": None, "mood": "因为考砸了很难过",
+                "expanded_query": None,
+            }, ensure_ascii=False)
+
+        monkeypatch.setattr(sm, "_llm", fake_llm)
+        await sm.probe_session("u1", "我考砸了，好难过", "历史", object())
+
+        sess = json.loads(sm._file_for("u1").read_text(encoding="utf-8"))
+        assert sess["mood"] == "因为考砸了很难过"
+        assert sess["mood_at"]
+
+    async def test_probe_null_mood_keeps_previous(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sm, "SESSION_MEMORY_FILE", tmp_path / "s.json")
+        sm.set_mood("u1", "有点失落")
+
+        async def fake_llm(client, prompt, max_tokens=250, temperature=0.2):
+            return json.dumps({
+                "topic": "香水", "topic_changed": False,
+                "new_event": None, "mood": None, "expanded_query": None,
+            }, ensure_ascii=False)
+
+        monkeypatch.setattr(sm, "_llm", fake_llm)
+        await sm.probe_session("u1", "嗯嗯", "历史", object())
+
+        sess = json.loads(sm._file_for("u1").read_text(encoding="utf-8"))
+        assert sess["mood"] == "有点失落"
 
 
 class TestPerSessionFiles:

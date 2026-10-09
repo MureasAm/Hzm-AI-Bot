@@ -26,20 +26,40 @@ DEFAULT_STATE_FILE = PROJECT_ROOT / "user_memory" / "memory_v2_shadow.json"
 DEFAULT_AUDIT_FILE = PROJECT_ROOT / "user_memory" / "memory_v2_audit.jsonl"
 
 SCHEMA_VERSION = 2
-EMOTION_TTL = timedelta(hours=6)
 MAX_SOURCE_CHARS = 240
 MAX_VALUE_CHARS = 160
 MAX_USER_ID_CHARS = 128
 MAX_SESSION_ID_CHARS = 96
 
-_KINDS = {"fact", "interaction_preference", "emotional_state", "commitment"}
+# 注入分段预算（字符）。偏好最大——它是针对这个人的适配，四层里优先级最高。
+MAX_PREFERENCE_ITEMS = 6
+PREFERENCE_BUDGET_CHARS = 360
+COMMITMENT_BUDGET_CHARS = 220
+# 时效性近况（fact）的期限档位 → 天数；"none" 不过期（长期事实/明确无期限）。
+_VALID_FOR_DAYS = {"3d": 3, "14d": 14, "90d": 90}
+# 这些 key 的事实**不管聊没聊到都带上**——名字/地点/时区/身份是"不矛盾的底线"。
+# 换掉了原来那个对不上模型产出的旧名单（preferred_name/name/city）：
+# 模型实际会产 location / timezone / identity 这些，旧名单等于没生效。
+_ALWAYS_ON_FACT_KEYS = {
+    "preferred_name", "name", "nickname", "location", "city",
+    "timezone", "identity", "occupation", "background",
+}
+
+_KINDS = {"fact", "interaction_preference", "commitment"}
 _ACTIONS = {"upsert", "retract"}
 _TEMPORAL_SCOPES = {"past", "current", "future", "timeless"}
+# 每个维度都是"枚举值 → 行为句"，不存印象标签（黄金律第 2 条）。
+# 8 个维度：低落时怎么接 / 玩笑尺度 / 拒绝方式 / 主动关心阈值（原有 4 个）
+#         + 称呼偏好 / 回复长度 / 话题雷区 / 她怎么自称（2026-10-10 扩到 8 个）。
 _PREFERENCE_VALUES = {
     "support_style": {"comfort", "problem_solving", "balanced"},
     "banter_tolerance": {"low", "light", "high"},
     "directness": {"gentle", "direct", "balanced"},
     "care_initiative": {"proactive", "reserved", "balanced"},
+    "address_style": {"nickname", "plain", "casual"},
+    "reply_length": {"short", "medium", "long"},
+    "topic_preference": {"engage", "avoid"},
+    "self_reference": {"name", "first_person", "nickname"},
 }
 _SENSITIVE_KEYS = {
     "phone", "phone_number", "email", "exact_address", "home_address",
@@ -56,6 +76,13 @@ _SECRET_ASSIGNMENT_RE = re.compile(
 )
 _KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,47}$")
 
+# 关于机器人自己（不是用户）的 fact 一律拒收。这类永远不改变她的回复，却是实测最顽固的
+# 误记（用户贴更新日志 → fact/bot_version=V8.0；引用她的动态 → fact/identity=灰泽满自己是…）。
+# 提示词已写进反例清单，这里再加一道确定性闸门（模型输出本就当不可信输入校验）。
+_BOT_SELF_KEY_PREFIXES = ("bot", "hzm")
+_BOT_SELF_KEYS = {"version", "changelog", "release_notes", "bot_info"}
+_BOT_SELF_VALUE_SUBJECTS = ("灰泽满", "hzm", "机器人", "assistant")
+
 _PREFERENCE_BEHAVIORS = {
     ("support_style", "comfort"): "用户低落时先接住情绪，不要马上讲道理或给方案。",
     ("support_style", "problem_solving"): "用户求助时可以更快给出具体办法，但先简短确认其感受。",
@@ -69,11 +96,25 @@ _PREFERENCE_BEHAVIORS = {
     ("care_initiative", "proactive"): "察觉用户状态变化时可以主动关心一句，但不要连续追问。",
     ("care_initiative", "reserved"): "用户没有主动展开时不要追问隐私或情绪原因。",
     ("care_initiative", "balanced"): "可以关心一次；用户不展开就自然换回当前话题。",
+    ("address_style", "nickname"): "称呼用户时用他给出的昵称或称呼，别一上来就泛泛地叫'你'。",
+    ("address_style", "plain"): "别用亲昵称谓（'宝宝''亲爱的'这类），直接叫名字或干脆不称呼。",
+    ("address_style", "casual"): "称呼随意点就好，用'你''喂''诶'这类，不必刻意恭维或套近乎。",
+    ("reply_length", "short"): "回复尽量短，一两句就够，别铺陈解释。",
+    ("reply_length", "medium"): "回复控制在一两句话到一小段，别长篇大论。",
+    ("reply_length", "long"): "用户聊得起劲时可以多说几句，别急着收尾。",
+    ("topic_preference", "engage"): "用户主动聊起他喜欢的话题时多顺着聊两句，别急着收尾或硬转台。",
+    ("topic_preference", "avoid"): "用户明显不想聊某个话题时不要追问，被带到就自然岔开去别处。",
+    ("self_reference", "name"): "自称时用'灰泽满'这个名字就行。",
+    ("self_reference", "first_person"): "自称时用'我'就好，少报全名。",
+    ("self_reference", "nickname"): "自称时用用户给她的昵称或简称。",
 }
 
 
 MEMORY_V2_EXTRACT_PROMPT = """你是灰泽满私聊机器人的记忆候选提取器。你的输出不会直接成为事实，
 还会经过代码校验和影子审计。只根据下面这一次真实对话提取，不要脑补。
+
+【唯一的准入标准】
+把这条信息抽出来，**会不会改变灰泽满下一次回复**？不会的，一律不记。
 
 【时间与会话】
 观测时间：{observed_at}
@@ -86,17 +127,40 @@ MEMORY_V2_EXTRACT_PROMPT = """你是灰泽满私聊机器人的记忆候选提�
 用户：{user_text}
 灰泽满：{assistant_text}
 
-只允许四种 kind：
-1. fact：用户明确说出的稳定事实。一次性状态、推断身份不提取；explicit 必须为 true。
-2. interaction_preference：用户喜欢怎样被回应。key/value 只能是：
-   support_style=comfort|problem_solving|balanced
-   banter_tolerance=low|light|high
-   directness=gentle|direct|balanced
-   care_initiative=proactive|reserved|balanced
+只允许三种 kind（**情绪不在长期记忆里**——它住在会话记忆，跟话题一起 3 小时消散）：
+1. fact：关于**用户本人**的、会影响回应的稳定事实——称呼/昵称、地域时区、身份（学生/社畜）、
+   正在经历的大事（搬家/考试/生病）、明确喜好（"月饼一般，芒果味的可以"）。
+   **必须是关于"用户本人"的**；讲灰泽满/机器人自己的内容一律不算 fact。
+   · key 用**具体到事**的小写英文（`location`/`preferred_name`/`timezone`/`exam_status`…），
+     **别用 `current_situation`/`past_experience`/`info` 这类装什么都行的通用键**——
+     通用键会让不同的事互相顶掉。
+   · temporal_scope：**经历**用 past（可叠加，不倒旧的）；**地域/时区/身份**这类长期成立用 timeless；
+     **当前状态**（在准备考试 / 在搬家）用 current（**同一 key 的新值会顶掉旧的**）。
+   · valid_for：**只有"时效性近况"**（在准备考试 / 这周军训 / 最近感冒）才填其大概期限，
+     从用户话里的时间词读（"这几天"→3d、"最近/这一阵"→14d、"这学期"→90d）；
+     没有明确期限、或不是近况，一律 "none"。
+   explicit 必须为 true。一次性状态、推断身份不提取。
+2. interaction_preference：用户想被怎样对待（针对这个人的相处方式，不是性格标签）。key/value 只能是：
+   support_style=comfort|problem_solving|balanced    低落时怎么接
+   banter_tolerance=low|light|high                    玩笑尺度
+   directness=gentle|direct|balanced                  拒绝/纠正的方式
+   care_initiative=proactive|reserved|balanced        主动关心阈值
+   address_style=nickname|plain|casual                称呼偏好
+   reply_length=short|medium|long                     回复长度偏好
+   topic_preference=engage|avoid                      话题偏好与雷区
+   self_reference=name|first_person|nickname          她该怎么自称
    用户明确说喜欢/不喜欢时 explicit=true；仅从互动表现推断时 explicit=false。
-3. emotional_state：本场临时情绪，key 固定 current_emotion。不要写成长期性格。
-4. commitment：灰泽满本轮明确答应用户、需要以后兑现的事。承诺只从灰泽满回复中提取，
+3. commitment：灰泽满本轮明确答应用户、需要以后兑现的事。承诺只从灰泽满回复中提取，
    用户自己的计划不是灰泽满的承诺；actor 必须是 assistant，explicit 必须为 true。
+
+【反例清单——抽到这些一律不记】
+- 灰泽满自己/机器人自身的事：版本号、功能、更新日志、"你是不是 AI"、她自己的身份设定。
+  **不管用户是告知、询问还是吐槽，只要讲的是灰泽满/机器人自己，都不是"关于用户的事实"**。
+- 单次闲聊、寒暄、玩梗（"在吗""哈哈哈""晚安"）。
+- 只出现一次、不会影响下次回应的状态（"他刚打了个哈欠""他刚发了个表情"）。
+- 已能从别处拿到的：时间/星期/农历、天气、直播场次状态——那是感知模块的活。
+- 用户自己的计划/打算——那是用户的事，不是她的承诺。
+- 敏感信息：电话、邮箱、精确地址、证件、账户、密码、医疗诊断。
 
 隐私铁律：不要提取电话、邮箱、精确地址、证件、账户、密码、医疗诊断等敏感信息。
 时间铁律：保留“以前/现在/打算/已经结束”等状态，不把过去事实写成当前事实。
@@ -109,11 +173,12 @@ temporal_scope 必须是 past/current/future/timeless：用户过去经历用 pa
 {{
   "items": [
     {{
-      "kind": "fact|interaction_preference|emotional_state|commitment",
-      "key": "小写英文键",
+      "kind": "fact|interaction_preference|commitment",
+      "key": "小写英文键；fact 要具体到事，别用通用键",
       "value": "简洁、保留限定词的中文内容",
       "action": "upsert|retract",
       "temporal_scope": "past|current|future|timeless",
+      "valid_for": "none|3d|14d|90d（仅时效性近况填，其余 none）",
       "explicit": true,
       "confidence": 0.0,
       "actor": "assistant"
@@ -127,6 +192,16 @@ temporal_scope 必须是 past/current/future/timeless：用户过去经历用 pa
 def shadow_enabled() -> bool:
     """Shadow extraction is opt-in; only the literal value ``1`` enables it."""
     return os.environ.get("MEMORY_V2_SHADOW", "0") == "1"
+
+
+def injection_enabled() -> bool:
+    """V2 context injection is opt-in and separate from shadow extraction.
+
+    Shadow extraction (``MEMORY_V2_SHADOW``) only writes the store; injection
+    actually changes replies, so it stays behind its own flag until the shadow
+    rollout is validated (see ``docs/记忆v2设计.md`` §上线路径).
+    """
+    return os.environ.get("MEMORY_V2_INJECT", "0") == "1"
 
 
 def parse_extraction_payload(content: str) -> dict:
@@ -263,6 +338,24 @@ def _redact_sensitive_excerpt(value: str) -> str:
     return _SECRET_ASSIGNMENT_RE.sub("[redacted]", redacted)
 
 
+def _is_bot_self_fact(key: str, value: str) -> bool:
+    """这条 fact 讲的是机器人/她自己，而不是用户本人？"""
+    lowered = key.lower()
+    if lowered in _BOT_SELF_KEYS or lowered.startswith(_BOT_SELF_KEY_PREFIXES):
+        return True
+    return value.strip().lower().startswith(_BOT_SELF_VALUE_SUBJECTS)
+
+
+def _fact_expires_at(item: dict, now: datetime) -> str | None:
+    """时效性近况（fact）的过期时刻；长期事实 / 偏好 / 承诺不过期 → None。"""
+    if item.get("kind") != "fact":
+        return None
+    days = _VALID_FOR_DAYS.get(str(item.get("valid_for") or ""))
+    if not days:
+        return None
+    return (now + timedelta(days=days)).isoformat()
+
+
 def _ngrams(text: str) -> set[str]:
     normalized = re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]", "", text or "").lower()
     if len(normalized) < 2:
@@ -363,11 +456,12 @@ class ShadowMemoryStore:
             return None, "confidence_out_of_range"
         if key in _SENSITIVE_KEYS or _contains_sensitive_value(value):
             return None, "sensitive_data_blocked"
+        if kind == "fact" and _is_bot_self_fact(key, value):
+            return None, "bot_self_fact_blocked"
 
         default_scope = {
             "fact": "current",
             "interaction_preference": "timeless",
-            "emotional_state": "current",
             "commitment": "future",
         }[kind]
         temporal_scope = temporal_scope or default_scope
@@ -376,11 +470,15 @@ class ShadowMemoryStore:
         allowed_scopes = {
             "fact": {"past", "current", "timeless"},
             "interaction_preference": {"current", "timeless"},
-            "emotional_state": {"current"},
             "commitment": {"future", "current"},
         }[kind]
         if temporal_scope not in allowed_scopes:
             return None, "temporal_scope_mismatch"
+
+        # 时效性近况的期限档位（只有 fact 用；其余一律 none）。
+        valid_for = _bounded_text(item.get("valid_for"), 8).lower()
+        if valid_for not in _VALID_FOR_DAYS:
+            valid_for = "none"
 
         role = "assistant" if kind == "commitment" else "user"
         normalized_source = self._normalize_source(source, role, now)
@@ -392,8 +490,6 @@ class ShadowMemoryStore:
         if kind == "interaction_preference":
             if key not in _PREFERENCE_VALUES or value not in _PREFERENCE_VALUES[key]:
                 return None, "invalid_preference_dimension"
-        if kind == "emotional_state" and key != "current_emotion":
-            return None, "invalid_emotional_state_key"
         if kind == "commitment":
             if item.get("actor") != "assistant" or not explicit:
                 return None, "assistant_commitment_required"
@@ -406,6 +502,7 @@ class ShadowMemoryStore:
             "explicit": explicit,
             "confidence": confidence,
             "temporal_scope": temporal_scope,
+            "valid_for": valid_for,
             "source": normalized_source,
         }
         return normalized, "accepted"
@@ -433,18 +530,6 @@ class ShadowMemoryStore:
             state = self._load()
             user = state["users"].setdefault(user_id, {"memories": [], "updated_at": now.isoformat()})
             memories = user.setdefault("memories", [])
-            current_scope = _bounded_text(
-                source.get("session_id") if isinstance(source, dict) else "",
-                MAX_SESSION_ID_CHARS,
-            )
-            if current_scope:
-                for memory in memories:
-                    memory_scope = (memory.get("source") or {}).get("session_id")
-                    if (memory.get("kind") == "emotional_state"
-                            and memory.get("status") == "active"
-                            and memory_scope and memory_scope != current_scope):
-                        memory["status"] = "expired"
-                        memory["invalidated_at"] = now.isoformat()
 
             for raw_item in items[:20]:
                 item, reason = self._normalize_item(raw_item, source, now)
@@ -477,7 +562,7 @@ class ShadowMemoryStore:
                 if existing is None:
                     if item["explicit"] and item["kind"] in {"fact", "interaction_preference"}:
                         status = "confirmed"
-                    elif item["kind"] in {"emotional_state", "commitment"}:
+                    elif item["kind"] == "commitment":
                         status = "active"
                     else:
                         status = "candidate"
@@ -490,6 +575,7 @@ class ShadowMemoryStore:
                         "explicit": item["explicit"],
                         "confidence": item["confidence"],
                         "temporal_scope": item["temporal_scope"],
+                        "valid_for": item["valid_for"],
                         "evidence_count": 1,
                         "evidence_ids": [evidence_id],
                         "session_ids": [item["source"]["session_id"]],
@@ -498,8 +584,9 @@ class ShadowMemoryStore:
                         "last_observed_at": now.isoformat(),
                         "source": item["source"],
                     }
-                    if item["kind"] == "emotional_state":
-                        existing["expires_at"] = (now + EMOTION_TTL).isoformat()
+                    expires_at = _fact_expires_at(item, now)
+                    if expires_at:
+                        existing["expires_at"] = expires_at
                     memories.append(existing)
                 else:
                     evidence_ids = list(existing.get("evidence_ids") or [])
@@ -524,19 +611,25 @@ class ShadowMemoryStore:
                     existing["source"] = item["source"]
                     existing["confidence"] = max(float(existing.get("confidence", 0)), item["confidence"])
                     existing["temporal_scope"] = item["temporal_scope"]
+                    existing["valid_for"] = item["valid_for"]
+                    expires_at = _fact_expires_at(item, now)
+                    if expires_at:
+                        existing["expires_at"] = expires_at   # 近况被再次提到 → 续期
                     if item["explicit"]:
                         existing["explicit"] = True
-                        existing["status"] = "active" if item["kind"] in {"emotional_state", "commitment"} else "confirmed"
+                        existing["status"] = "active" if item["kind"] == "commitment" else "confirmed"
                     elif (item["kind"] == "interaction_preference"
                           and existing["evidence_count"] >= 3
                           and existing["session_count"] >= 2):
                         existing["status"] = "confirmed"
-                    if item["kind"] == "emotional_state":
-                        existing["status"] = "active"
-                        existing["expires_at"] = (now + EMOTION_TTL).isoformat()
 
-                # A new explicit scalar value supersedes older values for the same key.
-                if item["explicit"] and item["kind"] in {"fact", "interaction_preference", "emotional_state"}:
+                # 只有"单值槽"才顶替：偏好（每个维度只应有一个值），以及 temporal_scope=current
+                # 的 fact（地点/身份/近况这类"当前只有一个值"的）。**past / timeless 的 fact 累积，
+                # 不倒旧的**——否则"小时候被霸凌"会被后来的"高考车祸"顶掉（实测真丢过 3 条）。
+                if item["explicit"] and (
+                    item["kind"] == "interaction_preference"
+                    or (item["kind"] == "fact" and item["temporal_scope"] == "current")
+                ):
                     for other in memories:
                         if (other is not existing and other.get("kind") == item["kind"]
                                 and other.get("key") == item["key"]
@@ -564,73 +657,76 @@ class ShadowMemoryStore:
         result.setdefault("memories", [])
         return result
 
-    def build_context(
+    def _active_memories(
         self,
         user_id: str,
-        query: str,
         *,
         now: datetime | None = None,
         session_id: str | None = None,
-    ) -> str:
+    ) -> list[dict]:
+        """存活的条目：confirmed/active，且没过 TTL（时效性近况到期就不算）。
+
+        session_id 参数保留仅为兼容旧调用；情绪已搬去会话记忆，这里不再按会话过滤。
+        """
         now = now or datetime.now()
         memories = self.snapshot(user_id).get("memories", [])
         active = []
         for memory in memories:
-            status = memory.get("status")
-            if status not in {"confirmed", "active"}:
+            if memory.get("status") not in {"confirmed", "active"}:
                 continue
-            if memory.get("kind") == "emotional_state":
-                expires = _iso(memory.get("expires_at"))
-                if expires is None or expires <= now:
-                    continue
-                memory_scope = (memory.get("source") or {}).get("session_id")
-                if session_id and memory_scope and memory_scope != session_id:
-                    continue
+            expires = _iso(memory.get("expires_at"))
+            if expires is not None and expires <= now:
+                continue
             active.append(memory)
+        return active
 
-        lines: list[str] = []
-        preferences = [m for m in active if m.get("kind") == "interaction_preference"]
-        emotions = [m for m in active if m.get("kind") == "emotional_state"]
-        if preferences or emotions:
-            lines.append("【与这个用户的相处方式】只调整相处方式，不改变灰泽满的核心性格、事实和边界。")
-            for memory in preferences[:4]:
-                behavior = _PREFERENCE_BEHAVIORS.get((memory.get("key"), memory.get("value")))
-                if behavior:
-                    lines.append(behavior)
-            if emotions:
-                latest = max(emotions, key=lambda m: m.get("last_observed_at", ""))
-                lines.append(f"用户此刻{latest.get('value')}；本轮优先照顾当前情绪，必要时暂停互怼。")
-
-        core_keys = {"preferred_name", "name", "city"}
+    def _select_facts(self, active: list[dict], query: str) -> list[dict]:
         facts = [m for m in active if m.get("kind") == "fact"]
-        facts.sort(key=lambda m: (m.get("key") not in core_keys, -_relevance(query, m)))
-        selected_facts = [
+        facts.sort(key=lambda m: (m.get("key") not in _ALWAYS_ON_FACT_KEYS, -_relevance(query, m)))
+        return [
             m for m in facts
             if (
-                (m.get("key") in core_keys and m.get("temporal_scope") != "past")
+                (m.get("key") in _ALWAYS_ON_FACT_KEYS and m.get("temporal_scope") != "past")
                 or _relevance(query, m) > 0
                 or (m.get("temporal_scope") == "past" and any(k in query for k in ("以前", "过去", "曾经")))
             )
         ][:4]
-        if selected_facts:
+
+    def _preference_lines(self, active: list[dict], query: str) -> list[str]:
+        """靠前段：相处方式（行为句）+ 话题相关事实。"""
+        preferences = [m for m in active if m.get("kind") == "interaction_preference"]
+        lines: list[str] = []
+        if preferences:
+            lines.append("【和这个绿冻的相处方式】只调整相处方式，不改变灰泽满的核心性格、事实和边界。")
+            for memory in preferences[:MAX_PREFERENCE_ITEMS]:
+                behavior = _PREFERENCE_BEHAVIORS.get((memory.get("key"), memory.get("value")))
+                if behavior:
+                    lines.append(behavior)
+        facts = self._select_facts(active, query)
+        if facts:
             rendered = "；".join(
                 f"{'过去事实/' if m.get('temporal_scope') == 'past' else ''}{m.get('key')}：{m.get('value')}"
-                for m in selected_facts
+                for m in facts
             )
             lines.append(f"【相关用户事实】{rendered}")
+        return lines
 
+    def _commitment_lines(self, active: list[dict], query: str) -> list[str]:
+        """中段：未完成约定——别忘、要兑现。"""
         commitments = [m for m in active if m.get("kind") == "commitment" and _relevance(query, m) > 0]
-        if commitments:
-            rendered = "；".join(str(m.get("value")) for m in commitments[:2])
-            lines.append(f"【相关未完成约定】{rendered}")
+        if not commitments:
+            return []
+        rendered = "；".join(str(m.get("value")) for m in commitments[:2])
+        return [f"【相关未完成约定】{rendered}"]
 
+    def _fit(self, lines: list[str], budget: int) -> str:
         if not lines:
             return ""
         output: list[str] = []
         used = 0
         for line in lines:
             separator = 1 if output else 0
-            remaining = self.context_budget_chars - used - separator
+            remaining = budget - used - separator
             if remaining <= 0:
                 break
             piece = line[:remaining]
@@ -640,6 +736,50 @@ class ShadowMemoryStore:
             if len(piece) < len(line):
                 break
         return "\n".join(output)
+
+    def build_preference_context(
+        self,
+        user_id: str,
+        query: str,
+        *,
+        now: datetime | None = None,
+        session_id: str | None = None,
+    ) -> str:
+        """靠前注入：相处方式行为句 + 话题相关事实（system，个体适配）。"""
+        active = self._active_memories(user_id, now=now, session_id=session_id)
+        return self._fit(self._preference_lines(active, query or ""), PREFERENCE_BUDGET_CHARS)
+
+    def build_commitment_context(
+        self,
+        user_id: str,
+        query: str,
+        *,
+        now: datetime | None = None,
+        session_id: str | None = None,
+    ) -> str:
+        """中段注入：未完成约定（system，中段——别忘、要兑现）。"""
+        active = self._active_memories(user_id, now=now, session_id=session_id)
+        return self._fit(self._commitment_lines(active, query or ""), COMMITMENT_BUDGET_CHARS)
+
+    def build_context(
+        self,
+        user_id: str,
+        query: str,
+        *,
+        now: datetime | None = None,
+        session_id: str | None = None,
+    ) -> str:
+        """聚合视图（两段拼接、共享同一预算）——审计/测试用，注入走各自的方法。
+
+        情绪不在这里：它住在会话记忆（`session_memory.mood_note`），跟话题一起 3h 消散。
+        """
+        active = self._active_memories(user_id, now=now, session_id=session_id)
+        question = query or ""
+        lines = (
+            self._preference_lines(active, question)
+            + self._commitment_lines(active, question)
+        )
+        return self._fit(lines, self.context_budget_chars)
 
     def delete_user(self, user_id: str, *, now: datetime | None = None) -> None:
         now = now or datetime.now()
@@ -662,6 +802,7 @@ __all__ = [
     "DEFAULT_AUDIT_FILE",
     "MEMORY_V2_EXTRACT_PROMPT",
     "shadow_enabled",
+    "injection_enabled",
     "parse_extraction_payload",
     "build_extraction_prompt",
     "extract_and_ingest",

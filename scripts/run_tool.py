@@ -12,7 +12,7 @@
 / 生成(generate-statements/generate-vectors/generate-persona)
 / 向量(precompute core-stories)
 / 评测(regression/persona-eval/retrieval-eval/problems)
-/ 工具(bili-check/bili-login/vision-test/mine-theme/extract-persona/memory-audit/memory-replay)。
+/ 工具(bili-check/bili-login/vision-test/mine-theme/extract-persona/memory-audit/memory-replay/memory-ab)。
 generate-statements 作为 persona-pipeline corpus 的内部步骤保留；generate-persona 会覆盖人格需 --danger。
 旧脚本仍可直接运行（向后兼容），本入口为推荐用法。
 """
@@ -547,6 +547,34 @@ def _run_memory_replay(args):
     memory_v2_tool.run_replay(args)
 
 
+def _add_memory_ab(sub):
+    import memory_v2_tool
+
+    p = sub.add_parser("memory-ab", help="同一批真实私聊：v1 记忆卡 vs v2 类型化记忆 对比")
+    p.add_argument(
+        "-i", "--input", nargs="*", default=None,
+        help="chat JSONL；缺省读取 data/chat_log/*.jsonl（按会话分文件）",
+    )
+    p.add_argument(
+        "--limit", type=memory_v2_tool.positive_limit, required=True,
+        help="两路合计最多回放多少条有效私聊（1~5000，必须显式指定）",
+    )
+    p.add_argument(
+        "--per-user", type=int, default=40,
+        help="每个会话最多取多少条（默认 40，保证覆盖多人而不是一个人）",
+    )
+    p.add_argument(
+        "--out-dir", default=str(_common.OUTPUTS_DIR / "memory_ab"),
+        help="输出目录，必须位于 outputs/ 下",
+    )
+    p.set_defaults(func=_run_memory_ab)
+
+
+def _run_memory_ab(args):
+    import memory_ab
+    memory_ab.run_ab_cli(args)
+
+
 # ==================== 主入口 ====================
 
 def build_parser() -> argparse.ArgumentParser:
@@ -583,6 +611,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_problems(sub)
     _add_memory_audit(sub)
     _add_memory_replay(sub)
+    _add_memory_ab(sub)
     return parser
 
 

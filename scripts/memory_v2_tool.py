@@ -192,6 +192,11 @@ async def replay(
     )
     out_dir = _safe_replay_dir(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    # 每次回放都是"从头重建"：store 会 *加载* 已存在的 state_file 再往上叠，
+    # 不清空就会把上一次回放的产物当既有记忆，重复回放/换提示词对比全是脏数据。
+    for stale in (out_dir / "replay_shadow.json", out_dir / "replay_audit.jsonl"):
+        if stale.exists():
+            stale.unlink()
     store = ShadowMemoryStore(
         state_file=out_dir / "replay_shadow.json",
         audit_file=out_dir / "replay_audit.jsonl",

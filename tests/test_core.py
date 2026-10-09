@@ -476,6 +476,42 @@ class TestPreferences:
         assert not any("灰泽满的偏好" in m["content"] for m in msgs)
 
 
+class TestMemoryV2Segments:
+    """Memory V2 三段注入：靠前相处方式 / 中段约定 / 末尾情绪（docs/记忆v2设计.md §三）。"""
+
+    def _msgs(self, monkeypatch, **kwargs):
+        monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
+        return core.build_message_list("在吗", [], "", [], **kwargs)
+
+    def test_absent_by_default(self, monkeypatch):
+        msgs = self._msgs(monkeypatch)
+        assert not any(
+            any(tag in m["content"] for tag in ("相处方式", "未完成约定", "此刻的情绪"))
+            for m in msgs
+        )
+
+    def test_segments_land_in_their_positions(self, monkeypatch):
+        msgs = self._msgs(
+            monkeypatch,
+            profile_context="【和这个绿冻的相处方式】\n回复尽量短。",
+            commitment_context="【相关未完成约定】下次给你唱一段",
+            emotion_context="【用户此刻的情绪】因为考试很失落；本轮优先照顾当前情绪。",
+        )
+        roles = [m["role"] for m in msgs]
+        assert roles[-1] == "user"
+
+        profile_i = next(i for i, m in enumerate(msgs) if "相处方式" in m["content"])
+        commit_i = next(i for i, m in enumerate(msgs) if "未完成约定" in m["content"])
+        emotion_i = next(i for i, m in enumerate(msgs) if "此刻的情绪" in m["content"])
+        user_i = len(msgs) - 1
+
+        # 顺序：相处方式靠前 < 约定中段 < 情绪紧挨用户消息（末尾，只输给【当前时间】）。
+        assert profile_i < commit_i < emotion_i
+        assert emotion_i == user_i - 1
+        # 情绪后面就是用户消息本身（时间/情绪都在尾部）。
+        assert msgs[user_i - 1]["role"] == "system"
+
+
 class TestPrevSessionNote:
     """上一场会话（已过期）**单独一条**注入，不能并进【当前会话】。
 
