@@ -133,3 +133,41 @@ def test_run_tool_registers_developer_memory_commands():
     assert result.returncode == 0
     assert "memory-audit" in result.stdout
     assert "memory-replay" in result.stdout
+    assert "memory-migrate-moments" in result.stdout
+
+
+def _v1_card(tmp_path):
+    v1 = tmp_path / "long_term"
+    v1.mkdir()
+    (v1 / "10001.json").write_text(json.dumps({
+        "significant_moments": [{"date": "2026-09-21", "summary": "一起熬夜看了流星雨"}],
+        "user_facts": [{"fact": "在澳洲"}],          # 不该被搬
+        "impressions": [{"tag": "夜猫子"}],          # 不该被搬
+    }, ensure_ascii=False), encoding="utf-8")
+    return v1
+
+
+def _store(tmp_path):
+    from src.plugins.chatbot.memory_v2 import ShadowMemoryStore
+    return ShadowMemoryStore(state_file=tmp_path / "s.json", audit_file=tmp_path / "a.jsonl")
+
+
+def test_migrate_v1_moments_only_moves_moments(tmp_path):
+    store = _store(tmp_path)
+    report = tool.migrate_v1_moments(v1_dir=_v1_card(tmp_path), store=store)
+
+    assert report == {"users": 1, "moments": 1, "dry_run": False}
+    memories = store.snapshot("10001")["memories"]
+    assert [m["key"] for m in memories] == ["moment"]      # user_facts / impressions 没被搬
+    assert memories[0]["temporal_scope"] == "past"
+    assert memories[0]["status"] == "confirmed"
+    # 证据如实写明是 V1 卡迁移，不伪造对话摘录
+    assert "V1 记忆卡迁移" in memories[0]["source"]["excerpt"]
+
+
+def test_migrate_v1_moments_dry_run_writes_nothing(tmp_path):
+    store = _store(tmp_path)
+    report = tool.migrate_v1_moments(v1_dir=_v1_card(tmp_path), store=store, dry_run=True)
+
+    assert report["moments"] == 1 and report["dry_run"] is True
+    assert store.snapshot("10001")["memories"] == []

@@ -139,6 +139,40 @@ class TestTimeHook:
         assert reply_style.uses_time_hook("明天直播记得来") is False
 
 
+class TestWeatherCity:
+    """天气城市改从 V2 的 location 事实取（v1 停写后它的 weather_city 不再更新）。"""
+
+    def _patch(self, monkeypatch, memories):
+        fake = type("S", (), {"snapshot": lambda self, uid: {"memories": memories}})()
+        monkeypatch.setattr(core, "_MEMORY_V2_STORE", fake)
+
+    def test_prefers_v2_location(self, monkeypatch):
+        self._patch(monkeypatch, [
+            {"kind": "fact", "key": "location", "value": "在曼谷", "status": "confirmed"}])
+        assert core._weather_city_for("u", {"weather_city": "广州"}) == "曼谷"
+
+    def test_falls_back_to_v1_card(self, monkeypatch):
+        self._patch(monkeypatch, [])
+        assert core._weather_city_for("u", {"weather_city": "广州"}) == "广州"
+
+    def test_cleans_dirty_value(self, monkeypatch):
+        self._patch(monkeypatch, [
+            {"kind": "fact", "key": "location", "value": "在泰国留学，但觉得选错了地方",
+             "status": "confirmed"}])
+        assert core._weather_city_for("u", {}) == "泰国"
+
+    def test_too_long_value_falls_back(self, monkeypatch):
+        self._patch(monkeypatch, [
+            {"kind": "fact", "key": "location", "value": "一个非常非常长的地名描述啊",
+             "status": "confirmed"}])
+        assert core._weather_city_for("u", {"weather_city": "广州"}) == "广州"
+
+    def test_superseded_location_ignored(self, monkeypatch):
+        self._patch(monkeypatch, [
+            {"kind": "fact", "key": "location", "value": "在曼谷", "status": "superseded"}])
+        assert core._weather_city_for("u", {"weather_city": "广州"}) == "广州"
+
+
 class TestSummarizeBatch:
     async def test_single_message_skips(self, monkeypatch):
         def _fail(*a, **k):

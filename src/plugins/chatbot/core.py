@@ -733,6 +733,35 @@ async def update_memory_v2_shadow_task(
         return []
 
 
+# 用户所在地（天气感知用）：v1 停写后 `weather_city` 不再更新，所以改从 **V2 的 location 事实**取，
+# 取不到再退回 v1 卡（只读）。V2 存的是"在曼谷""在泰国留学"这种，取值前要洗成纯地名。
+_WEATHER_CITY_KEYS = {"location", "city"}
+_WEATHER_CITY_PREFIX = re.compile(r"^(?:在|住在|现居|目前住在|老家在)")
+_WEATHER_CITY_TAIL = re.compile(r"[，,。;；].*$|(?:留学|定居|工作|生活|读书|上学|上班).*$")
+
+
+def _weather_city_for(user_id: str, fallback_card: dict) -> str:
+    """用户所在城市：V2 的 location/city 事实优先，取不到退回 v1 卡里的 weather_city。
+
+    洗出来的不像地名（太长）就别用——天气查不到只是少一行天气，不致命；
+    但把一个长句当地名填进去，等于把这个功能废掉。
+    """
+    try:
+        memories = _MEMORY_V2_STORE.snapshot(user_id).get("memories", [])
+    except Exception:
+        memories = []
+    for memory in memories:
+        if memory.get("kind") != "fact" or memory.get("status") not in {"confirmed", "active"}:
+            continue
+        if str(memory.get("key")) not in _WEATHER_CITY_KEYS:
+            continue
+        value = _WEATHER_CITY_PREFIX.sub("", str(memory.get("value") or "").strip())
+        value = _WEATHER_CITY_TAIL.sub("", value).strip()
+        if 2 <= len(value) <= 8:
+            return value
+    return str((fallback_card or {}).get("weather_city") or "")
+
+
 async def gather_retrieval(query_text: str, retrieval_query: str, history_text: str,
                            deepseek_client, zhipu_client,
                            is_user_msg: bool = True) -> dict:
@@ -928,7 +957,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
             events.append(f"{txt}（{gap}前）" if gap else txt)
         evtxt = "；".join(events) or "（刚进群，还没太熟）"
         group_context = f"在场成员：{names}。群内近况：{evtxt}"
-    weather_city = (user_memory_card or {}).get("weather_city", "") or ""
+    weather_city = _weather_city_for(user_id, user_memory_card)
 
     # --- 🧠 Memory V2 注入（可选；与影子提取分开的开关，默认关，见 docs/记忆v2设计.md §上线路径）---
     # 两段分开放：相处方式靠前 / 未完成约定中段。

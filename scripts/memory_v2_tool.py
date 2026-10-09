@@ -336,6 +336,80 @@ def run_rebuild(args) -> None:
     print(json.dumps(report, ensure_ascii=False, indent=2))
 
 
+# ==================== 把 v1 卡的 significant_moments 并进 v2 ====================
+
+def migrate_v1_moments(*, v1_dir: Path, dry_run: bool = False, store=None) -> dict:
+    """把 v1 卡的 `significant_moments` 并进 v2 库（作为 `fact`，`temporal_scope=past`）。
+
+    **只搬这一类**，因为它是"她经历过的事"——属于"**说什么**"那类信息（用户会问起），
+    和"**怎么说**"的性格不同；后者已实验证明注入了也测不出差异（见 `评测与实验.md` 附录）。
+
+    `user_facts` / `impressions` **不搬**：前者 V2 会从真实对话自己抽，后者按实验结论不做。
+
+    ⚠️ 这些条目**没有对话证据**（v1 卡只存了 date + summary），所以证据里**如实写
+    "V1 卡迁移"**，不伪造一段不存在的对话摘录。设计文档 §五 说过"别机械搬 v1"——
+    这里的例外只限 moments，理由是它跟 `user_facts` 的性质不同。
+    """
+    import nonebot
+
+    try:
+        nonebot.get_driver()
+    except ValueError:
+        nonebot.init()
+
+    from src.plugins.chatbot.memory_v2 import ShadowMemoryStore
+
+    store = store or ShadowMemoryStore()
+    users = 0
+    migrated = 0
+    for path in sorted(Path(v1_dir).glob("*.json")):
+        try:
+            card = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(card, dict):
+            continue
+        pending = []
+        for moment in card.get("significant_moments") or []:
+            summary = moment.get("summary") if isinstance(moment, dict) else moment
+            date = (moment.get("date") if isinstance(moment, dict) else "") or ""
+            if summary and str(summary).strip():
+                pending.append((str(summary).strip(), str(date)))
+        if not pending:
+            continue
+        users += 1
+        for summary, date in pending:
+            if dry_run:
+                migrated += 1
+                continue
+            store.ingest(
+                path.stem,
+                [{
+                    "kind": "fact",
+                    "key": "moment",
+                    "value": summary,
+                    "action": "upsert",
+                    "temporal_scope": "past",
+                    "valid_for": "none",
+                    "explicit": True,
+                    "confidence": 0.9,
+                }],
+                source={
+                    "session_id": f"v1-migrate:{path.stem}",
+                    "observed_at": datetime.now().isoformat(),
+                    "user_text": f"（V1 记忆卡迁移，原文日期 {date or '未记'}）",
+                    "assistant_text": "",
+                },
+            )
+            migrated += 1
+    return {"users": users, "moments": migrated, "dry_run": dry_run}
+
+
+def run_migrate_moments(args) -> None:
+    report = migrate_v1_moments(v1_dir=Path(args.v1_dir), dry_run=bool(args.dry_run))
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+
+
 __all__ = [
     "redact_user_id",
     "load_state",
@@ -348,4 +422,6 @@ __all__ = [
     "replay",
     "run_rebuild",
     "rebuild",
+    "run_migrate_moments",
+    "migrate_v1_moments",
 ]

@@ -591,6 +591,19 @@ def _run_memory_rebuild(args):
     memory_v2_tool.run_rebuild(args)
 
 
+def _add_memory_migrate_moments(sub):
+    p = sub.add_parser("memory-migrate-moments",
+                       help="把 v1 卡的 significant_moments 并进 v2 库（只搬这一类）")
+    p.add_argument("--v1-dir", default=str(_common.PROJECT_ROOT / "user_memory" / "long_term"))
+    p.add_argument("--dry-run", action="store_true", help="只数条数，不写库")
+    p.set_defaults(func=_run_memory_migrate_moments)
+
+
+def _run_memory_migrate_moments(args):
+    import memory_v2_tool
+    memory_v2_tool.run_migrate_moments(args)
+
+
 # ==================== 主入口 ====================
 
 def build_parser() -> argparse.ArgumentParser:
@@ -629,6 +642,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_memory_replay(sub)
     _add_memory_ab(sub)
     _add_memory_rebuild(sub)
+    _add_memory_migrate_moments(sub)
     return parser
 
 
