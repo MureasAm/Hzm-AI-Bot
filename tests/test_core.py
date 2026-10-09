@@ -502,7 +502,6 @@ class TestGroupEventAge:
         async def _noop(*a, **k):
             pass
 
-        monkeypatch.setattr(core, "update_memory_task", _noop)
         await core.handle_chat("12345", "群里有啥好玩的", is_group=True)
 
         block = next((m["content"] for m in captured["msgs"] if "群聊现场" in m["content"]), "")
@@ -649,7 +648,6 @@ class TestLegendaryMemory:
 
         monkeypatch.setattr(core, "append_user_history", fake_append)
         monkeypatch.setattr(core, "get_user_memory", lambda uid: {})
-        monkeypatch.setattr(core, "update_memory_task", _noop)
 
         trigger = next(iter(core.LEGENDARY_REPLIES))  # 取一个真实梗
         await core.handle_chat("u", trigger)
@@ -684,7 +682,6 @@ class TestMemoryStoresCleanedReply:
         monkeypatch.setattr(core, "get_user_history", lambda uid: [])
         monkeypatch.setattr(core, "get_last_turn_gap_seconds", lambda uid: None)
         monkeypatch.setattr(core, "append_user_history", fake_append)
-        monkeypatch.setattr(core, "update_memory_task", _noop)
         monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
 
         await core.handle_chat("u", "可惜🤭")
@@ -753,80 +750,29 @@ class TestClassifyBehavior:
 
 
 class TestRepairLlmJson:
-    """DeepSeek 偶发的不规范 JSON 修复（记忆提取路径）。"""
+    """DeepSeek 偶发的不规范 JSON 修复。
+
+    `_repair_llm_json` 住在 `routing.py`（L3 分类在用）。原 core 里那条 v1 记忆提取路径
+    （`_parse_memory_extract` / `update_memory_task`）已随 V2 转正删掉，所以这里直接测 routing。
+    """
 
     def test_bare_keys(self):
-        assert core._repair_llm_json('{new_impression: "夜猫子"}') == '{"new_impression": "夜猫子"}'
+        assert routing._repair_llm_json('{new_impression: "夜猫子"}') == '{"new_impression": "夜猫子"}'
 
     def test_single_quotes(self):
-        assert core._repair_llm_json("{'a': 'x'}") == '{"a": "x"}'
+        assert routing._repair_llm_json("{'a': 'x'}") == '{"a": "x"}'
 
     def test_trailing_comma(self):
-        assert core._repair_llm_json('{"a": 1,}') == '{"a": 1}'
+        assert routing._repair_llm_json('{"a": 1,}') == '{"a": 1}'
 
     def test_markdown_fence(self):
-        assert core._repair_llm_json('```json\n{"a": 1}\n```') == '{"a": 1}'
+        assert routing._repair_llm_json('```json\n{"a": 1}\n```') == '{"a": 1}'
 
     def test_leading_garbage(self):
-        assert core._repair_llm_json('好的\n{"a": 1}') == '{"a": 1}'
+        assert routing._repair_llm_json('好的\n{"a": 1}') == '{"a": 1}'
 
     def test_empty_unchanged(self):
-        assert core._repair_llm_json("") == ""
-
-
-class TestParseMemoryExtract:
-    def test_valid(self):
-        assert core._parse_memory_extract('{"new_impression": "夜猫子"}') == {"new_impression": "夜猫子"}
-
-    def test_null_returns_empty(self):
-        assert core._parse_memory_extract("null") == {}
-
-    def test_repaired(self):
-        assert core._parse_memory_extract("{new_impression: '夜猫子'}") == {"new_impression": "夜猫子"}
-
-    def test_invalid_raises(self):
-        import pytest
-        with pytest.raises(Exception):
-            core._parse_memory_extract("{broken")
-
-
-class TestUpdateMemoryTaskRetry:
-    """记忆提取：首次 JSON 不规范 → 修复/重试，不丢记忆。"""
-
-    def _fake_client(self, first_content, second_content):
-        class _Seq:
-            def __init__(self):
-                self.n = 0
-            async def create(self, **kwargs):
-                self.n += 1
-                content = first_content if self.n == 1 else second_content
-                msg = type("M", (), {"content": content})()
-                return type("R", (), {"choices": [type("C", (), {"message": msg})()]})()
-        return type("C", (), {"chat": type("Chat", (), {"completions": _Seq()})})()
-
-    async def test_retries_then_updates(self, monkeypatch):
-        client = self._fake_client("{new_impression: '夜猫子'}", '{"new_impression": "夜猫子"}')
-        monkeypatch.setattr(core, "_get_clients", lambda: (client, None))
-        captured = {}
-        monkeypatch.setattr(core, "update_user_memory", lambda uid, updates: captured.update(updates))
-        await core.update_memory_task("u", "我是夜猫子，晚上不睡", "灰泽满也是夜猫子", {})
-        assert captured.get("new_impression") == "夜猫子"
-
-    async def test_valid_first_call_no_retry(self, monkeypatch):
-        client = self._fake_client('{"new_impression": "夜猫子"}', "不应被调用")
-        monkeypatch.setattr(core, "_get_clients", lambda: (client, None))
-        captured = {}
-        monkeypatch.setattr(core, "update_user_memory", lambda uid, updates: captured.update(updates))
-        await core.update_memory_task("u", "我是夜猫子", "好巧", {})
-        assert captured.get("new_impression") == "夜猫子"
-
-    async def test_null_skips(self, monkeypatch):
-        client = self._fake_client("null", "不应被调用")
-        monkeypatch.setattr(core, "_get_clients", lambda: (client, None))
-        called = []
-        monkeypatch.setattr(core, "update_user_memory", lambda uid, updates: called.append(updates))
-        await core.update_memory_task("u", "今天天气不错", "是啊", {})
-        assert called == []  # 无新信息，不写卡
+        assert routing._repair_llm_json("") == ""
 
 
 class TestMemoryV2ShadowTask:
@@ -971,7 +917,6 @@ class TestHandleChatEmotionOnly:
         async def _noop(*a, **k):
             pass
 
-        monkeypatch.setattr(core, "update_memory_task", _noop)
         reply = await core.handle_chat("u", "可惜🤭")
         assert reply == "可惜啥"
         # 语气提示仍注入（补全句给模型理解情绪）
@@ -1006,7 +951,6 @@ class TestHandleChatImageOnly:
         async def _noop(*a, **k):
             pass
 
-        monkeypatch.setattr(core, "update_memory_task", _noop)
         monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
 
         reply = await core.handle_chat("u", "", vision_desc="一碗加煎蛋的面")

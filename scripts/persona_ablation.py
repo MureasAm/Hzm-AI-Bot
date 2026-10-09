@@ -298,7 +298,6 @@ def _base_units(base: str):
 
 async def run_skeleton(n: int, from_synthetic: bool, min_chars: int, per_unit: int) -> int:
     """**骨架按小节消融**：一次检索 → 逐个删掉骨架的每一小节 → 看她的风格偏了多少。"""
-    core.update_memory_task = lambda *a, **k: asyncio.sleep(0)
     core.update_memory_v2_shadow_task = lambda *a, **k: asyncio.sleep(0)
     tmp = tempfile.mkdtemp(prefix="skelabl_")
     mem.use_storage(Path(tmp))
@@ -383,7 +382,6 @@ async def run_compress(n: int, short_path: str, from_synthetic: bool) -> int:
         return 1
     short_text = short.read_text(encoding="utf-8").strip()
 
-    core.update_memory_task = lambda *a, **k: asyncio.sleep(0)
     core.update_memory_v2_shadow_task = lambda *a, **k: asyncio.sleep(0)
     tmp = tempfile.mkdtemp(prefix="compress_")
     mem.use_storage(Path(tmp))
@@ -439,7 +437,6 @@ async def run_sections(n: int, from_synthetic: bool, min_section_chars: int,
 
     `only_section`：只做名字里含这个子串的段（给"某个段还没测过、单独补一批"用）。不传 = 所有段。
     """
-    core.update_memory_task = lambda *a, **k: asyncio.sleep(0)
     core.update_memory_v2_shadow_task = lambda *a, **k: asyncio.sleep(0)
     tmp = tempfile.mkdtemp(prefix="sectabl_")
     mem.use_storage(Path(tmp))
@@ -593,7 +590,6 @@ async def main():
                                   per_section=args.per_section, only_section=args.only_section)
 
     # 临时记忆：不污染线上（长期提取关掉，只测回复本身）
-    core.update_memory_task = lambda *a, **k: asyncio.sleep(0)
     core.update_memory_v2_shadow_task = lambda *a, **k: asyncio.sleep(0)
     tmp = tempfile.mkdtemp(prefix="ablation_")
     mem.use_storage(Path(tmp))

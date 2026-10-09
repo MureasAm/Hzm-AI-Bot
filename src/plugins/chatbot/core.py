@@ -13,15 +13,13 @@ import time
 from .constants import (
     SYSTEM_PROMPT_FILE, THINKING_DISABLED,
     CHAT_TEMPERATURE, CHAT_FREQUENCY_PENALTY, CHAT_MAX_TOKENS,
-    MEMORY_EXTRACT_TEMPERATURE, MEMORY_EXTRACT_MAX_TOKENS,
 )
 from .persona import (
     load_persona_rules, load_schedule,
 )
 from .memory import (
     get_user_history, get_user_history_timed, append_user_history,
-    get_user_memory, update_user_memory, build_memory_context,
-    _format_profile_summary, MEMORY_EXTRACT_PROMPT,
+    get_user_memory,   # 只用来读 v1 卡的 weather_city（V2 取不到时的最后兜底）
     get_last_turn_gap_seconds, humanize_gap,
 )
 from .rag import embed_query
@@ -36,7 +34,6 @@ from . import group_memory
 from . import memory_v2
 from .routing import (
     LEGENDARY_REPLIES, LEGENDARY_CONFIRMS, legendary_confirmed, legendary_hit, classify_l3,
-    _repair_llm_json,
 )
 from .reply_style import (
     clean_reply, is_echo_reply, is_emotion_only_query, uses_time_hook,
@@ -623,84 +620,6 @@ async def generate_reply(messages: list) -> str:
     return reply if reply else _FALLBACK_SILENT
 
 
-def _parse_memory_extract(content: str) -> dict:
-    """把记忆提取 LLM 的输出解析为 dict：剥围栏 + 修复不规范 JSON。
-
-    内容为 "null" 返回 {}；修复后仍不是合法 JSON 则抛异常（调用方重试一次）。
-
-    `_repair_llm_json` 已挪到 routing.py（L3 也要用，且 core 反向 import 会循环）。
-    """
-    content = (content or "").strip()
-    if content == "null":
-        return {}
-    return json.loads(_repair_llm_json(content))
-
-
-async def update_memory_task(user_id: str, user_msg: str, reply: str, user_memory_card: dict):
-    """异步提取并更新长期记忆。"""
-    # 密度门控：太短/纯表情的消息不值得提取（省成本减噪音）
-    msg = (user_msg or "").strip()
-    if not msg or len(msg) < 4:
-        return
-    if msg.startswith("[表情：") and msg.endswith("]"):
-        return
-    try:
-        deepseek_client, _ = _get_clients()
-    except Exception as e:
-        print(f"[长期记忆] 客户端初始化失败: {e}")
-        return
-
-    # 用可读画像摘要替代原生 JSON dump，让模型能可靠 dedup/冲突检测
-    current_summary = _format_profile_summary(user_memory_card)
-    prompt = MEMORY_EXTRACT_PROMPT.format(
-        current_summary=current_summary,
-        user_msg=user_msg,
-        reply=reply
-    )
-    prompt += "\n【本轮的强制规则】new_self_fact 一律返回 null。只提取关于用户的信息（new_impression / new_user_fact），不要从灰泽满的回复中提取任何自我披露内容。"
-
-    content = None
-    try:
-        resp = await deepseek_client.chat.completions.create(
-            model=_get_model_name(),
-            messages=[{"role": "user", "content": prompt}],
-            temperature=MEMORY_EXTRACT_TEMPERATURE,
-            max_tokens=MEMORY_EXTRACT_MAX_TOKENS,
-            **THINKING_DISABLED,
-        )
-        log_cache_usage(resp, "主回复")
-        content = extract_chat_content(resp)
-        print(f"[长期记忆] 提取结果: {content}")
-        if content and content.strip() != "null":
-            updates = _parse_memory_extract(content)
-            if updates:
-                update_user_memory(user_id, updates)
-    except Exception as e:
-        # 首次失败（多为 JSON 不规范/偶发）：严格格式重试一次。记忆提取是异步后台任务，重试不阻塞聊天。
-        print(f"[长期记忆] 首次解析失败（{e}），严格格式重试一次")
-        try:
-            strict_prompt = prompt + (
-                "\n【强制格式】输出必须是严格 JSON：所有键和字符串值都加双引号，"
-                "null 不带引号，键后冒号，不要 markdown 围栏，不要任何额外文字。"
-            )
-            resp2 = await deepseek_client.chat.completions.create(
-                model=_get_model_name(),
-                messages=[{"role": "user", "content": strict_prompt}],
-                temperature=MEMORY_EXTRACT_TEMPERATURE,
-                max_tokens=MEMORY_EXTRACT_MAX_TOKENS,
-                **THINKING_DISABLED,
-            )
-            content2 = extract_chat_content(resp2)
-            print(f"[长期记忆] 重试提取: {content2}")
-            updates = _parse_memory_extract(content2)
-            if updates:
-                update_user_memory(user_id, updates)
-        except Exception:
-            print(f"[长期记忆] 重试仍失败，本轮记忆丢弃。首次原始输出: {content!r}")
-            import traceback
-            traceback.print_exc()
-
-
 async def update_memory_v2_shadow_task(
     user_id: str,
     user_msg: str,
@@ -935,9 +854,8 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     core_stories = ctx["core_stories"]
 
     # --- 🧠 长期记忆：2026-10-10 起 **V2 正位**，v1 的卡不再注入 ---
-    # v1 的 update_memory_task 也停写了（见本函数末尾）；卡文件仍留在 user_memory/long_term/，
-    # 现在只读它拿 weather_city（城市感知）。要回退 v1：把下面 memory_context 还原成
-    # `build_memory_context(user_memory_card)`、并把末尾的 update_memory_task 加回去。
+    # v1 的提取/注入路径（update_memory_task 等）已删除；卡文件仍留在 user_memory/long_term/，
+    # 现在只读它拿 weather_city（V2 取不到时的最后兜底）。要回退 v1：`git revert` 那次提交。
     user_memory_card = {} if is_group else get_user_memory(user_id)
     memory_context = ""
     # 群聊现场事实：在场成员 + 群内近况（轻量群记忆，只在本群注入）

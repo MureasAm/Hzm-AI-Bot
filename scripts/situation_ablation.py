@@ -144,7 +144,6 @@ def _hit(rule, text):
 
 
 async def run(per_scenario: int, scenarios: list, seed: int) -> int:
-    core.update_memory_task = lambda *a, **k: asyncio.sleep(0)
     core.update_memory_v2_shadow_task = lambda *a, **k: asyncio.sleep(0)
     import tempfile
     tmp = tempfile.mkdtemp(prefix="sitabl_")

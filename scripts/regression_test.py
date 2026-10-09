@@ -70,7 +70,6 @@ def _init():
     # 禁用长期记忆提取副作用（只测回复质量）。
     # ⚠️ **v1 / v2 两路都要禁**：只禁 v1 的话，v2 提取（2026-10-10 起默认开）会往
     #    **真实** user_memory/memory_v2_shadow.json 里写一堆 regr_* 测试用户。
-    core.update_memory_task = lambda *a, **k: asyncio.sleep(0)
     core.update_memory_v2_shadow_task = lambda *a, **k: asyncio.sleep(0)
 
     # 把记忆文件指向临时目录，避免污染线上数据
