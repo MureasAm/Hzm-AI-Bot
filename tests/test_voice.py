@@ -1,5 +1,9 @@
-"""语音模块单元测试：should_voice 触发规则 / 文本清洗 / 情绪选参考 / 开关解析 / 静音裁剪 / 发送路径。"""
+"""语音模块单元测试：should_voice 触发规则 / 文本清洗 / 情绪选参考 / 开关解析 /
+音频清理与质量判定 / 合成重试与预算 / 发送路径。"""
 import array
+import asyncio
+import hashlib
+import io
 import math
 import wave
 from pathlib import Path
@@ -179,51 +183,118 @@ class TestGetVoiceEnabled:
         assert cfg.get_voice_enabled() is True
 
 
-class TestTrimSilence:
-    """_trim_silence：裁掉 wav 首尾静音（防"几个字+长空尾"的坏合成）。"""
+def _wav_segments(segs, rate=16000):
+    """拼一段单声道 16bit 音频。segs: [(类型, 秒数)]。
 
-    def _make_wav(self, path, rate=16000, lead_s=0.3, tone_s=0.5, tail_s=0.4):
-        """前 lead 静音 + 中 tone 方波(8000) + 后 tail 静音 的单声道 16bit wav。"""
-        n = int(rate * (lead_s + tone_s + tail_s))
-        a = array.array("h", [0]) * n
-        for i in range(int(rate * lead_s), int(rate * (lead_s + tone_s))):
-            a[i] = 8000 if (i // 20) % 2 else -8000
-        with wave.open(str(path), "wb") as w:
-            w.setnchannels(1)
-            w.setsampwidth(2)
-            w.setframerate(rate)
-            w.writeframes(a.tobytes())
-        return n / rate
+    tone=方波(±8000，≈正常语音窗 RMS 数千)；noise=低幅交替(±400，≈线上 32kHz 的底噪
+    RMS 300~500——**恰好骑在旧阈值 300 上**，旧代码裁静音对它完全空转)；
+    silence=全 0。
+    """
+    a = array.array("h")
+    for kind, sec in segs:
+        n = int(rate * sec)
+        for i in range(n):
+            if kind == "silence":
+                a.append(0)
+            elif kind == "tone":
+                a.append(8000 if (i // 20) % 2 else -8000)
+            else:
+                a.append(400 if (i // 20) % 2 else -400)
+    return a, rate
+
+
+def _write_wav(path, segs, rate=16000):
+    a, rate = _wav_segments(segs, rate)
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(a.tobytes())
+    return len(a) / rate
+
+
+def _wav_bytes(segs, rate=16000):
+    a, rate = _wav_segments(segs, rate)
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(a.tobytes())
+    return buf.getvalue()
+
+
+def _dur(path):
+    with wave.open(str(path)) as w:
+        return w.getnframes() / w.getframerate()
+
+
+class TestCleanWav:
+    """_clean_wav：裁首尾静音 + 压句中超长空洞，并回报 (有效秒数, 总秒数)。"""
 
     def test_trims_leading_and_trailing_silence(self, tmp_path):
         p = tmp_path / "x.wav"
-        orig = self._make_wav(p)
-        v._trim_silence(p)
-        with wave.open(str(p)) as w:
-            dur = w.getnframes() / w.getframerate()
+        orig = _write_wav(p, [("silence", 0.3), ("tone", 0.5), ("silence", 0.4)])
+        v._clean_wav(p)
         # 原 1.2s → 裁后只剩 音段(0.5s) + 两侧边距(~0.1s)，远小于原长、也大于纯音段
-        assert dur < orig - 0.5
-        assert dur >= 0.5
+        assert _dur(p) < orig - 0.5
+        assert _dur(p) >= 0.5
+
+    def test_trims_noise_tail_above_old_threshold(self, tmp_path):
+        """回归（2026-10-11）：底噪 400 骑在旧阈值 300 上 → 旧代码一个字都裁不掉。
+
+        线上真实形态：前 2 秒人声 + 后面几十秒底噪，条子 50 秒但只有 2 秒人声。
+        """
+        p = tmp_path / "hollow.wav"
+        _write_wav(p, [("tone", 0.5), ("noise", 4.0)])
+        sec, total = v._clean_wav(p)
+        assert _dur(p) < 1.0, "底噪尾巴没裁掉（旧阈值 300 的坑）"
+        assert 0.4 <= sec <= 0.7
+        assert total < 1.0
+
+    def test_collapses_long_internal_gap(self, tmp_path):
+        """句中"空"几十秒是合成故障（首尾裁剪治不了）→ 压到 0.6 秒。"""
+        p = tmp_path / "gap.wav"
+        _write_wav(p, [("tone", 0.5), ("silence", 6.0), ("tone", 0.5)])
+        sec, total = v._clean_wav(p)
+        assert total < 2.5, f"句中空洞没压掉：{total:.1f}s"
+        assert total > 1.2 and sec >= 1.0
+        assert 1.4 <= total <= 2.0
+
+    def test_keeps_short_pause(self, tmp_path):
+        """正常停顿（省略号那种，1 秒上下）不许动。"""
+        p = tmp_path / "pause.wav"
+        _write_wav(p, [("tone", 0.5), ("silence", 1.0), ("tone", 0.5)])
+        v._clean_wav(p)
+        assert _dur(p) >= 1.9
 
     def test_all_silence_untouched(self, tmp_path):
         p = tmp_path / "x.wav"
-        rate, dur = 16000, 1.0
-        a = array.array("h", [0]) * int(rate * dur)
-        with wave.open(str(p), "wb") as w:
-            w.setnchannels(1)
-            w.setsampwidth(2)
-            w.setframerate(rate)
-            w.writeframes(a.tobytes())
-        v._trim_silence(p)  # 全静音：不裁，防裁空
-        with wave.open(str(p)) as w:
-            assert w.getnframes() / w.getframerate() == dur
+        dur = _write_wav(p, [("silence", 1.0)])
+        sec, total = v._clean_wav(p)
+        assert _dur(p) == dur           # 全静音：不裁，防裁空
+        assert sec == 0.0 and total == dur
+
+    def test_all_noise_untouched(self, tmp_path):
+        """整条都是底噪（没人声）：也不许裁——裁空了她会发一条 0 秒语音。"""
+        p = tmp_path / "noise.wav"
+        dur = _write_wav(p, [("noise", 2.0)])
+        sec, total = v._clean_wav(p)
+        assert _dur(p) == dur
+        assert sec == 0.0
 
     def test_short_wav_ok(self, tmp_path):
         p = tmp_path / "short.wav"
-        self._make_wav(p, tone_s=0.08, lead_s=0.0, tail_s=0.0)  # 全语音、几乎无空白
-        v._trim_silence(p)  # 不应抛异常
-        with wave.open(str(p)) as w:
-            assert w.getnframes() > 0
+        _write_wav(p, [("tone", 0.08)])  # 全语音、几乎无空白
+        v._clean_wav(p)  # 不应抛异常
+        assert _dur(p) > 0
+
+    def test_bad_file_survives(self, tmp_path):
+        p = tmp_path / "junk.wav"
+        p.write_bytes(b"not a wav")
+        assert v._clean_wav(p) == (0.0, 0.0)
+        assert p.read_bytes() == b"not a wav"   # 读不动就原样发，绝不抛
+
 
 
 class TestSpeechSeconds:
@@ -308,3 +379,299 @@ class TestForceVoice:
 
     def test_force_still_respects_max_len(self):
         assert should_voice("啊" * 200, force=True) is False     # 超长仍走文字
+
+
+# ————————————————— 期望时长 / 质量判定 —————————————————
+
+_LONG = "灰泽满今天直播聊得特别开心，下次有空我们再一起好好玩呀，明天也要来哦，记得早点睡"
+
+
+def _cache_path(text):
+    h = hashlib.md5(v._tts_text(text).encode("utf-8")).hexdigest()
+    return v.VOICE_CACHE_DIR / f"voice_{h}.wav"
+
+
+class TestExpectSeconds:
+    """期望时长口径：中文 5.9 字/秒、拉丁 10.5 字符/秒（2026-10-11 回归标定）。"""
+
+    def test_chinese_rate(self):
+        # 59 个汉字 → 10 秒；旧的 4.2 字/秒会估成 14 秒（把正常语速判成截断）
+        assert v._expect_seconds("中" * 59) == pytest.approx(10.0, abs=0.3)
+
+    def test_latin_in_chinese_is_slow(self):
+        # 夹在中文里的拉丁串多是被逐字母念的：按 10.5 字符/秒
+        assert v._expect_seconds("中" + "a" * 21) == pytest.approx(1 / 5.9 + 2.0, abs=0.1)
+
+    def test_pure_english_is_fast(self):
+        # 整句英文连读（实测 16~19 字符/秒）——按中文字速估会把期望撑到 3 倍
+        assert v._expect_seconds("a" * 32) == pytest.approx(2.0, abs=0.1)
+
+    def test_punctuation_ignored(self):
+        assert v._expect_seconds("中" * 10 + "，。！？" * 3) == pytest.approx(10 / 5.9, abs=0.1)
+
+    def test_mixed_adds_up(self):
+        e = v._expect_seconds("中文" * 10 + "hello")
+        assert e == pytest.approx(20 / 5.9 + 5 / 10.5, abs=0.05)
+
+    def test_empty(self):
+        assert v._expect_seconds("") == 0.0
+
+
+class TestAcceptance:
+    """合格 = 没被空洞撑爆 + 没被砍掉半句。"""
+
+    def test_normal_ok(self):
+        assert v._is_acceptable(5.0, 5.2, 5.9, 35) is True
+
+    def test_truncated_no(self):
+        # 35 字该读 5.9s，只读出 1.5s → 截断
+        assert v._is_acceptable(1.5, 1.8, 5.9, 35) is False
+
+    def test_hollow_no_even_if_speech_enough(self):
+        # ⚠️ 回归（2026-10-11 的 bug）：旧代码的提前 break 只看了 sec 这半边，
+        # "有效语音够、总长被空洞撑爆"的结果会被当合格收工 —— 重试从没真正发生过。
+        assert v._is_acceptable(4.0, 30.0, 5.9, 35) is False
+
+    def test_short_reply_only_checks_bloat(self):
+        # 短句（"晚安"）不查"读完整"，但**照样查空洞**：5 秒以上的条子一定有问题
+        assert v._is_acceptable(0.4, 0.9, 0.34, 2) is True
+        assert v._is_acceptable(0.4, 30.0, 0.34, 2) is False
+
+    def test_empty_audio_no(self):
+        assert v._is_acceptable(0.0, 0.0, 5.9, 35) is False
+
+    def test_score_prefers_less_bloat(self):
+        # 都不达标时：5 秒人声散在 60 秒里 < 4.9 秒人声的干净条子
+        hollow = v._quality_score(5.0, 60.0, 5.9)
+        clean = v._quality_score(4.9, 5.0, 5.9)
+        assert clean > hollow
+
+
+class TestTextLang:
+    """按文本选 text_lang（原来写死 zh，整句英文会失真）。"""
+
+    @pytest.mark.parametrize("text,lang", [
+        ("灰泽满今天很困", "zh"),
+        ("灰泽满今天很困，just kidding", "zh"),      # 夹带英文词：中文前端能念
+        ("Hello everyone, this is a test", "en"),
+        ("123456", "zh"),
+        ("", "zh"),
+    ])
+    def test_detect(self, text, lang):
+        assert v._text_lang(text) == lang
+
+
+# ————————————————— 合成：缓存复检 / 重试 / 预算 —————————————————
+
+
+class _FakeResp:
+    def __init__(self, content=b"", status=200):
+        self.content = content
+        self.status_code = status
+
+
+def _fake_httpx(monkeypatch, payloads):
+    """把合成用的 httpx 换成假的：payloads 依次作为响应体（可给 (bytes, status)）。
+
+    返回记录箱：n=调用次数，json=每次请求的参数，timeout=客户端超时。
+    """
+    box = {"n": 0, "json": [], "timeout": None}
+
+    class _Client:
+        def __init__(self, **kw):
+            box["timeout"] = kw.get("timeout")
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json=None):
+            box["json"].append(json)
+            item = payloads[min(box["n"], len(payloads) - 1)]
+            box["n"] += 1
+            data, status = item if isinstance(item, tuple) else (item, 200)
+            return _FakeResp(data, status)
+
+    monkeypatch.setattr(v.httpx, "AsyncClient", _Client)
+    return box
+
+
+@pytest.fixture
+def voice_env(monkeypatch, tmp_path):
+    """合成所需的隔离环境：参考音频在、语音开关开、缓存目录指向 tmp。"""
+    refs = tmp_path / "refs"
+    refs.mkdir()
+    (refs / "ref_voice.wav").write_bytes(b"x")
+    (refs / "ref_voice.txt").write_text("参考文本", encoding="utf-8")
+    monkeypatch.setattr(v, "SOVITS_REF_DIR", refs)
+    monkeypatch.setattr(v, "VOICE_CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(v, "get_voice_enabled", lambda: True)
+    return refs
+
+
+class TestSynthesize:
+    async def test_cache_hit_good_skips_http(self, voice_env, monkeypatch):
+        expect = v._expect_seconds(v._tts_text(_LONG))
+        cached = _cache_path(_LONG)
+        cached.parent.mkdir(parents=True, exist_ok=True)
+        _write_wav(cached, [("tone", expect)])
+        box = _fake_httpx(monkeypatch, [b""])
+        assert await v._synthesize(_LONG) == str(cached)
+        assert box["n"] == 0, "合格缓存不该再打 TTS"
+
+    async def test_cache_hit_cleans_legacy_noise_tail(self, voice_env, monkeypatch):
+        """老缓存是旧阈值下裁的（底噪尾巴还在）→ 复检顺手治好，不必再打 TTS。"""
+        expect = v._expect_seconds(v._tts_text(_LONG))
+        cached = _cache_path(_LONG)
+        cached.parent.mkdir(parents=True, exist_ok=True)
+        _write_wav(cached, [("tone", expect), ("noise", 2.0)])
+        box = _fake_httpx(monkeypatch, [b""])
+        out = await v._synthesize(_LONG)
+        assert box["n"] == 0, "合格的老缓存不该重合成"
+        assert _dur(Path(out)) < expect + 0.5, "顺手把底噪尾巴裁掉"
+
+    async def test_cache_hit_bad_regenerates(self, voice_env, monkeypatch):
+        """缓存读回复检：历史坏条子（空洞/截断）不能永久复用。"""
+        expect = v._expect_seconds(v._tts_text(_LONG))
+        cached = _cache_path(_LONG)
+        cached.parent.mkdir(parents=True, exist_ok=True)
+        _write_wav(cached, [("tone", 0.5), ("noise", 8.0)])   # 坏：只有半秒人声
+        assert v._speech_seconds(cached) < 1.0
+        box = _fake_httpx(monkeypatch, [_wav_bytes([("tone", expect)])])
+        out = await v._synthesize(_LONG)
+        assert box["n"] == 1, "不合格的缓存必须重新合成"
+        assert v._speech_seconds(Path(out)) > 3.0, "缓存应被好结果覆盖"
+
+    async def test_retries_when_first_attempt_bad(self, voice_env, monkeypatch):
+        """第一次出来是坏的（截断）→ 换温度重来（重试必须真的会发生）。"""
+        expect = v._expect_seconds(v._tts_text(_LONG))
+        box = _fake_httpx(monkeypatch, [
+            _wav_bytes([("tone", 0.5)]),               # 截断
+            _wav_bytes([("tone", expect)]),            # 好
+        ])
+        out = await v._synthesize(_LONG)
+        assert box["n"] == 2
+        assert v._speech_seconds(Path(out)) > 3.0
+
+    async def test_retries_when_result_hollow(self, voice_env, monkeypatch):
+        """回归（2026-10-11 的 bug）：结果"有效语音够、总长被撑爆"时旧代码提前 break ——
+
+        `best_sec >= need` 只看了一半（漏了 total），于是第 2 次循环一进来就收工，
+        **重试从来没真正发生过**。这里把清理结果钉成空洞，要求三次都得试。
+        """
+        monkeypatch.setattr(v, "_clean_wav", lambda p: (4.0, 30.0))
+        box = _fake_httpx(monkeypatch, [b"a", b"b", b"c"])
+        await v._synthesize(_LONG)
+        assert box["n"] == 3, "空洞结果必须继续重试，不能提前收工"
+
+    async def test_gives_up_keeps_least_bad(self, voice_env, monkeypatch):
+        """三次都不达标 → 发"最不烂"的一次（人声最长的），并缓存它。"""
+        _fake_httpx(monkeypatch, [
+            _wav_bytes([("tone", 2.0)]),
+            _wav_bytes([("tone", 3.5)]),
+            _wav_bytes([("tone", 3.0)]),
+        ])
+        out = await v._synthesize(_LONG)
+        assert 3.3 <= v._speech_seconds(Path(out)) <= 3.7
+
+    async def test_non_200_then_ok(self, voice_env, monkeypatch):
+        expect = v._expect_seconds(v._tts_text(_LONG))
+        box = _fake_httpx(monkeypatch, [(b"", 500), _wav_bytes([("tone", expect)])])
+        out = await v._synthesize(_LONG)
+        assert box["n"] == 2 and out
+
+    async def test_english_uses_en_text_lang(self, voice_env, monkeypatch):
+        text = "Hello everyone, this is a test of the voice system"
+        box = _fake_httpx(monkeypatch, [_wav_bytes([("tone", 5.0)])])
+        await v._synthesize(text)
+        assert box["json"][0]["text_lang"] == "en"
+        assert box["json"][0]["prompt_lang"] == "zh"   # 参考音频是中文的
+
+    async def test_chinese_uses_zh_text_lang(self, voice_env, monkeypatch):
+        box = _fake_httpx(monkeypatch, [_wav_bytes([("tone", 6.0)])])
+        await v._synthesize(_LONG)
+        assert box["json"][0]["text_lang"] == "zh"
+
+    async def test_disabled_returns_none(self, voice_env, monkeypatch):
+        monkeypatch.setattr(v, "get_voice_enabled", lambda: False)
+        box = _fake_httpx(monkeypatch, [_wav_bytes([("tone", 5.0)])])
+        assert await v._synthesize(_LONG) is None
+        assert box["n"] == 0
+
+    async def test_exhausted_budget_skips_synthesis(self, voice_env, monkeypatch):
+        """预算不够就别开口（等锁可能已经把预算耗光）——她一个字都不发是最糟的结果。"""
+        box = _fake_httpx(monkeypatch, [_wav_bytes([("tone", 5.0)])])
+        loop = asyncio.get_running_loop()
+        assert await v._synthesize(_LONG, deadline=loop.time() + 1.0) is None
+        assert box["n"] == 0
+
+    async def test_attempt_timeout_bounded_by_budget(self, voice_env, monkeypatch):
+        expect = v._expect_seconds(v._tts_text(_LONG))
+        box = _fake_httpx(monkeypatch, [_wav_bytes([("tone", expect)])])
+        loop = asyncio.get_running_loop()
+        await v._synthesize(_LONG, deadline=loop.time() + 10.0)
+        assert box["timeout"] == pytest.approx(10.0, abs=0.5)   # 不能再用 120s
+        box2 = _fake_httpx(monkeypatch, [_wav_bytes([("tone", expect)])])
+        await v._synthesize(_LONG + "。")
+        assert box2["timeout"] == v._TTS_ATTEMPT_TIMEOUT_SEC
+
+
+class _FakeBot:
+    def __init__(self):
+        self.sent = []
+
+    async def send_private_msg(self, **kw):
+        self.sent.append(("private", kw))
+
+    async def send_group_msg(self, **kw):
+        self.sent.append(("group", kw))
+
+
+class TestSendVoiceBudget:
+    """语音整条通道有硬预算：超了就走文字，绝不把她卡在 TTS 上。"""
+
+    async def test_blown_budget_returns_false(self, monkeypatch):
+        monkeypatch.setattr(v, "_TTS_BUDGET_SEC", 0.0)
+        called = []
+        monkeypatch.setattr(v, "_synthesize", lambda *a, **k: called.append(1))
+        bot = _FakeBot()
+        assert await v.send_voice(bot, "1", True, _LONG) is False
+        assert not called and not bot.sent
+
+    async def test_hard_timeout_falls_back(self, monkeypatch):
+        """就算 _synthesize 整个卡住（超时没生效），wait_for 也要兜住。"""
+        monkeypatch.setattr(v, "_TTS_BUDGET_SEC", 0.05)
+
+        async def _hang(*a, **k):
+            await asyncio.sleep(30)
+
+        monkeypatch.setattr(v, "_synthesize", _hang)
+        bot = _FakeBot()
+        assert await v.send_voice(bot, "1", True, _LONG) is False
+        assert not bot.sent
+
+    async def test_sends_record_on_success(self, monkeypatch, tmp_path):
+        wav = tmp_path / "voice_x.wav"
+        wav.write_bytes(b"x")
+
+        async def _ok(*a, **k):
+            return str(wav)
+
+        monkeypatch.setattr(v, "_synthesize", _ok)
+        bot = _FakeBot()
+        assert await v.send_voice(bot, "42", True, _LONG) is True
+        kind, kw = bot.sent[0]
+        assert kind == "private" and kw["user_id"] == "42"
+        assert kw["message"].type == "record"
+        assert kw["message"].data["file"].startswith("file:///")
+
+    async def test_falls_back_when_synthesis_fails(self, monkeypatch):
+        async def _none(*a, **k):
+            return None
+
+        monkeypatch.setattr(v, "_synthesize", _none)
+        bot = _FakeBot()
+        assert await v.send_voice(bot, "1", False, _LONG) is False
+        assert not bot.sent
