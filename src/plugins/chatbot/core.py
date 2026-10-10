@@ -133,7 +133,7 @@ async def summarize_batch(msgs: list) -> str:
             max_tokens=80,
             **THINKING_DISABLED,
         )
-        log_cache_usage(resp, "主回复")
+        log_cache_usage(resp, "批量归纳")
         return extract_chat_content(resp)
     except Exception as e:
         print(f"⚠️ 批量归纳失败（忽略）: {e}")
@@ -169,7 +169,7 @@ async def summarize_forward(raw: str) -> str:
             max_tokens=120,
             **THINKING_DISABLED,
         )
-        log_cache_usage(resp, "主回复")
+        log_cache_usage(resp, "转发归纳")
         return extract_chat_content(resp).strip()
     except Exception as e:
         print(f"⚠️ 转发摘要失败（忽略）: {e}")
@@ -328,7 +328,7 @@ async def confirm_ambiguous_terms(user_msg: str, deepseek_client=None) -> set:
             max_tokens=200,
             **THINKING_DISABLED,
         )
-        log_cache_usage(resp, "主回复")
+        log_cache_usage(resp, "术语消歧")
         content = extract_chat_content(resp)
         if "```" in content:
             content = content.split("```")[1].split("```")[0].strip()
@@ -611,6 +611,10 @@ async def generate_reply(messages: list) -> str:
             max_tokens=CHAT_MAX_TOKENS,
             **THINKING_DISABLED,
         )
+        # ⚠️ 主回复是**最大的 token 消费者**，但以前漏了插桩——日志里那三行 `主回复`
+        #    其实是批量归纳/转发归纳/术语消歧三个小助手（2026-10-11 查明）。
+        #    不打出这一行，"缓存到底命中多少"根本没法归因。
+        log_cache_usage(response, "主回复")
         reply = extract_chat_content(response)
     except Exception as e:
         # 异常原文不再塞进回复：那是内部信息，会原样发给 QQ 上的每个用户。

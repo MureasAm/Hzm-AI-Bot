@@ -314,6 +314,10 @@ async def extract_and_ingest(
         )
     except Exception:
         return []
+    # 提取是**第二大 token 消费者**（全量重建约 4000 次调用），也不该是隐形的。
+    from .config import log_cache_usage
+
+    log_cache_usage(response, "记忆提取")
     payload = parse_extraction_payload(_response_text(response))
     return store.ingest(
         user_id,
