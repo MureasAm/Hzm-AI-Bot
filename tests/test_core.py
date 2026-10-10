@@ -173,6 +173,21 @@ class TestWeatherCity:
         assert core._weather_city_for("u", {"weather_city": "广州"}) == "广州"
 
 
+class TestNameOpener:
+    """名字开头判据：只认"这条回复是不是拿用户的名字起手"，别的口癖一概不碰。"""
+
+    def test_detects_name_at_start(self):
+        assert reply_style.starts_with_name("草草子哥，你说啥", "草草子哥")
+        assert reply_style.starts_with_name("（心虚）草草子哥……", "草草子哥")
+
+    def test_name_not_at_start_is_fine(self):
+        assert reply_style.starts_with_name("你说啥呢草草子哥", "草草子哥") is False
+        assert reply_style.starts_with_name("行行行", "草草子哥") is False
+
+    def test_empty_name_never_fires(self):
+        assert reply_style.starts_with_name("草草子哥，你说啥", "") is False
+
+
 class TestSummarizeBatch:
     async def test_single_message_skips(self, monkeypatch):
         def _fail(*a, **k):
@@ -653,6 +668,25 @@ class TestLegendaryMemory:
         await core.handle_chat("u", trigger)
         assert captured, "梗匹配回复也应记入短期记忆"
         assert captured[0][0] == trigger
+
+
+class TestLegendaryConfirmTemplates:
+    """每条 confirm 模板都必须**把消息喂给模型**、并**要求它只答是/否**。
+
+    踩坑（2026-10-11）：8 条里有 5 条既没有 `{msg}`（模型看不到要判的那句话，只能瞎猜）
+    也没有「只回复：是 或 否」（而 routing 是按"回答以'是'开头"来判的）→ 这几条**必然判错**。
+    用户看到的「到底爱不爱绿冻被判成不是梗」就是这么来的，而当时没有任何测试能抓到。
+    """
+
+    def test_every_confirm_feeds_msg_and_asks_yes_no(self):
+        for key, tpl in core.LEGENDARY_CONFIRMS.items():
+            assert "{msg}" in tpl, f"{key} 的 confirm 没给模型消息（缺 {{msg}}）"
+            assert "只回复" in tpl, f"{key} 的 confirm 没要求只答是/否"
+
+    def test_asking_for_context_means_injecting_it(self):
+        for key, tpl in core.LEGENDARY_CONFIRMS.items():
+            if "结合最近对话" in tpl:
+                assert "{context}" in tpl, f"{key} 要求结合最近对话，却没注入 {{context}}"
 
 
 class TestMemoryStoresCleanedReply:

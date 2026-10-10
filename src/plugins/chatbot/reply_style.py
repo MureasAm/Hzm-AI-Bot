@@ -74,11 +74,30 @@ def _lcs_len(a: str, b: str) -> int:
 # 窄是故意的：历史上"防措辞固化"就是死在误伤她自己的口癖（75% 触发都在拦自称"灰泽满"），
 # 所以这条只管"又提时间"，别的词一概不认。
 _TIME_HOOK_RE = re.compile(r"凌晨|半夜|深夜|大半夜|大清早|一大早|[0-9]{1,2}\s*点")
+# 开头的一整组括号（可连着几组）：「（心虚）」「(笑)」「【小声】」
+_LEADING_PAREN_RE = re.compile(r"^(?:[（(【\[][^）)】\]]*[）)】\]]\s*)+")
 
 
 def uses_time_hook(reply: str) -> bool:
     """这条回复是不是又在拿"时间"当切入点（用于拦熬夜场景下的反复开场）。"""
     return bool(_TIME_HOOK_RE.search(reply or ""))
+
+
+def starts_with_name(reply: str, name: str) -> bool:
+    """这条回复是不是**拿用户的名字当开头**。
+
+    为什么要单独判它（2026-10-11 实测）：她一旦开始每句都叫名字就会**自我强化**——
+    她的回复进了【最近对话记录】→ 被当作样本学回去。某用户**前 100 轮 0 次**名字开头，
+    从第 103 轮（用户第一次说出那个名字）起一路涨到**最近 14 轮 14/14**。
+    名字进记忆只是"种子"，真正让它停不下来的是这个正反馈。
+    前导括号/情绪括号是内心戏、不算"开头说的是什么"，先剥掉再比。
+    """
+    if not name:
+        return False
+    # 剥掉开头的括号组（内心戏，可能连着好几组）再比——但**只剥完整的一组**，
+    # 不能只剥括号字符（否则「（心虚）X」会变成「心虚）X」，名字判不出来）。
+    text = _LEADING_PAREN_RE.sub("", (reply or "").lstrip())
+    return text.startswith(name)
 
 
 def is_echo_reply(reply: str, recent_bot_replies: list, min_ratio: float = 0.6,

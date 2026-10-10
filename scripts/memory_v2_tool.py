@@ -410,6 +410,61 @@ def run_migrate_moments(args) -> None:
     print(json.dumps(report, ensure_ascii=False, indent=2))
 
 
+# ==================== 合并"单值 key 攒了多份" ====================
+
+def dedupe_single_valued(*, dry_run: bool = False) -> dict:
+    """把库里**同一个单值 key 攒了多份**的合并成一份（保留最新那条）。
+
+    为什么要它：顶替规则以前只认 `temporal_scope == "current"`，而模型常把
+    `preferred_name` 标成 `timeless` → 走"累积" → 同一个名字存 3 份、**每轮注入 3 次**
+    （实测 1750961968）。规则已修（`_SINGLE_VALUED_FACT_KEYS` 无条件顶替），
+    但**已经攒下的存量**不会自己消失，所以补这一趟。
+
+    做法：把最新那条**重新 ingest 一次**——修好的顶替规则会把同键的旧份标记为 superseded。
+    """
+    import nonebot
+
+    try:
+        nonebot.get_driver()
+    except ValueError:
+        nonebot.init()
+
+    from src.plugins.chatbot.memory_v2 import ShadowMemoryStore, _SINGLE_VALUED_FACT_KEYS
+
+    store = ShadowMemoryStore()
+    # ⚠️ 不能靠"重新 ingest 最新那条"来触发顶替：同一条证据（同 session+摘录+时间）会被
+    #    ingest 判成 `duplicate_evidence` **在顶替那步之前就 continue 了**（试过，静默无效）。
+    #    所以直接改库状态：同 key 只留最新，其余标 superseded。
+    now = datetime.now().isoformat()
+    with store._lock:
+        state = store._load()
+        changed = 0
+        for user in (state.get("users") or {}).values():
+            groups: dict[str, list[dict]] = {}
+            for memory in user.get("memories") or []:
+                if (memory.get("kind") == "fact"
+                        and memory.get("status") in {"confirmed", "active"}
+                        and memory.get("key") in _SINGLE_VALUED_FACT_KEYS):
+                    groups.setdefault(memory["key"], []).append(memory)
+            for memories in groups.values():
+                if len(memories) < 2:
+                    continue
+                newest = max(memories, key=lambda m: str(m.get("last_observed_at") or ""))
+                for memory in memories:
+                    if memory is not newest:
+                        memory["status"] = "superseded"
+                        memory["invalidated_at"] = now
+                        changed += 1
+        if not dry_run and changed:
+            store._save(state)
+    return {"collapsed": changed, "dry_run": dry_run}
+
+
+def run_dedupe_single_valued(args) -> None:
+    print(json.dumps(dedupe_single_valued(dry_run=bool(args.dry_run)),
+                     ensure_ascii=False, indent=2))
+
+
 __all__ = [
     "redact_user_id",
     "load_state",
@@ -424,4 +479,6 @@ __all__ = [
     "rebuild",
     "run_migrate_moments",
     "migrate_v1_moments",
+    "run_dedupe_single_valued",
+    "dedupe_single_valued",
 ]

@@ -201,6 +201,38 @@ def test_current_facts_supersede_same_key(store, clock):
     assert kept == ["搬到深圳了"]
 
 
+def test_single_valued_fact_supersedes_even_when_timeless(store, clock):
+    """名字/地点/时区这类**天然单值**的键，模型标成 timeless 也必须顶替。
+
+    实测（2026-10-11）：某用户存了 **3 份** `preferred_name`（都标 timeless → 走"累积"），
+    于是每轮注入 3 次名字，还叠上"她每句都叫名字"的正反馈。
+    """
+    for i, value in enumerate(("小明", "阿明")):
+        store.ingest(
+            "u1",
+            [{"kind": "fact", "key": "preferred_name", "value": value,
+              "temporal_scope": "timeless", "explicit": True, "confidence": 0.9}],
+            source=_source(now=clock + timedelta(minutes=i)), now=clock + timedelta(minutes=i),
+        )
+
+    kept = [m["value"] for m in store.snapshot("u1")["memories"] if m["status"] != "superseded"]
+    assert kept == ["阿明"]
+
+
+def test_multi_valued_timeless_fact_still_accumulates(store, clock):
+    """但 `identity` / `background` 这类**会有多条**的，不能跟着单值键一起顶替（会真丢信息）。"""
+    for i, value in enumerate(("是大学生", "在澳洲留学")):
+        store.ingest(
+            "u1",
+            [{"kind": "fact", "key": "background", "value": value,
+              "temporal_scope": "timeless", "explicit": True, "confidence": 0.9}],
+            source=_source(now=clock + timedelta(minutes=i)), now=clock + timedelta(minutes=i),
+        )
+
+    kept = [m["value"] for m in store.snapshot("u1")["memories"] if m["status"] != "superseded"]
+    assert sorted(kept) == ["在澳洲留学", "是大学生"]
+
+
 def test_past_fact_is_not_rendered_as_current_core_profile(store, clock):
     store.ingest(
         "u1",

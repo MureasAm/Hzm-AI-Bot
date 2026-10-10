@@ -44,6 +44,15 @@ _ALWAYS_ON_FACT_KEYS = {
     "preferred_name", "name", "nickname", "location", "city",
     "timezone", "identity", "occupation", "background",
 }
+# 上面那批里**天然只有一个值**的（名字/地点/时区/职业）——同一 key 的新值必须顶掉旧的。
+# ⚠️ 不能直接用 `_ALWAYS_ON_FACT_KEYS` 当顶替名单：`identity` / `background` 会有多条
+#    （"是学生" + "在澳洲留学"），顶替会真丢信息（踩过）。
+# ⚠️ 也不能只靠 `temporal_scope == "current"` 判顶替：模型常把 `preferred_name` 标成
+#    **timeless**，而 timeless 走"累积" → 同一个名字存 3 份、每轮注入 3 次（实测
+#    1750961968 正是如此，还叠上"她每句都叫名字"的正反馈）。
+_SINGLE_VALUED_FACT_KEYS = {
+    "preferred_name", "name", "nickname", "location", "city", "timezone", "occupation",
+}
 
 _KINDS = {"fact", "interaction_preference", "commitment"}
 _ACTIONS = {"upsert", "retract"}
@@ -127,6 +136,8 @@ MEMORY_V2_EXTRACT_PROMPT = """你是灰泽满私聊机器人的记忆候选提�
    · key 用**具体到事**的小写英文（`location`/`preferred_name`/`timezone`/`exam_status`…），
      **别用 `current_situation`/`past_experience`/`info` 这类装什么都行的通用键**——
      通用键会让不同的事互相顶掉。
+   · `preferred_name` / `nickname` 的 value **只写名字本身**（如"草草子哥"），
+     **不要写成"用户希望被称呼为X"这种整句**——那个句子会被当成名字注入，又长又怪。
    · temporal_scope：**经历**用 past（可叠加，不倒旧的）；**地域/时区/身份**这类长期成立用 timeless；
      **当前状态**（在准备考试 / 在搬家）用 current（**同一 key 的新值会顶掉旧的**）。
    · valid_for：**只有"时效性近况"**（在准备考试 / 这周军训 / 最近感冒）才填其大概期限，
@@ -628,12 +639,16 @@ class ShadowMemoryStore:
                           and existing["session_count"] >= 2):
                         existing["status"] = "confirmed"
 
-                # 只有"单值槽"才顶替：偏好（每个维度只应有一个值），以及 temporal_scope=current
-                # 的 fact（地点/身份/近况这类"当前只有一个值"的）。**past / timeless 的 fact 累积，
-                # 不倒旧的**——否则"小时候被霸凌"会被后来的"高考车祸"顶掉（实测真丢过 3 条）。
+                # 只有"单值槽"才顶替：偏好（每维度一个值）、temporal_scope=current 的 fact（近况），
+                # 以及 `_SINGLE_VALUED_FACT_KEYS` 里那些**天然单值**的键（名字/地点/时区/职业）。
+                # **其余 past / timeless 的 fact 仍累积，不倒旧的**——否则"小时候被霸凌"会被
+                # 后来的"高考车祸"顶掉（实测真丢过 3 条）。
                 if item["explicit"] and (
                     item["kind"] == "interaction_preference"
-                    or (item["kind"] == "fact" and item["temporal_scope"] == "current")
+                    or (item["kind"] == "fact" and (
+                        item["temporal_scope"] == "current"
+                        or item["key"] in _SINGLE_VALUED_FACT_KEYS
+                    ))
                 ):
                     for other in memories:
                         if (other is not existing and other.get("kind") == item["kind"]

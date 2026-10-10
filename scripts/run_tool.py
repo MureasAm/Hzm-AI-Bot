@@ -604,6 +604,18 @@ def _run_memory_migrate_moments(args):
     memory_v2_tool.run_migrate_moments(args)
 
 
+def _add_memory_dedupe(sub):
+    p = sub.add_parser("memory-dedupe",
+                       help="合并库里同一个单值 key 攒了多份的（如 3 份 preferred_name）")
+    p.add_argument("--dry-run", action="store_true", help="只数条数，不写库")
+    p.set_defaults(func=_run_memory_dedupe)
+
+
+def _run_memory_dedupe(args):
+    import memory_v2_tool
+    memory_v2_tool.run_dedupe_single_valued(args)
+
+
 # ==================== 主入口 ====================
 
 def build_parser() -> argparse.ArgumentParser:
@@ -643,6 +655,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_memory_ab(sub)
     _add_memory_rebuild(sub)
     _add_memory_migrate_moments(sub)
+    _add_memory_dedupe(sub)
     return parser
 
 

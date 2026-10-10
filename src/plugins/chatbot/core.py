@@ -36,7 +36,7 @@ from .routing import (
     LEGENDARY_REPLIES, LEGENDARY_CONFIRMS, legendary_confirmed, legendary_hit, classify_l3,
 )
 from .reply_style import (
-    clean_reply, is_echo_reply, is_emotion_only_query, uses_time_hook,
+    clean_reply, is_echo_reply, is_emotion_only_query, uses_time_hook, starts_with_name,
 )
 from .session_memory import (
     probe_session, build_session_context, get_session, is_emoji_msg, previous_session_note,
@@ -681,6 +681,37 @@ def _weather_city_for(user_id: str, fallback_card: dict) -> str:
     return str((fallback_card or {}).get("weather_city") or "")
 
 
+_USER_NAME_KEYS = {"preferred_name", "name", "nickname"}
+
+
+def _user_name_for(user_id: str, fallback_card: dict) -> str:
+    """用户希望被怎么称呼——用来判"她是不是又在拿名字当开头"。
+
+    优先 v1 卡的 `user_name`（那是干净的裸名字）；退回 V2 的 preferred_name/name/nickname，
+    但 V2 的值常常是一整句（"用户希望被称呼为草草子哥，或者hikami"），所以取第一个逗号前、
+    再把那层"用户希望被称呼为"的外壳剥掉，且要求长度像名字。
+    """
+    card_name = str((fallback_card or {}).get("user_name") or "").strip()
+    if card_name:
+        return card_name
+    try:
+        memories = _MEMORY_V2_STORE.snapshot(user_id).get("memories", [])
+    except Exception:
+        memories = []
+    for memory in memories:
+        if memory.get("kind") != "fact" or memory.get("status") not in {"confirmed", "active"}:
+            continue
+        if str(memory.get("key")) not in _USER_NAME_KEYS:
+            continue
+        value = str(memory.get("value") or "").split("，")[0].split(",")[0].strip()
+        for wrapper in ("用户希望被称呼为", "用户希望被称为", "用户希望被称为：", "希望被称为", "被称呼为"):
+            value = value.replace(wrapper, "")
+        value = value.strip("：: ")
+        if 1 <= len(value) <= 12:
+            return value
+    return ""
+
+
 async def gather_retrieval(query_text: str, retrieval_query: str, history_text: str,
                            deepseek_client, zhipu_client,
                            is_user_msg: bool = True) -> dict:
@@ -943,6 +974,24 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
             candidate = await generate_reply(list(messages) + [nudge])
             reply = candidate
             if not (uses_time_hook(reply) and any(uses_time_hook(prev) for prev in recent_bot[-2:])):
+                break
+
+    # 「名字开头」重复：名字进记忆只是"种子"，真正让它停不下来的是**正反馈**——她的回复进
+    # 【最近对话记录】→ 被当样本学回去。实测某用户前 100 轮 0 次、第 103 轮（用户第一次说出
+    # 那个名字）起一路涨到最近 14 轮 14/14。触发很窄：**这条以名字开头 且 最近两条里也有一条**。
+    user_name = _user_name_for(user_id, user_memory_card)
+    if user_name and starts_with_name(reply, user_name) and \
+            any(starts_with_name(prev, user_name) for prev in recent_bot[-2:]):
+        print(f"[防复读] 又拿名字当开头『{reply[:20]}』，换起手")
+        nudge = {
+            "role": "system",
+            "content": f"你最近几条回复都拿对方的名字（{user_name}）当开头，太频繁了、像客服。"
+                       f"这条**不要用名字开头**，直接从内容说起。",
+        }
+        for _ in range(2):
+            candidate = await generate_reply(list(messages) + [nudge])
+            reply = candidate
+            if not (user_name and starts_with_name(reply, user_name)):
                 break
 
     # --- 💾 更新短期记忆（带锁）：图片消息把视觉描述记进去，后续才记得聊过什么图 ---
