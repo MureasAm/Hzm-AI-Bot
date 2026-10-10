@@ -177,6 +177,17 @@ class TestPromptContent:
         # 「明天几点开会 / 明天几点下课」——句式撞车但内容不同，是这个项目踩过的坑
         assert "明天几点开会" in corpus_judge.CORPUS_JUDGE_PROMPT
 
+    def test_variable_block_comes_last(self):
+        """`{query}` 必须在 `{candidates}` **之后**。
+
+        2026-10-11：DeepSeek 缓存按**前缀**匹配，query 是每轮变的——它夹在中间会把
+        后面整段候选拖成 miss。实测（12 条候选、连发 4 轮）：query 在中 → **每轮 0% 命中**，
+        挪末尾 → ~43%。同 `group_gate` 那条纪律。谁把顺序挪回去，这条会红。
+        """
+        p = corpus_judge.CORPUS_JUDGE_PROMPT
+        assert p.index("{candidates}") < p.index("{query}"), \
+            "{query} 挪到 {candidates} 前面会把缓存命中率打回 0%——见注释"
+
 
 class TestPromptSent:
     @pytest.mark.asyncio
