@@ -138,6 +138,16 @@ class TestPromptContent:
         assert "NULL" in p              # 不适合要能说出来
         assert "灰泽满" in p             # 自称习惯
 
+    def test_prompt_forbids_converting_relative_time(self):
+        """时间是"照原文搬"，不许换算成钟点。
+
+        2026-10-11 真实发出：动态写"10分钟后来玩会儿游戏吧"，她说成"十点后来玩会儿游戏嘛"
+        ——把 19:55 说成了 22:00，粉丝按错的时间等了俩小时。这条规则就是为它加的。
+        """
+        p = proactive.PROACTIVE_PROMPT
+        assert "照原文" in p and "别自己改" in p
+        assert "10分钟" in p             # 真实踩坑例（改提示词时别把这条经验弄丢）
+
 
 class _TwoStepClient:
     """一次 compose 要调**两次** LLM：先判"说不说得清"，再生成。
