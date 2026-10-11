@@ -36,6 +36,7 @@ from .routing import (
 )
 from .reply_style import (
     clean_reply, is_echo_reply, is_emotion_only_query, uses_time_hook, starts_with_name,
+    uses_hollow_opener,
 )
 from .session_memory import (
     probe_session, build_session_context, get_session, is_emoji_msg, previous_session_note,
@@ -1025,6 +1026,23 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
             candidate = await generate_reply(list(messages) + [nudge])
             reply = candidate
             if not (user_name and starts_with_name(reply, user_name)):
+                break
+
+    # 「看看」空壳起手：与名字/时间同源——**自强化**出来的固定开头。
+    # 实测（2026-10-12 某用户 537 条里 108 条）退化轨迹："看看时间"（正常）→"看看这个"→"看看你"
+    # →"看看，"（没宾语了），一旦开始就成串（最长连 29 条）。触发很窄：**这条以"看看"起手
+    # 且最近两条里也有一条**——在这个用户身上能拦下 92%。
+    if uses_hollow_opener(reply) and any(uses_hollow_opener(prev) for prev in recent_bot[-2:]):
+        print(f"[防复读] 又拿'看看'当起手『{reply[:20]}』，换个开头")
+        nudge = {
+            "role": "system",
+            "content": "你最近几条回复都拿'看看…'当开头（'灰泽满看看时间''灰泽满看看你'那类），"
+                       "对方已经看腻了。这条**不要用'看看'起头**，直接从内容说起。",
+        }
+        for _ in range(2):
+            candidate = await generate_reply(list(messages) + [nudge])
+            reply = candidate
+            if not (uses_hollow_opener(reply) and any(uses_hollow_opener(prev) for prev in recent_bot[-2:])):
                 break
 
     # --- 💾 更新短期记忆（带锁）：图片消息把视觉描述记进去，后续才记得聊过什么图 ---

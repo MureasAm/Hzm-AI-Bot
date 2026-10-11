@@ -83,6 +83,19 @@ def uses_time_hook(reply: str) -> bool:
     return bool(_TIME_HOOK_RE.search(reply or ""))
 
 
+# 「空壳起手」：`灰泽满看看` 这种**只剩壳、没有宾语**的固定开头。
+# 实测它的退化轨迹（某用户 2026-10-07）："看看时间"（正常动词）→"看看这个mua"→"看看这张"
+# →"看看你"→"看看，企鹅笔盒？"（连宾语都没了）——然后**自强化**：她的回复进【最近对话记录】
+# → 被当样本学回去 → 下一轮又说。537 条里 108 条（20%）这么开头，最长连 29 条。
+# ⚠️ 别改成通用的"起手两字重复"：全库实测那样会打中 18.3%（"今天…""嗯，…"全是正常开头）。
+_HOLLOW_OPENER_RE = re.compile(r"^(?:灰泽满|hzm|小满|满姐|我)?[，,、：:\s]*看看")
+
+
+def uses_hollow_opener(reply: str) -> bool:
+    """这条回复是不是又拿"看看"当空壳起手（用于拦自强化出来的固定开头）。"""
+    return bool(_HOLLOW_OPENER_RE.match(_LEADING_PAREN_RE.sub("", (reply or "").lstrip())))
+
+
 def starts_with_name(reply: str, name: str) -> bool:
     """这条回复是不是**拿用户的名字当开头**。
 

@@ -139,6 +139,28 @@ class TestTimeHook:
         assert reply_style.uses_time_hook("明天直播记得来") is False
 
 
+class TestHollowOpener:
+    """「看看」空壳起手判据：只认"回复拿看看起头"，别的口癖一概不碰。"""
+
+    def test_detects_the_real_shapes(self):
+        # 全是该用户真实出现过的形态（从有宾语退化到没宾语）
+        assert reply_style.uses_hollow_opener("灰泽满看看时间，这都快下午两点了吧")
+        assert reply_style.uses_hollow_opener("灰泽满看看这个mua，又来了")
+        assert reply_style.uses_hollow_opener("灰泽满看看，企鹅笔盒？")
+        assert reply_style.uses_hollow_opener("（心虚）灰泽满看看你，追着问两轮了")
+        assert reply_style.uses_hollow_opener("看看你这话说的")
+
+    def test_not_at_start_is_fine(self):
+        assert reply_style.uses_hollow_opener("你这话灰泽满看看再说") is False
+        assert reply_style.uses_hollow_opener("行行行") is False
+        assert reply_style.uses_hollow_opener("") is False
+
+    def test_does_not_fire_on_normal_openers(self):
+        # 通用"起手重复"实测会打中 18% 的正常回复；这条窄判据不能碰它们
+        for s in ("今天过得怎么样呀", "嗯，知道了", "灰泽满哪能睡啊", "哦，就这个啊"):
+            assert reply_style.uses_hollow_opener(s) is False, s
+
+
 class TestWeatherCity:
     """天气城市从 V2 的 location 事实取（v1 卡的 weather_city 回落已于 2026-10-12 撤掉）。"""
 
