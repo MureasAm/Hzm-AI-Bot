@@ -325,7 +325,6 @@ npm run render:voice
 
 ```
 bot.py                       # 启动入口
-memory_manager.py            # 长期记忆（记忆卡）实现（被 src/.../memory.py 按路径加载）
 CLAUDE.md                    # 常驻速查：黄金律 / 怎么跑测 / 危险清单 / 文档在哪 ★ 接手先读
 docs/                        # 全部说明文档
 ├── 地图.md                  #   ★ 每个文件干什么 + 该改哪（结构，先看这份）

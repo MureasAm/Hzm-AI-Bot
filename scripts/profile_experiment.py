@@ -32,10 +32,8 @@ if str(_common.PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_common.PROJECT_ROOT))
 
 try:
-    import memory_ab as _ab
     import memory_v2_tool as _v2tool
 except ModuleNotFoundError:
-    from . import memory_ab as _ab
     from . import memory_v2_tool as _v2tool
 
 DEFAULT_V1_DIR = _common.PROJECT_ROOT / "user_memory" / "long_term"
@@ -148,10 +146,10 @@ async def run(*, v1_dir: Path, turns: int, per_user: int, out_dir: Path) -> dict
     out_dir = _v2tool._safe_replay_dir(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    paths = _ab.order_paths_by_activity(_v2tool._resolve_inputs(None))
+    paths = _v2tool.order_paths_by_activity(_v2tool._resolve_inputs(None))
     want = set(impressions)
     records = []
-    for rec in _ab.iter_turns_by_user(paths, limit=5000, per_user=per_user):
+    for rec in _v2tool.iter_turns_by_user(paths, limit=5000, per_user=per_user):
         if str(rec["session"]) in want:
             records.append(rec)
         if len(records) >= turns:

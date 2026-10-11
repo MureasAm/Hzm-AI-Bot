@@ -37,11 +37,9 @@ def _isolate_local_stores(tmp_path, monkeypatch):
     monkeypatch.setattr(memory, "MEMORY_FILE", tmp_path / "short_term.json")
     monkeypatch.setattr(memory, "_migrated", False)
     monkeypatch.setattr(chatlog, "LOG_DIR", tmp_path / "chat_log")
-    # 会话记忆 / 长期记忆也按会话分文件了（2026-10-09）——同一个坑：
-    # 只改文件路径的话，写会落到真实 user_memory/ 里去。
+    # 会话记忆也按会话分文件（2026-10-09）——同一个坑：只改文件路径的话，
+    # 写会落到真实 user_memory/ 里去。
     monkeypatch.setattr(session_memory, "SESSION_DIR", tmp_path / "session")
     monkeypatch.setattr(session_memory, "SESSION_MEMORY_FILE", tmp_path / "session.json")
     monkeypatch.setattr(session_memory, "_migrated", False)
-    monkeypatch.setattr(memory._mm, "MEMORY_DIR", tmp_path / "long_term")
-    monkeypatch.setattr(memory._mm, "MEMORY_FILE", tmp_path / "long_term.json")
-    monkeypatch.setattr(memory._mm, "_migrated", False)
+    # （v1 长期记忆 v1 已于 2026-10-12 整个删除，不再需要隔离它的目录/文件）

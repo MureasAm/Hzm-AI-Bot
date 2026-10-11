@@ -19,7 +19,7 @@ NoneBot2 + OneBot v11(NapCat) 的"灰泽满"人格聊天机器人。核心是**�
 
 ## 怎么跑 / 怎么测
 - 启动：NapCat 自己开 → `env\python.exe api_v2.py`(GPT-SoVITS,端口9880) → `python bot.py`（或双击 `启动.bat`）。**改代码/数据后要重启 bot**（有进程内缓存）。
-- 测试：`.venv\Scripts\python.exe -m pytest -q`（**890 个**，全绿才算完；数字变了说明你增删了用例，顺手改这里）。
+- 测试：`.venv\Scripts\python.exe -m pytest -q`（**868 个**，全绿才算完；数字变了说明你增删了用例，顺手改这里）。
 - 改**检索/判据/素材**后必跑这两个（unit test 测不出"检索该不该命中"）：
   `run_tool.py retrieval-eval`（query→各路期望，**改语料会把候选排名洗牌，改完必须重跑**）、
   `run_tool.py regression --check`（真实翻车固化成的确定性判据）。
@@ -44,8 +44,8 @@ NoneBot2 + OneBot v11(NapCat) 的"灰泽满"人格聊天机器人。核心是**�
 - 运行时核心：`src/plugins/chatbot/`（core 主循环 / chat_window 读秒窗口 / retrieval 两路 RRF+两路直达 / reply_style 纯函数 / routing 梗库+行为分类 / persona 加载 / **memory_v2 长期记忆（2026-10-10 转正）** + memory|session_memory|group_memory / voice 语音 / bili_bridge|weibo_bridge 联动 / context_probe 感知 / vision 看图 / rag 向量 / config 客户端 / constants 常量★）
 - 人格数据：`persona/`（core=骨架 / behavior=16 条情景 / world=事实层。`speech/` 与 `core/traits|styles` 已于 2026-10-04 删除）
 - 长期记忆：`memory_v2.py`（**类型化条目，2026-10-10 起正位**：真实聊天重建 + 运行时写入/注入；
-  临时关掉设 `MEMORY_V2_SHADOW=0` / `MEMORY_V2_INJECT=0`）。v1 的根 `memory_manager.py` **已停用但保留**
-  （卡文件还在，只用来读天气城市；要回退见 `core.handle_chat` 里的注释）。
+  临时关掉设 `MEMORY_V2_SHADOW=0` / `MEMORY_V2_INJECT=0`）。**v1 已于 2026-10-12 整个删除**
+  ——根 `memory_manager.py` 和 `user_memory/long_term*` 都没了，名字/城市/事实全从 V2 取。
 - 离线工具：`scripts/run_tool.py <工具>`；**53 个脚本各干什么见 `docs/操作手册.md`**
 
 ## 文档指针（按需懒读，别开头全灌）

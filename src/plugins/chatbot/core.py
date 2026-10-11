@@ -19,7 +19,6 @@ from .persona import (
 )
 from .memory import (
     get_user_history, get_user_history_timed, append_user_history,
-    get_user_memory,   # 只用来读 v1 卡的 weather_city（V2 取不到时的最后兜底）
     get_last_turn_gap_seconds, humanize_gap,
 )
 from .rag import embed_query
@@ -661,15 +660,16 @@ async def update_memory_v2_shadow_task(
         return []
 
 
-# 用户所在地（天气感知用）：v1 停写后 `weather_city` 不再更新，所以改从 **V2 的 location 事实**取，
-# 取不到再退回 v1 卡（只读）。V2 存的是"在曼谷""在泰国留学"这种，取值前要洗成纯地名。
+# 用户所在地（天气感知用）：从 **V2 的 location 事实**取。V2 存的是"在曼谷""在泰国留学"
+# 这种，取值前要洗成纯地名。（v1 卡的 weather_city 回落已于 2026-10-12 随 v1 清理撤掉——
+# v1 只有 4 个用户带 weather_city，而 V2 有 10 个，回落价值趋近于零。）
 _WEATHER_CITY_KEYS = {"location", "city"}
 _WEATHER_CITY_PREFIX = re.compile(r"^(?:在|住在|现居|目前住在|老家在)")
 _WEATHER_CITY_TAIL = re.compile(r"[，,。;；].*$|(?:留学|定居|工作|生活|读书|上学|上班).*$")
 
 
-def _weather_city_for(user_id: str, fallback_card: dict) -> str:
-    """用户所在城市：V2 的 location/city 事实优先，取不到退回 v1 卡里的 weather_city。
+def _weather_city_for(user_id: str) -> str:
+    """用户所在城市：V2 的 location/city 事实；取不到返回空串（天气用默认城市）。
 
     洗出来的不像地名（太长）就别用——天气查不到只是少一行天气，不致命；
     但把一个长句当地名填进去，等于把这个功能废掉。
@@ -687,7 +687,7 @@ def _weather_city_for(user_id: str, fallback_card: dict) -> str:
         value = _WEATHER_CITY_TAIL.sub("", value).strip()
         if 2 <= len(value) <= 8:
             return value
-    return str((fallback_card or {}).get("weather_city") or "")
+    return ""
 
 
 _USER_NAME_KEYS = {"preferred_name", "name", "nickname"}
@@ -723,16 +723,14 @@ def _bare_name_from(value: str) -> str:
     return v.strip("：: 　\"'“”‘’（）()")
 
 
-def _user_name_for(user_id: str, fallback_card: dict) -> str:
+def _user_name_for(user_id: str) -> str:
     """用户希望被怎么称呼——用来判"她是不是又在拿名字当开头"。
 
-    优先 v1 卡的 `user_name`（那是干净的裸名字）；退回 V2 的 preferred_name/name/nickname，
-    但 V2 的值常常是一整句（"用户希望被称呼为草草子哥，或者hikami"），所以取第一个逗号前、
-    再剥掉外壳、且要求长度像名字（剥不干净的整句宁可返回空——返回错的还会**骗过**守卫）。
+    只从 V2 的 preferred_name/name/nickname 取。V2 的值常常是一整句
+    （"用户希望被称呼为草草子哥，或者hikami"），所以取第一个逗号前、再剥掉外壳、
+    且要求长度像名字（剥不干净的整句宁可返回空——返回错的还会**骗过**守卫）。
+    （v1 卡 `user_name` 的首选层已于 2026-10-12 随 v1 清理撤掉。）
     """
-    card_name = str((fallback_card or {}).get("user_name") or "").strip()
-    if card_name:
-        return card_name
     try:
         memories = _MEMORY_V2_STORE.snapshot(user_id).get("memories", [])
     except Exception:
@@ -920,10 +918,9 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     preference_items = ctx["preference_items"]
     core_stories = ctx["core_stories"]
 
-    # --- 🧠 长期记忆：2026-10-10 起 **V2 正位**，v1 的卡不再注入 ---
-    # v1 的提取/注入路径（update_memory_task 等）已删除；卡文件仍留在 user_memory/long_term/，
-    # 现在只读它拿 weather_city（V2 取不到时的最后兜底）。要回退 v1：`git revert` 那次提交。
-    user_memory_card = {} if is_group else get_user_memory(user_id)
+    # --- 🧠 长期记忆：**只有 V2**（2026-10-12 起 v1 整个删除）---
+    # v1 的卡（user_memory/long_term/*.json）连同 memory_manager.py 一起清掉了；
+    # 名字/城市/长期事实全从 V2 取（见 _user_name_for / _weather_city_for）。
     memory_context = ""
     # 群聊现场事实：在场成员 + 群内近况（轻量群记忆，只在本群注入）
     group_context = ""
@@ -942,7 +939,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
             events.append(f"{txt}（{gap}前）" if gap else txt)
         evtxt = "；".join(events) or "（刚进群，还没太熟）"
         group_context = f"在场成员：{names}。群内近况：{evtxt}"
-    weather_city = _weather_city_for(user_id, user_memory_card)
+    weather_city = _weather_city_for(user_id)
 
     # --- 🧠 Memory V2 注入（可选；与影子提取分开的开关，默认关，见 docs/记忆v2设计.md §上线路径）---
     # 两段分开放：相处方式靠前 / 未完成约定中段。
@@ -1015,7 +1012,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     # 「名字开头」重复：名字进记忆只是"种子"，真正让它停不下来的是**正反馈**——她的回复进
     # 【最近对话记录】→ 被当样本学回去。实测某用户前 100 轮 0 次、第 103 轮（用户第一次说出
     # 那个名字）起一路涨到最近 14 轮 14/14。触发很窄：**这条以名字开头 且 最近两条里也有一条**。
-    user_name = _user_name_for(user_id, user_memory_card)
+    user_name = _user_name_for(user_id)
     if user_name and starts_with_name(reply, user_name) and \
             any(starts_with_name(prev, user_name) for prev in recent_bot[-2:]):
         print(f"[防复读] 又拿名字当开头『{reply[:20]}』，换起手")

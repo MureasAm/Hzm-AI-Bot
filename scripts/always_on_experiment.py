@@ -30,10 +30,8 @@ if str(_common.PROJECT_ROOT) not in sys.path:
 
 try:
     import memory_v2_tool as _v2tool
-    import memory_ab as _ab
 except ModuleNotFoundError:
     from . import memory_v2_tool as _v2tool
-    from . import memory_ab as _ab
 
 DEFAULT_STATE = _common.PROJECT_ROOT / "outputs" / "memory_ab" / "ab_v2_shadow.json"
 DEFAULT_OUT_DIR = _common.OUTPUTS_DIR / "always_on_ab"
@@ -186,10 +184,10 @@ async def run(*, source: str, state_path: Path, turns: int, per_user: int, out_d
 
     # 取这些用户真实说过的话（只取有记忆的人），每人最多 per_user 条。
     # 迭代本身不花钱（花钱的只有后面的生成），所以给一个大上限，扫到够为止。
-    paths = _ab.order_paths_by_activity(_v2tool._resolve_inputs(None))
+    paths = _v2tool.order_paths_by_activity(_v2tool._resolve_inputs(None))
     want = set(memories_by_user)
     records: list[dict] = []
-    for record in _ab.iter_turns_by_user(paths, limit=5000, per_user=per_user):
+    for record in _v2tool.iter_turns_by_user(paths, limit=5000, per_user=per_user):
         if str(record["session"]) in want:
             records.append(record)
         if len(records) >= turns:

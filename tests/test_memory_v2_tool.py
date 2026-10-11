@@ -171,3 +171,55 @@ def test_migrate_v1_moments_dry_run_writes_nothing(tmp_path):
 
     assert report["moments"] == 1 and report["dry_run"] is True
     assert store.snapshot("10001")["memories"] == []
+
+
+# —— 以下 3 个测的是**通用读 chat_log** 的两个函数（2026-10-12 从已删的 memory_ab.py 搬来）——
+
+def test_iter_turns_by_user_caps_per_user_and_skips_group(tmp_path):
+    path = tmp_path / "10001.jsonl"
+    rows = []
+    for i in range(5):
+        rows.append({"kind": "private", "session": "10001", "user": f"消息{i}", "reply": "回", "t": i})
+        rows.append({"kind": "group", "session": "20002", "user": "群消息", "reply": "回", "t": i})
+    path.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows), encoding="utf-8")
+
+    turns = list(tool.iter_turns_by_user([path], limit=100, per_user=3))
+
+    assert [t["user"] for t in turns] == ["消息0", "消息1", "消息2"]  # 每人上限 3，群聊跳过
+
+
+def test_order_paths_by_activity_prefers_chatty_sessions(tmp_path):
+    quiet = tmp_path / "111.jsonl"
+    chatty = tmp_path / "222.jsonl"
+    other = tmp_path / "u4.jsonl"  # 非 QQ 号会话排到最后
+    quiet.write_text(
+        json.dumps({"kind": "private", "session": "111", "user": "你好呀", "reply": "回"}, ensure_ascii=False),
+        encoding="utf-8")
+    chatty.write_text(
+        "\n".join(json.dumps({"kind": "private", "session": "222", "user": f"消息{i}", "reply": "回"},
+                             ensure_ascii=False) for i in range(5)),
+        encoding="utf-8")
+    other.write_text(
+        "\n".join(json.dumps({"kind": "private", "session": "u4", "user": f"x{i}", "reply": "回"},
+                             ensure_ascii=False) for i in range(20)),
+        encoding="utf-8")
+
+    ordered = tool.order_paths_by_activity([quiet, other, chatty])
+
+    assert [p.name for p in ordered] == ["222.jsonl", "111.jsonl", "u4.jsonl"]
+
+
+def test_iter_turns_skips_synthetic_qa_sessions(tmp_path):
+    path = tmp_path / "10001.jsonl"
+    path.write_text("\n".join([
+        json.dumps({"kind": "private", "session": "10001", "user": "问题1:你爱不爱绿冻？", "reply": "回"},
+                   ensure_ascii=False),
+        json.dumps({"kind": "private", "session": "10001", "user": "回答:早就说过了", "reply": "回"},
+                   ensure_ascii=False),
+        json.dumps({"kind": "private", "session": "10001", "user": "今天好累啊", "reply": "回"},
+                   ensure_ascii=False),
+    ]), encoding="utf-8")
+
+    turns = list(tool.iter_turns_by_user([path], limit=10, per_user=10))
+
+    assert [t["user"] for t in turns] == ["今天好累啊"]

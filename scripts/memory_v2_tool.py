@@ -11,6 +11,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import re
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -134,6 +135,71 @@ def iter_private_turns(paths: Iterable[Path], *, limit: int) -> Iterator[dict]:
                     continue
                 yielded += 1
                 yield record
+
+
+# 只保留真实真人会话：session 必须是 QQ 号（纯数字），且不是 QA/联调脚本造的假会话。
+_SYNTHETIC_RE = re.compile(r"^\s*(?:问题|人物)\s*\d|^\s*回答\s*[:：]|[\r\n]\s*(?:问题|人物)\s*\d")
+
+
+def looks_synthetic(text: str) -> bool:
+    return bool(_SYNTHETIC_RE.search(text or ""))
+
+
+def iter_turns_by_user(paths, *, limit: int, per_user: int) -> Iterator[dict]:
+    """按会话轮转取历史私聊：每人最多 ``per_user`` 条，铺开到多人（默认回放只吃前几个文件）。
+
+    一个会话一个文件（2026-10-09 起），按 mtime 顺序轮转，保证 A/B 覆盖多个人而不是一个人。
+    （2026-10-12 从已删的 `memory_ab.py` 搬来——它是通用读 chat_log 的活儿，跟 v1 无关。）
+    """
+    yielded = 0
+    for path in paths:
+        if yielded >= limit:
+            return
+        if not Path(path).stem.isdigit():  # 跳过 `u4` 这类联调/测试会话
+            continue
+        try:
+            handle = Path(path).open("r", encoding="utf-8")
+        except OSError:
+            continue
+        taken = 0
+        with handle:
+            for line in handle:
+                if yielded >= limit or taken >= per_user:
+                    break
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(record, dict) or record.get("kind") != "private":
+                    continue
+                session = str(record.get("session") or "").strip()
+                user_text = str(record.get("user") or "").strip()
+                reply = str(record.get("reply") or "").strip()
+                if not session or not user_text or not reply:
+                    continue
+                if looks_synthetic(user_text):
+                    continue
+                yielded += 1
+                taken += 1
+                yield record
+
+
+def order_paths_by_activity(paths) -> list[Path]:
+    """按私聊条数降序排会话文件——记忆层对"常来的用户"才有意义。
+
+    默认（mtime / 文件名）顺序会把统计摊在一堆只聊过几句的人身上，两路都抽不出东西。
+    （2026-10-12 从已删的 `memory_ab.py` 搬来。）
+    """
+    def private_lines(path: Path) -> int:
+        if not Path(path).stem.isdigit():
+            return -1  # 非 QQ 号会话（联调/测试）排到最后
+        try:
+            with Path(path).open("r", encoding="utf-8") as handle:
+                return sum(1 for line in handle if '"private"' in line)
+        except OSError:
+            return 0
+
+    return sorted(paths, key=private_lines, reverse=True)
 
 
 def _resolve_inputs(raw_paths: list[str] | None) -> list[Path]:

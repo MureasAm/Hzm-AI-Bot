@@ -10,10 +10,10 @@
 NoneBot 单进程运行，同一时刻可能有多条消息触发写入，
 用 threading.Lock 保证「读-改-写」原子化，防止并发互相覆盖。
 
-长期记忆实现放在项目根 memory_manager.py（被 watchdog/评测脚本独立使用，
-不适合塞进插件包触发 NoneBot 初始化），这里按文件路径直接加载它——不再改 sys.path。
+**长期记忆已于 2026-10-12 换血**：v1 的 `memory_manager.py`（自由文本卡）整个删除，
+长期记忆全部由 `memory_v2` 承担。这里只保留短期记忆 + `humanize_gap`（时长措辞，
+从 v1 搬来——它被 core/session_memory 共用）。
 """
-import importlib.util
 import json
 import os
 import re
@@ -23,17 +23,28 @@ from pathlib import Path
 
 from .constants import PROJECT_ROOT, MEMORY_FILE, MEMORY_DIR, SHORT_MEMORY_LINES
 
-_mm_spec = importlib.util.spec_from_file_location("memory_manager", PROJECT_ROOT / "memory_manager.py")
-_mm = importlib.util.module_from_spec(_mm_spec)
-_mm_spec.loader.exec_module(_mm)
-# 长期记忆：记忆卡/关系等级/LLM提取（从根模块 re-export，语义与原一致）
-get_user_memory = _mm.get_user_memory
-update_user_memory = _mm.update_user_memory
-build_memory_context = _mm.build_memory_context
-_format_profile_summary = _mm._format_profile_summary
-MEMORY_EXTRACT_PROMPT = _mm.MEMORY_EXTRACT_PROMPT
-# 时长措辞（"3天"/"2小时"）：长期/短期两处注入共用一份，别各写一套
-humanize_gap = _mm.humanize_gap
+
+def humanize_gap(seconds: float) -> str:
+    """把"过了多少秒"说成人话（"3天"/"2小时"）。<90 秒返回空串——同一场对话里不必提。
+
+    只做粗粒度近似：她要的是"知道过了多久"这个概念，不是精确时长。
+    （2026-10-12 从 v1 的 `memory_manager.py` 搬来，随 v1 清理。）
+    """
+    try:
+        seconds = float(seconds)
+    except (TypeError, ValueError):
+        return ""
+    if seconds < 90:
+        return ""
+    if seconds < 3600:
+        return f"{int(seconds // 60)}分钟"
+    if seconds < 86400:
+        return f"{int(seconds // 3600)}小时"
+    days = int(seconds // 86400)
+    if days < 30:
+        return f"{days}天"
+    months = days // 30
+    return f"{months}个月"
 
 # 短期记忆文件锁（进程内）
 _memory_lock = threading.Lock()
@@ -162,8 +173,6 @@ def get_user_history_timed(user_id: str) -> list:
 
     没有时间戳的老数据（裸字符串）不给前缀，不猜。
     """
-    from memory_manager import humanize_gap
-
     raw = _load_raw_history(user_id)
     if not raw:
         return []
@@ -316,10 +325,6 @@ __all__ = [
     "append_user_history",
     "append_bot_message",
     "humanize_gap",
-    "get_user_memory",
-    "update_user_memory",
-    "build_memory_context",
-    "_format_profile_summary",
-    "MEMORY_EXTRACT_PROMPT",
+    "use_storage",
     "PROJECT_ROOT",
 ]

@@ -140,7 +140,7 @@ class TestTimeHook:
 
 
 class TestWeatherCity:
-    """天气城市改从 V2 的 location 事实取（v1 停写后它的 weather_city 不再更新）。"""
+    """天气城市从 V2 的 location 事实取（v1 卡的 weather_city 回落已于 2026-10-12 撤掉）。"""
 
     def _patch(self, monkeypatch, memories):
         fake = type("S", (), {"snapshot": lambda self, uid: {"memories": memories}})()
@@ -149,28 +149,29 @@ class TestWeatherCity:
     def test_prefers_v2_location(self, monkeypatch):
         self._patch(monkeypatch, [
             {"kind": "fact", "key": "location", "value": "在曼谷", "status": "confirmed"}])
-        assert core._weather_city_for("u", {"weather_city": "广州"}) == "曼谷"
+        assert core._weather_city_for("u") == "曼谷"
 
-    def test_falls_back_to_v1_card(self, monkeypatch):
+    def test_no_location_returns_empty(self, monkeypatch):
+        # 取不到城市 → 空串（天气用默认城市），不再回落 v1 卡
         self._patch(monkeypatch, [])
-        assert core._weather_city_for("u", {"weather_city": "广州"}) == "广州"
+        assert core._weather_city_for("u") == ""
 
     def test_cleans_dirty_value(self, monkeypatch):
         self._patch(monkeypatch, [
             {"kind": "fact", "key": "location", "value": "在泰国留学，但觉得选错了地方",
              "status": "confirmed"}])
-        assert core._weather_city_for("u", {}) == "泰国"
+        assert core._weather_city_for("u") == "泰国"
 
-    def test_too_long_value_falls_back(self, monkeypatch):
+    def test_too_long_value_ignored(self, monkeypatch):
         self._patch(monkeypatch, [
             {"kind": "fact", "key": "location", "value": "一个非常非常长的地名描述啊",
              "status": "confirmed"}])
-        assert core._weather_city_for("u", {"weather_city": "广州"}) == "广州"
+        assert core._weather_city_for("u") == ""
 
     def test_superseded_location_ignored(self, monkeypatch):
         self._patch(monkeypatch, [
             {"kind": "fact", "key": "location", "value": "在曼谷", "status": "superseded"}])
-        assert core._weather_city_for("u", {"weather_city": "广州"}) == "广州"
+        assert core._weather_city_for("u") == ""
 
 
 class TestNameOpener:
@@ -683,7 +684,6 @@ class TestLegendaryMemory:
             pass
 
         monkeypatch.setattr(core, "append_user_history", fake_append)
-        monkeypatch.setattr(core, "get_user_memory", lambda uid: {})
 
         trigger = next(iter(core.LEGENDARY_REPLIES))  # 取一个真实梗
         await core.handle_chat("u", trigger)

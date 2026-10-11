@@ -74,8 +74,6 @@ def _init():
 
     # 把记忆文件指向临时目录，避免污染线上数据
     tmp = tempfile.mkdtemp(prefix="hzm_test_")
-    import memory_manager as mm
-    mm.use_storage(Path(tmp))
     import src.plugins.chatbot.memory as mem
     mem.use_storage(Path(tmp))
     # v2 的影子库同样指到临时目录（否则注入会读到真实库里的真人记忆）
