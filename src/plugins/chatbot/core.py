@@ -692,13 +692,43 @@ def _weather_city_for(user_id: str, fallback_card: dict) -> str:
 
 _USER_NAME_KEYS = {"preferred_name", "name", "nickname"}
 
+# 名字记忆的"外壳词"：V2 的值常常被写成整句（"用户希望被称呼为草草子哥""希望被叫小温"），
+# 得把这层剥掉才拿得到名字本身。⚠️ **名单要够全**——漏一个词，这里就返回整句，
+# 下面那个"别老拿名字开头"的守卫会因为比对不上而**静默失效**。
+# 踩坑（2026-10-12 实测）：名单里只有"称呼为/被称为/希望被称为"，没有"希望被叫"，
+# 于是小温那条返回 '希望被叫小温' → 守卫一次都没拦，她 **5/5 回复都用"小温，"开头**
+# （修好提取后 5/5 → 1/5，守卫每次都能拦下）。
+_NAME_WRAPPERS = (
+    "用户", "对方", "他", "她", "希望", "要求", "接受", "想要", "想让", "让",
+    "被", "称呼为", "称呼", "称为", "称作", "自称", "名叫", "名字是", "名字叫",
+    "叫", "称", "是",
+)
+
+
+def _bare_name_from(value: str) -> str:
+    """从记忆值里取出裸名字：「希望被叫小温」→「小温」。
+
+    值常被写成整句（提取模型不听话），所以两步：① **只取第一个逗号前那截**——
+    后面多半是"不叫hikami"这类补充说明；② 反复剥掉外壳词。剥不干净就返回原样
+    （调用方有长度检查兜底）。
+    """
+    v = value.split("，")[0].split(",")[0].strip()
+    changed = True
+    while changed:
+        changed = False
+        for w in _NAME_WRAPPERS:
+            if v.startswith(w) and len(v) > len(w):
+                v = v[len(w):].strip("：: 　")
+                changed = True
+    return v.strip("：: 　\"'“”‘’（）()")
+
 
 def _user_name_for(user_id: str, fallback_card: dict) -> str:
     """用户希望被怎么称呼——用来判"她是不是又在拿名字当开头"。
 
     优先 v1 卡的 `user_name`（那是干净的裸名字）；退回 V2 的 preferred_name/name/nickname，
     但 V2 的值常常是一整句（"用户希望被称呼为草草子哥，或者hikami"），所以取第一个逗号前、
-    再把那层"用户希望被称呼为"的外壳剥掉，且要求长度像名字。
+    再剥掉外壳、且要求长度像名字（剥不干净的整句宁可返回空——返回错的还会**骗过**守卫）。
     """
     card_name = str((fallback_card or {}).get("user_name") or "").strip()
     if card_name:
@@ -712,10 +742,7 @@ def _user_name_for(user_id: str, fallback_card: dict) -> str:
             continue
         if str(memory.get("key")) not in _USER_NAME_KEYS:
             continue
-        value = str(memory.get("value") or "").split("，")[0].split(",")[0].strip()
-        for wrapper in ("用户希望被称呼为", "用户希望被称为", "用户希望被称为：", "希望被称为", "被称呼为"):
-            value = value.replace(wrapper, "")
-        value = value.strip("：: ")
+        value = _bare_name_from(str(memory.get("value") or ""))
         if 1 <= len(value) <= 12:
             return value
     return ""

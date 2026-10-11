@@ -187,6 +187,27 @@ class TestNameOpener:
     def test_empty_name_never_fires(self):
         assert reply_style.starts_with_name("草草子哥，你说啥", "") is False
 
+    def test_strip_wrappers_gets_bare_name(self):
+        """把 V2 里那些整句值剥成裸名字——**剥不干净守卫就会静默失效**。
+
+        2026-10-12 实测：名单里漏了"希望被叫"，小温那条返回整句 → 守卫一次没拦，
+        她 5/5 回复都用"小温，"开头；修好提取后 5/5 → 1/5。
+        下面这些值都是**线上真实存过的**（`memory_v2_shadow.json`）。
+        """
+        cases = {
+            "希望被叫小温": "小温",
+            "用户自称四时小路": "四时小路",
+            "用户自称阿梓": "阿梓",
+            "用户要求被称为“爸爸”": "爸爸",
+            "用户希望被称呼为草草子，不叫hikami": "草草子",
+            "许流於": "许流於",          # 裸名字：原样返回
+            "LG": "LG",
+            "绿冻": "绿冻",
+        }
+        for raw, want in cases.items():
+            got = core._bare_name_from(raw)
+            assert got == want, f"{raw!r} → {got!r}（该是 {want!r}）"
+
 
 class TestSummarizeBatch:
     async def test_single_message_skips(self, monkeypatch):
