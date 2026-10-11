@@ -127,6 +127,42 @@ class TestTtsText:
     def test_whitespace_removed(self):
         assert v._tts_text(" 好了  就这样 ") == "好了就这样"
 
+    def test_dash_becomes_pause(self):
+        """破折号 → 逗号。
+
+        2026-10-12 用户报：TTS 把破折号**整个丢掉**（不停顿），前后字粘在一起
+        （"你别——算了"念成"你别算了"）。换成逗号给个自然停顿。
+        """
+        assert v._tts_text("你别——算了") == "你别，算了"
+        assert v._tts_text("真的—走了") == "真的，走了"
+
+    def test_digit_range_keeps_meaning(self):
+        # "3-5个人"去掉横杠变成"35个人"= 改意思了 → 转成"到"
+        assert v._tts_text("3-5个人就够了") == "3到5个人就够了"
+
+    def test_quote_brackets_keep_content(self):
+        """书名号/引号**只脱壳留内容**（他看了《小王子》→ 他看了小王子）。"""
+        assert v._tts_text("他看了《小王子》就睡着了") == "他看了小王子就睡着了"
+        assert v._tts_text("他喊「喂」一声") == "他喊喂一声"
+        assert v._tts_text('他说"你好啊"') == "他说你好啊"
+
+    def test_speech_breaking_symbols_dropped(self):
+        """会**吐空音频**的符号一律丢（实测 `《》「」【】”‘` 与 ASCII `( * # | ^ % $ @ < > · ; ±`
+        会让 GPT-SoVITS 偶发只剩零点几秒静音；whisper 转写"未检测到语音内容"）。
+
+        同一次实测里它们**不稳定**（换个采样又正常），所以不逐个甄别、直接只留该念的。
+        """
+        assert v._tts_text("a*b#c|d^e%f$g@h<i>j·k;l±m") == "abcdefghijklm"
+        assert v._tts_text("今天好累啊😅明天再说吧") == "今天好累啊明天再说吧"
+        assert v._tts_text("【重要】记得来") == "记得来"      # 括号连内容剥（内心戏那类）
+
+    def test_safe_punctuation_kept(self):
+        # 标准句读 + 波浪号都留（实测它们稳定不出问题）
+        assert v._tts_text("苹果、香蕉、橘子都吃完了") == "苹果、香蕉、橘子都吃完了"
+        assert v._tts_text("今天超开心的~明天见啦") == "今天超开心的~明天见啦"
+        assert v._tts_text("嗯……好吧") == "嗯……好吧"
+
+
 
 class TestRefResolution:
     """参考音频：情绪档选择 + 缺档回落默认/任一 .wav + 同名 .txt 转写读取。"""

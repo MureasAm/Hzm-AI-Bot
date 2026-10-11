@@ -617,6 +617,23 @@ class TestShadowExtraction:
         assert "用户自己的计划不是灰泽满的承诺" in prompt
         assert '"actor": "assistant"' in prompt
 
+    def test_prompt_rejects_copypasta(self, store, clock):
+        """网上抄来的定型文/段子/角色扮演 → 一条都不该记。
+
+        2026-10-12 实测：某用户发"丫头，我重新介绍一下自己。我今年四十，河南周口人，
+        现跑豫粤线大货…"——被当真存成 occupation/location/age/income/savings 五条，
+        之后她张口就是"明天还得握方向盘的人"。加了这条反例后同样输入抽 0 条。
+        """
+        prompt = build_extraction_prompt(
+            user_text="丫头，我重新介绍一下自己",
+            assistant_text="……",
+            current_summary="（无）",
+            session_id="session-a",
+            observed_at=clock,
+        )
+        assert "定型文" in prompt and "角色扮演" in prompt
+        assert "一篇文章/一个模板" in prompt  # 判据：读起来像文章而不像他在说自己
+
     def test_prompt_carries_admission_rule_and_counter_examples(self, store, clock):
         prompt = build_extraction_prompt(
             user_text="你更新了 V8.0 吗",
