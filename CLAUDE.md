@@ -14,12 +14,14 @@ NoneBot2 + OneBot v11(NapCat) 的"灰泽满"人格聊天机器人。核心是**�
 2. **行为 > 标签**：写"什么情境怎么反应"，别贴性格标签。
 3. **确定性后处理只兜底**（clean_reply/防复读/换行归一），能数据解决就别加代码规则。**别让它伤到人设**——曾有个"防措辞固化"因为 75% 的触发都在拦她自己的自称"灰泽满"而被删掉。
 4. **单一真值**：同一件事只在一个文件维护（历史上 terms/behaviors/提示词三处打架）。
-5. **改数据要重算向量**：只有 **`core_stories` / `statement_final`** 走向量——改完跑 `precompute core-stories` / `generate-vectors -i persona/world/statement_final.json`，否则检索用旧文本。（**behaviors 不用**——走判别词 + LLM 分类；**preferences 也不用**——2026-09-26 起改走 keywords 子串。）
+5. **改数据要重算向量**：只有 **`core_stories` / `statement_final`** 走向量——改完跑 `precompute core-stories` / `generate-vectors -i persona/world/statement_final.json`，否则检索用旧文本。（**behaviors 不用**——走判别词 + LLM 分类；**preferences 也不用**——2026-09-26 起改走 keywords 子串；**记忆也不用**——`memory_v2` 是运行时写入的，没有"预计算向量"这回事。）
    - **voice_samples / phrases / traits / styles 四个文件已于 2026-10-04 拆掉**（内容分别并进 behaviors 与 `core/system_prompt.txt`，原因见 `docs/操作手册.md` 与 `docs/历史/已删机制登记.md`）。
 
 ## 怎么跑 / 怎么测
 - 启动：NapCat 自己开 → `env\python.exe api_v2.py`(GPT-SoVITS,端口9880) → `python bot.py`（或双击 `启动.bat`）。**改代码/数据后要重启 bot**（有进程内缓存）。
-- 测试：`.venv\Scripts\python.exe -m pytest -q`（**877 个**，全绿才算完；数字变了说明你增删了用例，顺手改这里）。
+- 测试：`.venv\Scripts\python.exe -m pytest -q`（**877 个**，全绿才算完）。
+  ⚠️ **数字的权威在 `docs/地图.md` §10**——改了用例数去那里改一次，然后跑
+  `.venv/Scripts/python.exe scripts/check_docs.py` 看还有哪几处没跟上（别只改本文件）。
 - 改**检索/判据/素材**后必跑这两个（unit test 测不出"检索该不该命中"）：
   `run_tool.py retrieval-eval`（query→各路期望，**改语料会把候选排名洗牌，改完必须重跑**）、
   `run_tool.py regression --check`（真实翻车固化成的确定性判据）。
@@ -28,7 +30,7 @@ NoneBot2 + OneBot v11(NapCat) 的"灰泽满"人格聊天机器人。核心是**�
   先产候选，人工看 review，确认后加 `--apply`；corpus 会自动重建向量。
   corpus 默认补 `corpus_keywords` 钩子并审计自指代词；存量语料用
   `--sanitize-existing --from-index N` 定向清理。
-  （`voice-samples` / `phrases` 两个子命令**已于 2026-10-04 下线**——见「人格数据」条。）
+  （`voice-samples` / `phrases` 两个子命令**已于 2026-10-04 下线**——见下方「文件地图」里的人格数据条。）
 - 推送：代理常抽风。先试 `git push origin main`（直连有时通），不行再用 `-c http.proxy=http://127.0.0.1:7897/7898`。
 
 ## 别碰 / 危险
@@ -42,17 +44,17 @@ NoneBot2 + OneBot v11(NapCat) 的"灰泽满"人格聊天机器人。核心是**�
   `__init__._handle_chat` → `chat_window.enqueue` → 读秒窗口 → `_flush`(读图+归纳) → `core.handle_chat` → `build_message_list`(17 段注入) → `generate_reply` → `clean_reply` → `split_reply` → `_send`
   （语音优先：`clean_reply` 后先 `should_voice`→`send_voice`，成功就不走文字分段）
 - 运行时核心：`src/plugins/chatbot/`（core 主循环 / chat_window 读秒窗口 / retrieval 两路 RRF+两路直达 / reply_style 纯函数 / routing 梗库+行为分类 / persona 加载 / **memory_v2 长期记忆（2026-10-10 转正）** + memory|session_memory|group_memory / voice 语音 / bili_bridge|weibo_bridge 联动 / context_probe 感知 / vision 看图 / rag 向量 / config 客户端 / constants 常量★）
-- 人格数据：`persona/`（core=骨架 / behavior=16 条情景 / world=事实层。`speech/` 与 `core/traits|styles` 已于 2026-10-04 删除）
+- 人格数据：`persona/`（core=骨架 / behavior=17 条情景 / world=事实层。`speech/` 与 `core/traits|styles` 已于 2026-10-04 删除）
 - 长期记忆：`memory_v2.py`（**类型化条目，2026-10-10 起正位**：真实聊天重建 + 运行时写入/注入；
   临时关掉设 `MEMORY_V2_SHADOW=0` / `MEMORY_V2_INJECT=0`）。**v1 已于 2026-10-12 整个删除**
   ——根 `memory_manager.py` 和 `user_memory/long_term*` 都没了，名字/城市/事实全从 V2 取。
-- 离线工具：`scripts/run_tool.py <工具>`；**53 个脚本各干什么见 `docs/操作手册.md`**
+- 离线工具：`scripts/run_tool.py <工具>`；**56 个脚本各干什么见 `docs/操作手册.md`**
 
 ## 文档指针（按需懒读，别开头全灌）
 **`docs/` = 7 份正文 + 一个历史存档区**。
 
 - **`docs/下一步.md`** —— ★ **唯一写"现在到哪、下一步做什么"的地方**。做完的事搬进
-  `历史/交接文档.md`，这份只留还没做的。**别的文件一律不写现状**，要提就写"见 `下一步.md`"。
+  `docs/历史/交接文档.md`，这份只留还没做的。**别的文件一律不写现状**，要提就写"见 `下一步.md`"。
 - **`docs/地图.md`** —— ★ **认路先看这份**：每个文件干什么 + 要改某处该去哪（原 `FILE_MAP.md` 的替代）
 - `docs/架构.md` —— **判别 → 检索 → 注入**这套核心机制怎么转（合成一条连续过程）+ 一层记忆
 - `docs/操作手册.md` —— 要动手时怎么做：跑/测、加直播素材、写 behaviors、问题驱动、抽查、脚本总表
@@ -60,9 +62,10 @@ NoneBot2 + OneBot v11(NapCat) 的"灰泽满"人格聊天机器人。核心是**�
 - `docs/记忆v2设计.md` —— 长期记忆记什么、怎么影响对话、现状与实测数据
 - `docs/提示词参考.md` —— 角色扮演提示词的**业界做法** + **本项目适用/不适用哪些**（改骨架前先看第五节）
 - `docs/历史/` —— **存档，别按它改回去**：
-  - `历史/已删机制登记.md` —— ★★ 每个被删机制**为什么删、实测数据是什么**
-  - `历史/待办清单.md` —— 还挂着的问题 + "已判定不是问题、别再改回去"的登记
-  - `历史/交接文档.md` / `历史/版本史.md` / `历史/包装语审计.md` / `历史/调研-角色对话AI架构.md` / `历史/ROADMAP.md`
+  - `docs/历史/已删机制登记.md` —— ★★ 每个被删机制**为什么删、实测数据是什么**
+  - `docs/历史/待办清单.md` —— 还挂着的问题 + "已判定不是问题、别再改回去"的登记
+  - `docs/历史/交接文档.md` / `docs/历史/版本史.md` / `docs/历史/包装语审计.md` / `docs/历史/调研-角色对话AI架构.md` / `docs/历史/ROADMAP.md`
+  - ⚠️ 这一区是**历史快照**：里面写的路径与数字都是当时的（`docs/README.md`、`docs/注入设计原理.md` 这些后来被合并/删除了），**链接打不开是正常的，别去"修"它**。
 - `video/README.md` —— 注入链路说明视频（Remotion 工程、旁白时间轴、TTS 接入、渲染命令）
 
 ## 当前状态 / 下一步（更新时改这里）
