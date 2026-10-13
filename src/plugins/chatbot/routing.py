@@ -93,7 +93,7 @@ async def legendary_confirmed(user_msg: str, prompt_template: str, history: str 
             max_tokens=10,
             **THINKING_DISABLED,
         )
-        log_cache_usage(resp, "行为分类")
+        log_cache_usage(resp, "梗确认")
         c = extract_chat_content(resp)
         # 确认模板要求只答"是/否"：以"是"开头且不是"不是/是不是"这类否定/疑问才放行
         return c.startswith("是") and not c.startswith("不是") and not c.startswith("是不是")

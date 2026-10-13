@@ -2,6 +2,7 @@
 import asyncio
 
 from src.plugins.chatbot import core
+from src.plugins.chatbot import memory as mem
 from src.plugins.chatbot import rag
 from src.plugins.chatbot import reply_style
 from src.plugins.chatbot import routing
@@ -402,18 +403,77 @@ class TestHistoryGapNote:
         assert block and "距离上一轮对话" not in block[0]
 
 
+class TestLengthGuard:
+    """超长 → 带提醒"重说一遍，短一半"（2026-10-14）。
+
+    为什么它是模型内的可靠解法：骨架里"默认往短里走"只能定基调（换模型后尤其明显——
+    gemini 默认 36 字，而她历史水平是 ~29）；`max_tokens` 硬压会腰斩半句。
+    实测阈值 40：只触发约 1/4 轮次，gemini 35.7 → 25.4 字（≈历史水平），ds 完全不触发。
+    """
+
+    async def _run(self, monkeypatch, replies, guard="1"):
+        monkeypatch.setenv("LENGTH_GUARD", guard)   # ⚠️ 别在这里 delenv——那会把用例设的值删掉
+        seq = list(replies)
+        calls = []
+
+        async def fake_reply(messages):
+            calls.append(len(messages))
+            return seq.pop(0) if seq else "在呢"
+
+        async def fake_probe(uid, msg, hist, client):
+            return "用户发了个偷笑的表情"       # 纯情绪 → 跳过检索，最小 harness
+
+        async def _async_noop(*a, **k):
+            return None
+
+        def _noop(*a, **k):
+            return None
+
+        monkeypatch.setattr(core, "probe_session", fake_probe)
+        monkeypatch.setattr(core, "generate_reply", fake_reply)
+        monkeypatch.setattr(core, "get_user_history", lambda uid: [])
+        monkeypatch.setattr(core, "get_last_turn_gap_seconds", lambda uid: None)
+        monkeypatch.setattr(core, "append_user_history", _noop)
+        monkeypatch.setattr(core, "update_memory_v2_shadow_task", _async_noop)
+        monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
+        out = await core.handle_chat("u", "可惜🤭")
+        await asyncio.sleep(0)
+        return out, calls
+
+    async def test_long_reply_gets_regenerated(self, monkeypatch):
+        long_reply = "字" * (core.LENGTH_GUARD_MAX_CHARS + 5)
+        out, calls = await self._run(monkeypatch, [long_reply, "在呢"])
+        assert out == "在呢", "重说的那句要生效"
+        assert len(calls) == 2, "超长应该触发一次重说"
+
+    async def test_short_reply_untouched(self, monkeypatch):
+        out, calls = await self._run(monkeypatch, ["在呢"])
+        assert out == "在呢" and len(calls) == 1, "没超长就不该多调一次"
+
+    async def test_can_be_disabled(self, monkeypatch):
+        long_reply = "字" * (core.LENGTH_GUARD_MAX_CHARS + 5)
+        out, calls = await self._run(monkeypatch, [long_reply], guard="0")
+        assert out == long_reply and len(calls) == 1
+
+
 class TestFallbackReplyNotRemembered:
     """生成失败的兜底文案**不能进记忆**。
 
     踩坑（实测发生）：上游偶发 `choices: null` 那一轮，兜底文案被当成"她的回复"存进短期记忆，
     她的历史里就永久留着一句 `哎呀，hzm脑子卡了一下……（错误: 'NoneType' ...）`
     ——AI 腔的故障信息变成"她说过的话"，还会作为 few-shot 喂回去。一次上游抖动 = 一份永久污染。
+
+    2026-10-14 换过文案：现在是"小满现在不在哦~"（体面的缺席，不把故障摆上台面）。
+    **老文案仍要认得**——历史记录里就存着。
     """
 
-    def test_is_fallback_reply_detects_both(self):
+    def test_is_fallback_reply_detects_current(self):
+        assert core.is_fallback_reply("小满现在不在哦~")
+        assert core.is_fallback_reply("  小满现在不在哦~  ")
+
+    def test_is_fallback_reply_still_detects_legacy(self):
         assert core.is_fallback_reply("哎呀，hzm脑子卡了一下……")
         assert core.is_fallback_reply("……（沉默，可能是信号不好）")
-        assert core.is_fallback_reply("  哎呀，hzm脑子卡了一下……  ")
 
     def test_normal_reply_is_not_fallback(self):
         assert not core.is_fallback_reply("在呢，你说")
@@ -451,8 +511,8 @@ class TestFallbackReplyNotRemembered:
         return out, captured
 
     async def test_fallback_reply_not_stored(self, monkeypatch):
-        out, captured = await self._run(monkeypatch, "哎呀，hzm脑子卡了一下……")
-        assert out == "哎呀，hzm脑子卡了一下……", "兜底文案照常回给用户"
+        out, captured = await self._run(monkeypatch, "小满现在不在哦~")
+        assert out == "小满现在不在哦~", "兜底文案照常回给用户"
         assert captured["short"] == 0, "兜底文案不该进短期记忆"
         assert captured["long"] == 0, "兜底文案也不该触发长期记忆提取"
 
@@ -485,9 +545,29 @@ class TestConsistencyRuleWording:
         b = self._block(monkeypatch)
         assert "借口要与之前保持一致" not in b, "这句会把它锁死在第一次的说法上"
 
-    def test_explicitly_tells_her_to_rephrase_not_copy(self, monkeypatch):
+    def test_her_own_lines_are_not_injected(self, monkeypatch):
+        """⚠️ 她说过的话**不再回灌**（2026-10-14 用户决定去自反馈）。
+
+        实测（`docs/历史/交接文档.md`「开头重复」节）：上一轮以"灰泽满"开头时，
+        这一轮也以它开头的概率 51.7%（不是时只有 17.4%）——回灌的作用是让说法黏住。
+        **记忆照记**（起手闸与 L3 还要用），只是不注入。
+        """
         b = self._block(monkeypatch)
-        assert "别逐字复读" in b
+        assert "灰泽满：在忙" not in b
+        assert "用户：你又鸽了" in b      # 用户侧照旧
+
+    def test_only_bot_history_injects_nothing(self, monkeypatch):
+        """整段都是她说的话时（如刚推完动态还没人回），干脆不注入这一块。"""
+        monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
+        monkeypatch.setattr(core, "load_schedule", lambda: {})
+        msgs = core.build_message_list("在吗", [], "", ["[3小时前] 灰泽满：睡了"])
+        assert not [m for m in msgs if m["content"].startswith("【最近对话记录】")]
+
+    def test_timed_prefix_does_not_hide_her_lines(self, monkeypatch):
+        """带 `[3小时前] ` 前缀的行同样是"她说的"，别被前缀骗过去。"""
+        assert mem.is_bot_line("[3小时前] 灰泽满：睡了")
+        assert not mem.is_bot_line("[3小时前] 用户：在吗")
+        assert not mem.is_bot_line("灰泽满这个名字好听")     # 用户在说"灰泽满"不算
 
     def test_repeat_question_no_longer_exempts_anti_repeat(self, monkeypatch):
         # 旧【防复读】写"用户没有主动追问时"才不重复 → 反复追问正好是复读高发场景却豁免了

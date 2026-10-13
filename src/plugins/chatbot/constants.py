@@ -67,6 +67,10 @@ THINKING_DISABLED = {"extra_body": {"thinking": {"type": "disabled"}}}
 CHAT_TEMPERATURE = 0.85       # 实验：回高温度（低温度让模型更走 RP 默认括号模板）
 CHAT_FREQUENCY_PENALTY = 0.3  # 实验：penalty 降低（0.5 未压括号还引入整句重复）
 CHAT_MAX_TOKENS = 150
+# 长度守卫：回复超过这个字数就"带提醒重说一遍"（见 core 里那道闸）。
+# 40 是实测拍的——她历史上的回复均值 ~29 字；实测（20 条真实消息，阈值 40）：
+# 只触发约 1/4 的轮次，把 gemini 从 35.7 字拉到 25.4 字（≈历史水平），ds 一句都没超、不触发。
+LENGTH_GUARD_MAX_CHARS = 40
 MEMORY_EXTRACT_TEMPERATURE = 0.1
 MEMORY_EXTRACT_MAX_TOKENS = 100
 

@@ -13,13 +13,14 @@ import time
 from .constants import (
     SYSTEM_PROMPT_FILE, THINKING_DISABLED,
     CHAT_TEMPERATURE, CHAT_FREQUENCY_PENALTY, CHAT_MAX_TOKENS,
+    LENGTH_GUARD_MAX_CHARS,
 )
 from .persona import (
     load_persona_rules, load_schedule,
 )
 from .memory import (
     get_user_history, get_user_history_timed, append_user_history,
-    get_last_turn_gap_seconds, humanize_gap,
+    get_last_turn_gap_seconds, humanize_gap, is_bot_line,
 )
 from .rag import embed_query
 from .retrieval import (
@@ -488,38 +489,49 @@ def build_message_list(user_msg: str, fused_items: list,
         })
 
     # 短期记忆注入
+    # ⚠️ **她自己说过的话不再回灌进上下文**（2026-10-14，用户决定；实测见
+    #    `docs/历史/交接文档.md`「开头重复」节）：这块原来把"用户：… / 灰泽满：…"整段
+    #    对话原样回给模型 = **把她自己刚说的话当样本再喂一遍**（自反馈）。
+    #    实测：全库 27% 的回复以"灰泽满"开头，而**上一轮以它开头时这一轮也以它开头的概率
+    #    是 51.7%**（上一轮不是时只有 17.4%）——回灌的真实作用是**让说法黏住、加剧公式化**；
+    #    "像不像她"来自骨架与素材层，不靠它。
+    #    ⚠️ 只删**注入**这一层：记忆照记（`memory.append_user_history` 两边都写），
+    #    因为 ① 三道起手闸要拿她最近说过的话做比对 ② L3 判"连续第几轮在要同一件事"
+    #    要看她前面答没答应。**要回退就把下面那行过滤去掉。**
+    #    ⚠️ 代价（记在 `下一步.md`）：她**看不见自己上轮的原话**了，"别自相矛盾"只剩
+    #    摘要层的事实可依（【会话记忆】/连续索要/长期记忆）——这几层本来就在，所以事实不丢，
+    #    丢的是措辞。
     if user_history:
         if isinstance(user_history, list):
-            context = "\n".join(user_history)
-            # ⚠️ 时间戳**不再**在这里加一行汇总（2026-10-05 改）——
-            #   旧做法是把「距上一轮多久」当一行汇总拼在整块开头，结果 gap=10秒 和 gap=3小时
-            #   注入出来的历史**长得一模一样**，她分不出"刚说完"和"三小时前说的"。
-            #   现在改成：**每条消息自己带 [多久前]**（由 memory.get_user_history_timed 渲染），
-            #   只给事实、不给"该怎么理解"的说明，判断交给模型。
-            #   history_gap_note 参数保留（调用方还在传），但不再拼进历史块。
-            # 一致性（只管事实）+ 防复读（别逐字复读）。
-            # 旧的【一致性规则】写的是"借口要与之前保持一致"——那是**直接教它复读**：
-            # 一旦第一次用了某个借口（"威严""搬家"），规则就把它锁死，错误只固化不自我纠正
-            # （实测"威严"和"搬家"各被锁了一轮又一轮）。改成**只约束事实别打架**，明确不管说法与态度。
-            # 旧【防复读】的豁免条件是"用户没有主动追问时"——而用户反复追问正是复读高发场景，
-            # 等于在最需要它的地方自动失效。改成"可以正面回答，但换个说法，别逐字搬上轮那句"。
-            context += (
-                "\n\n【别自相矛盾】同一件事的**事实**别前后打架——说过的原因、安排、答应过的事"
-                "（如'今天为什么没播''这周播不播'），下一轮别改口成另一套。\n"
-                "这条只管**事实**，不管**说法和态度**：被反复追问同一件事时，换个说法、换个角度、"
-                "或者干脆松口/推进，都比把上轮那句原样再说一遍自然。**宁可换个方式说同一件事，也别逐字复读。**\n"
-                "【防复读】以上对话中，灰泽满自己说过的话只是历史背景。用户重复问同一件事时，"
-                "她可以正面回答，但别把上轮那句原样搬出来——顺着他当前的说法自然接，"
-                "也别每轮都重提自己之前提过的事。"
-            )
-            label = "【最近对话记录】"
+            past = [ln for ln in user_history if not is_bot_line(ln)]
+            if past:
+                context = "\n".join(past)
+                # ⚠️ 时间戳**不再**在这里加一行汇总（2026-10-05 改）——
+                #   旧做法是把「距上一轮多久」当一行汇总拼在整块开头，结果 gap=10秒 和 gap=3小时
+                #   注入出来的历史**长得一模一样**，她分不出"刚说完"和"三小时前说的"。
+                #   现在改成：**每条消息自己带 [多久前]**（由 memory.get_user_history_timed 渲染），
+                #   只给事实、不给"该怎么理解"的说明，判断交给模型。
+                #   history_gap_note 参数保留（调用方还在传），但不再拼进历史块。
+                # 【别自相矛盾】：旧的【一致性规则】写的是"借口要与之前保持一致"——那是**直接教它复读**：
+                # 一旦第一次用了某个借口（"威严""搬家"），规则就把它锁死（实测各被锁了一轮又一轮）。
+                # 改成**只约束事实别打架**，明确不管说法与态度。
+                # （原先这里还有一条【防复读】"别把上轮那句原样搬出来"——她自己的话已经不注入了，
+                #   那条没有对象了，2026-10-14 一并删掉；防复读现在是三道确定性闸在管。）
+                context += (
+                    "\n\n【别自相矛盾】同一件事的**事实**别前后打架——说过的原因、安排、答应过的事"
+                    "（如'今天为什么没播''这周播不播'），别改口成另一套。这条只管**事实**，"
+                    "不管**说法和态度**：被反复追问同一件事时，换个说法、换个角度、或者干脆松口/推进，"
+                    "都比把上轮那句原样再说一遍自然。"
+                )
+                messages.append({
+                    "role": "system",
+                    "content": f"【最近对话记录】\n{context}"
+                })
         else:
-            context = f'我说："{user_history}"'
-            label = "【关于这个绿冻的上一轮记忆】"
-        messages.append({
-            "role": "system",
-            "content": f"{label}\n{context}"
-        })
+            messages.append({
+                "role": "system",
+                "content": f'【关于这个绿冻的上一轮记忆】\n我说："{user_history}"'
+            })
 
     # 连续索要（客观事实，不含指令）：她需要知道"这已经是第几次了"。
     # 为什么必须有（2026-10-04 从真实记录发现）：上下文只带最近 10 条，
@@ -589,8 +601,18 @@ def build_message_list(user_msg: str, fused_items: list,
 
 
 # 生成失败时的兜底文案（**只发给用户，绝不进记忆**——见 is_fallback_reply）
-_FALLBACK_REPLY = "哎呀，hzm脑子卡了一下……"
-_FALLBACK_SILENT = "……（沉默，可能是信号不好）"
+# 2026-10-14 换：原来那句"哎呀，hzm脑子卡了一下……"把**故障**摆到了台面上（还是她自己承认故障）。
+# 用户要求改成"她这会儿不在"——一句**体面的缺席**，把"上游挂了/超时/被内容审核拦了"都盖过去。
+_FALLBACK_REPLY = "小满现在不在哦~"
+_FALLBACK_SILENT = "小满现在不在哦~"
+
+# 历史兜底文案：老记录里可能还留着，识别时一起认（否则会被当成"她说过的话"喂回去）
+_LEGACY_FALLBACKS = ("哎呀，hzm脑子卡了一下……", "……（沉默，可能是信号不好）")
+
+
+def length_guard_enabled() -> bool:
+    """长度守卫开关：环境变量 LENGTH_GUARD=0 可关掉（快速回滚用），缺省开。"""
+    return os.environ.get("LENGTH_GUARD", "1") != "0"
 
 
 def is_fallback_reply(text: str) -> bool:
@@ -600,8 +622,10 @@ def is_fallback_reply(text: str) -> bool:
     兜底文案被当成"她的回复"存进了短期记忆，于是她的历史里永久留着一句
     `哎呀，hzm脑子卡了一下……（错误: ...）`——**AI 腔的故障信息变成了"她说过的话"，
     还会作为 few-shot 喂回去**。一次上游抖动 = 一份永久污染。
+    （2026-10-14 换文案后，老文案仍要认得——历史记录里就存着。）
     """
-    return (text or "").strip() in (_FALLBACK_REPLY, _FALLBACK_SILENT)
+    t = (text or "").strip()
+    return t in (_FALLBACK_REPLY, _FALLBACK_SILENT) or t in _LEGACY_FALLBACKS
 
 
 async def generate_reply(messages: list) -> str:
@@ -1043,6 +1067,24 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
             candidate = await generate_reply(list(messages) + [nudge])
             reply = candidate
             if not (uses_hollow_opener(reply) and any(uses_hollow_opener(prev) for prev in recent_bot[-2:])):
+                break
+
+    # 「太长」重说一遍（2026-10-14）——**长度是模型内的老问题，这是那个"可靠解法"**。
+    # 为什么不是提示词：骨架里"默认往短里走"那段只能定基调，实测管不住（换模型后尤其明显：
+    # gemini 默认 36 字，而她历史上的水平是 ~29）。为什么不是 max_tokens：硬压会腰斩半句。
+    # 实测（20 条真实消息，阈值 40 字）：gemini 35.7 → **25.4 字**（≈历史水平），只动 1/4 的轮次；
+    # ds 一句都没超、完全不触发。形状照上面那几道闸：确定性触发 + 追加提醒 + 重生成。
+    if length_guard_enabled() and len(reply) > LENGTH_GUARD_MAX_CHARS:
+        print(f"[长度] {len(reply)} 字超过 {LENGTH_GUARD_MAX_CHARS}，带提醒重说一遍")
+        nudge = {
+            "role": "system",
+            "content": "你刚才那句太长了。**重说一遍，短一半**：只留最要紧的那一句，"
+                       "别丢信息、别丢态度，也别补新的话。",
+        }
+        for _ in range(2):
+            candidate = await generate_reply(list(messages) + [nudge])
+            reply = candidate
+            if is_fallback_reply(reply) or len(reply) <= LENGTH_GUARD_MAX_CHARS:
                 break
 
     # --- 💾 更新短期记忆（带锁）：图片消息把视觉描述记进去，后续才记得聊过什么图 ---

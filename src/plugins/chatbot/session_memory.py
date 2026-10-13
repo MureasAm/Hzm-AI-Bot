@@ -21,6 +21,7 @@ import threading
 from pathlib import Path
 from datetime import datetime
 
+from .memory import archive_legacy_file
 from .constants import PROJECT_ROOT, THINKING_DISABLED
 from .config import log_cache_usage, _get_model_name, extract_chat_content
 # 时长措辞（"3天"/"2小时"）与长期/短期记忆共用一份，别各写一套（memory re-export 自根模块）
@@ -105,9 +106,9 @@ def _ensure_migrated() -> None:
                 continue
             _write_json(f, sess)
             n += 1
-        SESSION_MEMORY_FILE.rename(SESSION_MEMORY_FILE.with_suffix(".json.migrated"))
+        archived = archive_legacy_file(SESSION_MEMORY_FILE)
         print(f"[会话记忆] 旧单文件已拆分：{n} 个会话 → {SESSION_DIR}"
-              f"（原件存为 {SESSION_MEMORY_FILE.name}.migrated）")
+              f"（原件存为 {archived.name}）")
     except OSError as e:
         print(f"⚠️ 会话记忆拆分失败（退回旧单文件读，不影响聊天）: {e}")
 

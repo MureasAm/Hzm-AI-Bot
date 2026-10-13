@@ -5,14 +5,17 @@
 API 客户端工厂（_get_clients / _get_model_name）也在此，core / routing 共用，
 避免 core ↔ routing 循环依赖。
 """
+import contextvars
 import json
+import os
+import time
 
 from nonebot import get_driver
 from openai import AsyncOpenAI
 
 from .constants import (
     VISION_MODEL, PUSH_INTERVAL, WEATHER_BASE_URL,
-    DEEPSEEK_BASE_URL, ZHIPU_BASE_URL, DEFAULT_MODEL,
+    DEEPSEEK_BASE_URL, ZHIPU_BASE_URL, DEFAULT_MODEL, PROJECT_ROOT,
 )
 
 
@@ -73,23 +76,76 @@ def parse_json_block(content: str):
 
 
 def log_cache_usage(resp, tag: str) -> None:
-    """打一行 DeepSeek 缓存用量（命中/未命中/命中率）。
+    """打一行 DeepSeek 缓存用量（命中/未命中/命中率 + 输出），并把这次调用记进账本。
 
     为什么要它（2026-10-09）：缓存命中是**按前缀**算的，只有打出来才能看见——
     "感觉命中低"没法排查。实测教训：提示词里**变量放前面**会让后面整段静态正文
     永远不命中（同一条判据实测 0% vs 68%），而这种问题在日志里一眼就能看出来。
 
-    上游不返回这两个字段时静默跳过（不同模型/网关不一定有）。
+    上游不返回这两个字段时静默跳过打印（不同模型/网关不一定有）——但**记账照记**
+    （prompt/输出 是标准字段，分账不依赖缓存字段）。
     """
     u = getattr(resp, "usage", None)
     if u is None:
         return
+    _record_usage(tag, u)
     hit = getattr(u, "prompt_cache_hit_tokens", None)
     if hit is None:
         return
     pt = getattr(u, "prompt_tokens", 0) or 0
     miss = getattr(u, "prompt_cache_miss_tokens", "?")
-    print(f"[缓存] {tag}: prompt={pt} 命中={hit} 未命中={miss} ({hit / max(pt, 1):.0%})")
+    out = getattr(u, "completion_tokens", 0) or 0
+    route = _ROUTE.get()
+    print(f"[缓存] {tag}{'·' + route if route else ''}: prompt={pt} 命中={hit} 未命中={miss} "
+          f"({hit / max(pt, 1):.0%}) 输出={out}")
+
+
+# ==================== LLM 用量分账（2026-10-13） ====================
+# **为什么要它**：用户要量清"群聊到底占多少花费"（bot 10-12 单日 ¥8.43，假设是群聊读
+# 全群发言占了大头）。stdout 那行 `[缓存] …` 看完就滚没了，而且**不带输出 token、
+# 也分不出私聊/群聊**——聚合不出"哪条路贵"。所以每次调用追加一行 JSONL 落到
+# `data/llm_usage.jsonl`（data/ 不入库），聚合看 `scripts/llm_cost.py`。
+#
+# 记账**不改变任何行为**：写失败静默，缺字段按 0 算。
+USAGE_LOG_FILE = PROJECT_ROOT / "data" / "llm_usage.jsonl"
+
+# 当前这条链路属于哪条通道。由**入口**设置（chat_window._flush / proactive）。
+# 用 contextvar 而不是加参数：调用点有 12 处（routing/corpus_judge/memory_v2/session_memory…），
+# 挨个加参数等于把"记账"这个横切关注点捅进每个人格模块。
+# asyncio.create_task 会**复制**当前 context，所以 handle_chat 里起的记忆提取任务也带得上。
+_ROUTE = contextvars.ContextVar("hzm_llm_route", default="")
+
+
+def set_llm_route(route: str) -> None:
+    """标记"接下来这条链路的 LLM 调用算在哪条通道上"（私/群/主动）。"""
+    _ROUTE.set(route)
+
+
+def usage_log_enabled() -> bool:
+    """环境变量 LLM_USAGE=0 可关掉记账（缺省开，和 CHATLOG 一个约定）。"""
+    return os.environ.get("LLM_USAGE", "1") != "0"
+
+
+def _record_usage(tag: str, u) -> None:
+    """把一次调用的用量追加进账本。**失败静默**——记账绝不能影响聊天。"""
+    if not usage_log_enabled():
+        return
+    try:
+        rec = {
+            "t": time.time(),
+            "tag": tag,
+            "route": _ROUTE.get(),
+            "model": _get_model_name(),
+            "prompt": int(getattr(u, "prompt_tokens", 0) or 0),
+            "hit": int(getattr(u, "prompt_cache_hit_tokens", 0) or 0),
+            "miss": int(getattr(u, "prompt_cache_miss_tokens", 0) or 0),
+            "output": int(getattr(u, "completion_tokens", 0) or 0),
+        }
+        USAGE_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(USAGE_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
 
 
 def extract_chat_content(resp) -> str:

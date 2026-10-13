@@ -19,6 +19,7 @@ from nonebot.adapters.onebot.v11 import Message, MessageSegment
 from .core import (
     handle_chat, summarize_batch, _get_clients,
 )
+from .config import set_llm_route
 from .memory import get_user_history, append_user_history
 from .group_gate import should_reply_in_group
 from .chatlog import log_turn
@@ -192,6 +193,10 @@ async def _flush(win: _UserWindow) -> None:
     """回复前统一"读图 + 归纳"（作为读整批的一部分），再生成并分批发送回复。"""
     if not win.pending:
         return
+    # 用量分账：这条链路上的所有 LLM 调用（归纳 / 接话门 / 主回复 / 表情包 / 记忆提取…）
+    # 都算在这条通道上。设在最前面是因为**归纳和接话门在 handle_chat 之前**——
+    # 而它们恰恰是群聊多出来的那两次调用，正是要量的东西（见 config._ROUTE）。
+    set_llm_route("群" if not win.is_private else "私")
     msgs, win.pending = win.pending, []
     my_gen = win.generation   # 起跑时的代际；后面用它判断"我是否已被新消息取代"
 

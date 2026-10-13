@@ -124,6 +124,25 @@ class TestPerSessionFiles:
         assert not (_tmp_log / "chat.jsonl").exists()
         assert (_tmp_log / "chat.jsonl.migrated").exists()  # 原件留着
 
+    def test_archives_even_when_archive_already_exists(self, _tmp_log):
+        """⚠️ 归档已存在时也要能拆完（2026-10-14 修的真 bug）。
+
+        `Path.rename` 目标存在会抛 `FileExistsError`，而"归档已经在了"是**第二次及以后
+        每次启动**的常态 → 旧代码每次只打一句警告、**永远退回读旧单文件**、
+        永远拆不完（`user_memory/session.json` 从 2026-10-09 起一直是这样）。
+        现在目标占了就加时间戳另存：照样留档，且**不覆盖**已有归档。
+        """
+        _tmp_log.mkdir(parents=True, exist_ok=True)
+        (_tmp_log / "chat.jsonl.migrated").write_text("旧归档，别覆盖我\n", encoding="utf-8")
+        (_tmp_log / "chat.jsonl").write_text(
+            json.dumps({"t": 1.0, "session": "111", "kind": "private", "user": "a", "reply": "b"},
+                       ensure_ascii=False) + "\n", encoding="utf-8")
+        assert len(list(chatlog.iter_records())) == 1            # 触发拆分
+        assert not (_tmp_log / "chat.jsonl").exists()            # 原文件被归档掉了
+        assert (_tmp_log / "chat.jsonl.migrated").read_text(encoding="utf-8") == "旧归档，别覆盖我\n"
+        extra = [p for p in _tmp_log.glob("chat.jsonl.migrated.*")]
+        assert extra, "第二次归档要另起一个带时间戳的名字"
+
     def test_broken_lines_are_skipped(self, _tmp_log):
         _tmp_log.mkdir(parents=True, exist_ok=True)
         (_tmp_log / "111.jsonl").write_text("{坏行\n" + json.dumps({"session": "111"}) + "\n",

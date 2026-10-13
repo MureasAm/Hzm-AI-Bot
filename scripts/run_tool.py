@@ -7,12 +7,13 @@
     python scripts/run_tool.py --help
     python scripts/run_tool.py <工具> --help
 
-实际 20 个子命令，分六组：流水线(persona-pipeline)
+实际 26 个子命令，分六组：流水线(persona-pipeline)
 / 蒸馏(transcribe/clean-transcript/convert-to-chat/analyze-pace)
 / 生成(generate-statements/generate-vectors/generate-persona)
 / 向量(precompute core-stories)
 / 评测(regression/persona-eval/retrieval-eval/problems)
-/ 工具(bili-check/bili-login/vision-test/mine-theme/extract-persona/memory-audit/memory-replay)。
+/ 工具(bili-check/bili-login/vision-test/mine-theme/extract-persona/memory-audit/memory-replay
+       /memory-rebuild/memory-migrate-moments/memory-dedupe/llm-cost/proactive-ab/model-ab)。
 generate-statements 作为 persona-pipeline corpus 的内部步骤保留；generate-persona 会覆盖人格需 --danger。
 旧脚本仍可直接运行（向后兼容），本入口为推荐用法。
 """
@@ -576,6 +577,83 @@ def _run_memory_migrate_moments(args):
     memory_v2_tool.run_migrate_moments(args)
 
 
+# ==================== 子命令：llm-cost ====================
+
+def _add_llm_cost(sub):
+    p = sub.add_parser("llm-cost", help="LLM 用量分账（私/群/主动各花了多少 token）")
+    # ⚠️ 这些开关**必须在这里逐个声明**，不能用 `nargs=REMAINDER` 透传：
+    # REMAINDER 只在"第一个 token 不是选项"时才收得住，而这里第一个 token 恒是 `--days`
+    # 这种选项 → argparse 直接报 unrecognized arguments（2026-10-14 踩到）。
+    p.add_argument("--file", default=None, help="账本路径（默认 data/llm_usage.jsonl）")
+    p.add_argument("--days", type=float, default=None, help="只看最近 N 天（如 1 / 0.5）")
+    p.add_argument("--date", default=None, help="只看某一天，如 2026-10-13")
+    p.add_argument("--by-day", action="store_true", help="按天分开看")
+    p.add_argument("--routes", action="store_true", help="只看通道汇总（不列 tag 明细）")
+    p.add_argument("--top", type=int, default=25, help="tag 明细最多列几行（默认 25）")
+    p.add_argument("--json", action="store_true", help="输出 JSON")
+    p.add_argument("--price-hit", type=float, default=None, help="缓存命中单价 元/百万")
+    p.add_argument("--price-miss", type=float, default=None, help="缓存未命中单价 元/百万")
+    p.add_argument("--price-out", type=float, default=None, help="输出单价 元/百万")
+    p.set_defaults(func=_run_llm_cost)
+
+
+def _run_llm_cost(args):
+    import llm_cost
+    argv = []
+    # 只把「用户真传了」的开关转给 llm_cost（None = 没传，让它用自己的默认值）
+    for flag in ("file", "date", "days", "top", "price_hit", "price_miss", "price_out"):
+        val = getattr(args, flag)
+        if val is not None:
+            argv += ["--" + flag.replace("_", "-"), str(val)]
+    for flag in ("by_day", "routes", "json"):
+        if getattr(args, flag):
+            argv.append("--" + flag.replace("_", "-"))
+    sys.exit(llm_cost.main(argv))
+
+
+# ==================== 子命令：proactive-ab ====================
+
+def _add_proactive_ab(sub):
+    p = sub.add_parser("proactive-ab", help="主动发言 A/B（拿真实动态跑，看提示词改动的产出）")
+    p.add_argument("--n", type=int, default=1, help="每条生成几次（默认 1）")
+    p.add_argument("--case", action="append", default=None, help="只跑这一条动态（可重复传）")
+    p.add_argument("--prompt-file", default=None, help="用这个文件当 PROACTIVE_PROMPT")
+    p.set_defaults(func=_run_proactive_ab)
+
+
+def _run_proactive_ab(args):
+    import proactive_ab
+    sys.exit(proactive_ab.main([
+        "--n", str(args.n),
+        *(["--prompt-file", args.prompt_file] if args.prompt_file else []),
+        *[x for c in (args.case or []) for x in ("--case", c)],
+    ]))
+
+
+# ==================== 子命令：model-ab ====================
+
+def _add_model_ab(sub):
+    p = sub.add_parser("model-ab", help="换模型 A/B（真实对话，同一份提示词两个模型各生成一遍）")
+    p.add_argument("--n", type=int, default=12, help="取几条真实轮次（默认 12）")
+    p.add_argument("--route", default="私", choices=["私", "群", ""], help="私聊/群聊")
+    p.add_argument("--model-b", default=None, help="B 侧模型（缺省读 .env.prod 的 JUDGE_MODEL）")
+    p.add_argument("--judge", action="store_true", help="跑判据 A/B（行为分类一致率）")
+    p.add_argument("--replay", action="store_true", help="持续上下文回放（cold vs warm 并排）")
+    p.add_argument("--sessions", type=int, default=2, help="回放几段真实会话")
+    p.add_argument("--turns", type=int, default=8, help="每段回放几轮")
+    p.set_defaults(func=_run_model_ab)
+
+
+def _run_model_ab(args):
+    import model_ab
+    sys.exit(model_ab.main([
+        "--n", str(args.n), "--route", args.route,
+    ] + (["--judge"] if args.judge else []) + (["--replay"] if args.replay else [])
+      + (["--sessions", str(args.sessions), "--turns", str(args.turns)] if args.replay else []) + (["--model-b", args.model_b] if args.model_b else [])))
+
+
+# ==================== 子命令：memory-dedupe ====================
+
 def _add_memory_dedupe(sub):
     p = sub.add_parser("memory-dedupe",
                        help="合并库里同一个单值 key 攒了多份的（如 3 份 preferred_name）")
@@ -600,7 +678,8 @@ def build_parser() -> argparse.ArgumentParser:
                     "  【生成】generate-statements · generate-vectors · generate-persona · extract-persona\n"
                     "  【向量】precompute\n"
                     "  【评测】regression · persona-eval · retrieval-eval · problems\n"
-                    "  【工具】bili-check · bili-login · vision-test · mine-theme · memory-audit · memory-replay",
+                    "  【工具】bili-check · bili-login · vision-test · mine-theme · llm-cost · proactive-ab\n"
+                    "          memory-audit · memory-replay · memory-rebuild · memory-migrate-moments · memory-dedupe",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sub = parser.add_subparsers(dest="command", required=True, title="可用工具")
@@ -627,6 +706,9 @@ def build_parser() -> argparse.ArgumentParser:
     _add_memory_rebuild(sub)
     _add_memory_migrate_moments(sub)
     _add_memory_dedupe(sub)
+    _add_llm_cost(sub)
+    _add_proactive_ab(sub)
+    _add_model_ab(sub)
     return parser
 
 

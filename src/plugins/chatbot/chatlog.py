@@ -96,7 +96,8 @@ def _ensure_migrated() -> None:
                 continue
             f.write_text("\n".join(lines) + "\n", encoding="utf-8")
             n += 1
-        legacy.rename(legacy.with_suffix(".jsonl.migrated"))
+        from .memory import archive_legacy_file
+        archive_legacy_file(legacy)
         print(f"[聊天落盘] 旧单文件已按会话拆分：{n} 个会话 → {LOG_DIR}")
     except OSError as e:
         print(f"⚠️ 聊天落盘拆分失败（退回单文件读，不影响聊天）: {e}")

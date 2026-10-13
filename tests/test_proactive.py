@@ -148,6 +148,47 @@ class TestPromptContent:
         assert "照原文" in p and "别自己改" in p
         assert "10分钟" in p             # 真实踩坑例（改提示词时别把这条经验弄丢）
 
+    def test_prompt_has_no_sample_sentences_to_copy(self):
+        """prompt 里**不许再有"该说哪句话"的整句范例**——有就会被逐字抄。
+
+        2026-10-14 三版对照（`scripts/proactive_ab.py`，真实动态跑 10 条）：
+        - 原版（2 条正例）→ "睡了，你也早点睡🌙"、"明天18:00来玩啊，别迟到"（逐字抄）
+        - 无正例         → 三次报障都消失，同一动态两次输出还不一样
+        - **多加正例版** → 新例句被原样吐出来两次（"不是，这早饭也太万圣节了"／
+          "行，21:30，别又说灰泽满鸽"）→ **加正例只会让抄得更准**
+        钉的是**机制**（有例句就会抄），不是那几句话本身：往后再有人想加"正例"，
+        先想清楚它是落进数据层还是落进这里。
+        """
+        p = proactive.PROACTIVE_PROMPT
+        for bad in ("睡了，你也早点睡", "明天来玩啊，别迟到", "晚上来打游戏回回血",
+                    "不是，这早饭也太万圣节了"):
+            assert bad not in p
+
+    def test_prompt_says_it_is_a_private_rewrite_not_a_reply(self):
+        """⚠️ 任务定义（用户 2026-10-14 明确）：**把这条内容换成私聊口气讲一遍**。
+
+        发两条是有意的：① 原文通知（信息兜底）② 这句（同样的信息，她的口气）。
+        所以这句**该复述内容**，不该是对内容的评论/回应。
+        （我一度改成"不用复述、补一句反应"，用户否掉了。）
+        """
+        p = proactive.PROACTIVE_PROMPT
+        assert "私聊版" in p
+        assert "不是对它的评论" in p
+
+    def test_prompt_keeps_the_no_invention_rule(self):
+        """原文里没有的不许补——这条是原版就有的经验（"写稿"那例），改版时别弄丢。"""
+        p = proactive.PROACTIVE_PROMPT
+        assert "一个字也别补" in p and "写稿" in p
+
+    def test_prompt_does_not_call_injected_time_an_invention(self):
+        """⚠️ 反例：**"她提了时间"不等于"她编了时间"**。
+
+        主动发言这条路会注入【当前时间】（含澳洲当地时间），所以"这个点还没睡"是**真事实**。
+        2026-10-14 我曾把"凌晨两点还没睡的"当成编造写进 prompt，当天验证后撤回——
+        这条用例把那个错误结论钉在门外，免得下次又有人照抄回去。
+        """
+        assert "凌晨两点" not in proactive.PROACTIVE_PROMPT
+
 
 class _TwoStepClient:
     """一次 compose 要调**两次** LLM：先判"说不说得清"，再生成。

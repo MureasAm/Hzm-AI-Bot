@@ -174,6 +174,13 @@ data/qr/
 data/voice_cache/
 # 对用户的记忆（运行时生成，不入库）。**用 ** 覆盖子目录**：`user_memory/*.json`
 # 只匹配直接子文件，`user_memory/_backup_*/` 这类备份目录里的真实聊天记忆会漏网被提交。
+#
+# ⚠️ 2026-10-14 再补一刀：**整个目录忽略**。下面那些细分规则是逐个踩坑补出来的，
+# 但"归档时加时间戳"这种**新文件名**又会漏网——修归档 bug 那天产生的
+# `user_memory/session.json.migrated.1791928297`（127KB 真实会话数据）就没被任何一条盖住，
+# 差点跟着下次提交进公开仓库。而这个目录里**一个入库文件都没有**
+# （`git ls-files user_memory/` = 0），所以整目录忽略最稳；下面几条留着当"为什么"的说明。
+user_memory/
 user_memory/**/*.json
 user_memory/*.json
 # 同理，备份后缀（如 `short_term.json.bak-20260915-101436`）不以 .json 结尾，上面两条盖不住，
@@ -195,6 +202,10 @@ data/schedule_inbox/
 
 # 聊天落盘（真实用户对话，分析用；**PUBLIC 仓库绝不能入库**）
 data/chat_log/
+
+# LLM 用量账本（运行时生成，一天一天长大）。里面**只有 tag / 通道 / token 数**，
+# 没有一个字的对话内容——但它是本机运行产物，照旧不入库（2026-10-13 加）。
+data/llm_usage.jsonl
 
 # 从 data/chat_log 抄出来的对照清单（含真实用户发言）——**绝不入库**
 两版对照_请你看.md

@@ -76,6 +76,25 @@ def _write_json(path: Path, data) -> None:
     os.replace(tmp, path)
 
 
+def archive_legacy_file(path: Path) -> Path:
+    """把"拆完的旧单文件"改名留档，返回归档路径。
+
+    ⚠️ **目标已存在时要换个名字，绝不能直接 rename**（2026-10-14 修）：
+    `Path.rename` 在 Windows 上目标存在会抛 `FileExistsError`，而"归档已经在了"恰恰是
+    **第二次及以后每次启动**的常态（第一次拆完就产生了 `.migrated`）。
+    于是 `.rename()` 每次抛、只打一句警告、**永远退回读旧单文件**——
+    `session.json` 的迁移从 2026-10-09 起就一直是这样失败的（每次启动刷一句警告）。
+    现在：目标占了就加时间戳另存，照样留档、不覆盖旧档、不丢数据。
+
+    `chatlog.py` / `session_memory.py` 的同类迁移都调它（同一份实现，别再各写一遍）。
+    """
+    target = path.with_suffix(path.suffix + ".migrated")
+    if target.exists():
+        target = target.with_name(f"{target.name}.{int(time.time())}")
+    path.rename(target)
+    return target
+
+
 def _ensure_migrated() -> None:
     """把旧的单文件 short_term.json 拆成一人一个文件（只跑一次，拆完改名存档）。"""
     global _migrated
@@ -100,9 +119,9 @@ def _ensure_migrated() -> None:
                 continue
             _write_json(f, hist)
             n += 1
-        MEMORY_FILE.rename(MEMORY_FILE.with_suffix(".json.migrated"))
+        archived = archive_legacy_file(MEMORY_FILE)
         print(f"[记忆] 旧单文件已拆分：{n} 个会话 → {MEMORY_DIR}"
-              f"（原件存为 {MEMORY_FILE.name}.migrated）")
+              f"（原件存为 {archived.name}）")
     except OSError as e:
         print(f"⚠️ 旧记忆拆分失败（会退回旧单文件读，不影响聊天）: {e}")
 
@@ -311,11 +330,29 @@ def append_bot_message(user_id: str, text: str) -> None:
     发出去的**，不会作为事件回到 `_handle_chat`，所以它**从来没进过记忆**。
     粉丝顺着那句回她（"这个好玩吗""你说的是哪个"）时，她的【最近对话记录】里
     根本没有那一句 → 完全不知道对方在说什么。
+
+    ⚠️ 2026-10-14 起「她说过的话」**不再注入上下文**（见 `core.build_message_list`
+    里那段注释）。这条记录本身**保留**——起手闸要拿它比对，L3 判"连续第几轮在要
+    同一件事"也要看她前面答没答应。
     """
     text = (text or "").strip()
     if not text:
         return
     _append_lines(user_id, [f"灰泽满：{text}"])
+
+
+# 历史行可能带 `[3小时前] ` 前缀（get_user_history_timed 渲染的），判断"谁说的"要先剥掉
+_TIMED_PREFIX_RE = re.compile(r"^\[[^\]]{0,12}前\]\s*")
+
+
+def is_bot_line(line: str) -> bool:
+    """这行历史是不是**她自己说的**（`灰泽满：…`，行首可能带 [多久前] 前缀）。
+
+    存在的意义：注入层要把她的那半边滤掉（2026-10-14 去自反馈），而"谁说的"这个
+    约定住在 `append_user_history` / `append_bot_message` 里，所以判断也放这儿——
+    别在调用方手写 `startswith("灰泽满：")`，那条前缀会漏。
+    """
+    return _TIMED_PREFIX_RE.sub("", line or "").lstrip().startswith("灰泽满：")
 
 
 __all__ = [
@@ -324,6 +361,7 @@ __all__ = [
     "get_last_turn_gap_seconds",
     "append_user_history",
     "append_bot_message",
+    "is_bot_line",
     "humanize_gap",
     "use_storage",
     "PROJECT_ROOT",
