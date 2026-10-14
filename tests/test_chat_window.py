@@ -146,7 +146,7 @@ class TestVoiceFlush:
         # 否则会真调 LLM 判定（网络），整个测试挂住。
         self.pick_calls = []
 
-        async def fake_pick(client, reply, avoid_groups=None):
+        async def fake_pick(client, reply, avoid_groups=None, **kwargs):
             self.pick_calls.append(reply)
             return None
         monkeypatch.setattr(cw, "pick_sticker", fake_pick)
@@ -227,7 +227,7 @@ class TestVoiceSurvivesInterrupt:
         monkeypatch.setattr(cw, "summarize_batch", fake_summarize)
         monkeypatch.setattr(cw, "should_voice", lambda t, force=False: True)
 
-        async def fake_pick(client, reply, avoid_groups=None):
+        async def fake_pick(client, reply, avoid_groups=None, **kwargs):
             return None
         monkeypatch.setattr(cw, "pick_sticker", fake_pick)
         monkeypatch.setattr(cw, "_sticker_state", {})

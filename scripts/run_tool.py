@@ -652,6 +652,41 @@ def _run_model_ab(args):
       + (["--sessions", str(args.sessions), "--turns", str(args.turns)] if args.replay else []) + (["--model-b", args.model_b] if args.model_b else [])))
 
 
+# ==================== 子命令：skeleton-ab ====================
+
+def _add_skeleton_ab(sub):
+    p = sub.add_parser("skeleton-ab", help="骨架 A/B（同一套链路只换 system_prompt，两版并排）")
+    p.add_argument("--n", type=int, default=10, help="抽几条真实私聊消息（默认 10）")
+    p.add_argument("--runs", type=int, default=1, help="每条跑几轮（默认 1）")
+    p.add_argument("--seed", type=int, default=7)
+    p.add_argument("--b", default=None, help="B 版骨架文件（缺省 outputs/_sp_v3.txt）")
+    p.set_defaults(func=_run_skeleton_ab)
+
+
+def _run_skeleton_ab(args):
+    import asyncio
+    import skeleton_ab
+    argv = ["--n", str(args.n), "--runs", str(args.runs), "--seed", str(args.seed)]
+    if args.b:
+        argv += ["--b", args.b]
+    sys.exit(asyncio.run(skeleton_ab.main(argv)))
+
+
+# ==================== 子命令：sticker-stats ====================
+
+def _add_sticker_stats(sub):
+    p = sub.add_parser("sticker-stats",
+                       help="表情包使用情况（哪些被发得多、哪些从没用过、多少轮被冷却吃掉）")
+    p.add_argument("--since", type=float, default=0, help="只看最近 N 天（默认全部）")
+    p.add_argument("--json", action="store_true", help="输出聚合结果 JSON")
+    p.set_defaults(func=_run_sticker_stats)
+
+
+def _run_sticker_stats(args):
+    import sticker_stats
+    sys.exit(sticker_stats.main(["--since", str(args.since)] + (["--json"] if args.json else [])))
+
+
 # ==================== 子命令：memory-dedupe ====================
 
 def _add_memory_dedupe(sub):
@@ -705,6 +740,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_memory_replay(sub)
     _add_memory_rebuild(sub)
     _add_memory_migrate_moments(sub)
+    _add_skeleton_ab(sub)
+    _add_sticker_stats(sub)
     _add_memory_dedupe(sub)
     _add_llm_cost(sub)
     _add_proactive_ab(sub)

@@ -10,6 +10,7 @@
 """
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -86,16 +87,27 @@ class TestRecord:
         log_cache_usage(SimpleNamespace(usage=None), "主回复")
         assert not _tmp_ledger.exists()
 
-    def test_missing_cache_fields_still_recorded(self, _tmp_ledger, capsys):
-        """网关不给 prompt_cache_* 时：**不打印**那行，但账照记。
+    def test_missing_cache_fields_still_recorded_and_printed(self, _tmp_ledger, capsys):
+        """网关不给缓存字段时：账照记，日志也照打（命中率打 `—`）。
 
-        只按"有没有缓存字段"决定记不记的话，换个模型就等于账本凭空少一半——
-        分账是要拿它对花费的，宁可记下来。
+        ⚠️ 2026-10-14 改：以前取不到 `prompt_cache_hit_tokens` 就直接 return，
+        **整行都不打**——换到 luna/gemini（它们把缓存藏在 `prompt_tokens_details.cached_tokens`）
+        之后，日志上看着像根本没在跑。现在两套写法都认，认不出也照打（带 `—`）。
         """
         u = SimpleNamespace(prompt_tokens=500, completion_tokens=10)   # 无 cache 字段
         log_cache_usage(_resp(u), "主回复")
-        assert capsys.readouterr().out == ""
+        out = capsys.readouterr().out
+        assert "输出=10" in out and "命中=—" in out
         assert _read(_tmp_ledger)[0]["prompt"] == 500
+
+    def test_openai_style_cache_fields_are_read(self, _tmp_ledger, capsys):
+        """OpenAI / Gemini 那套把缓存藏在 `prompt_tokens_details.cached_tokens` 里。"""
+        u = SimpleNamespace(prompt_tokens=1000, completion_tokens=20,
+                            prompt_tokens_details=SimpleNamespace(cached_tokens=800))
+        log_cache_usage(_resp(u), "主回复")
+        out = capsys.readouterr().out
+        assert "命中=800" in out and "80%" in out
+        assert _read(_tmp_ledger)[0]["hit"] == 800
 
     def test_survives_unwritable_path(self, monkeypatch, tmp_path):
         """旁路：写不进去也**绝不能**影响聊天。"""
@@ -235,3 +247,51 @@ class TestWiring:
         recs = await self._flush_once(monkeypatch, tmp_path, is_group=False)
         assert recs and {r["route"] for r in recs} == {"私"}
 
+
+
+class TestPerModelPrice:
+    """一本账里混着好几个模型时，**必须按各自的价算**（2026-10-14 降级链上线后）。
+
+    全按一套价会算歪：中转 gemini 的未命中输入是 0.375，deepseek 是 1——
+    按 deepseek 的价报出来会凭空翻 2.7 倍。
+    """
+
+    def test_known_model_uses_its_own_price(self):
+        assert llm_cost._prices_for({"model": "gemini-3.8-flash"}, (9, 9, 9)) \
+            == llm_cost.PRICE_BY_MODEL["gemini-3.8-flash"]
+
+    def test_unknown_model_falls_back(self):
+        """不认识的模型（新接的、或老记录没记 model）用调用方给的默认/命令行覆盖。"""
+        assert llm_cost._prices_for({"model": "某个没见过的"}, (9, 9, 9)) == (9, 9, 9)
+        assert llm_cost._prices_for({}, (9, 9, 9)) == (9, 9, 9)
+
+    def test_peak_multiplier_only_applies_to_deepseek(self):
+        """高峰加倍是 deepseek 官方的口径——**中转站那几家没这条**，别给他们加。"""
+        peak_ts = datetime(2026, 10, 14, 10, 0).timestamp()      # 10 点，落在高峰段
+        assert llm_cost._mult_for(peak_ts, "deepseek-flash") == llm_cost.PEAK_MULT
+        assert llm_cost._mult_for(peak_ts, "gemini-3.8-flash") == 1.0
+
+
+class TestUnderCountedRecords:
+    """两种会让钱凭空消失的记录形状（2026-10-14 实测账本里都有）。"""
+
+    def test_hit_without_miss_does_not_swallow_the_rest(self):
+        """报了命中、却没报未命中 → 剩下那截不能一分钱不算。
+
+        实测：v4.1 的 1842 条记录里有 **1182 条**是 `miss=0`，合计 **2.52M 输入 token**
+        完全没进账单。
+        """
+        assert llm_cost._tokens({"prompt": 1000, "hit": 400, "output": 5}) == (1000, 400, 600, 5)
+
+    def test_double_counted_cache_is_subtracted(self):
+        """中转 v4.1 把缓存量重复算进 prompt（实测 1646 → 3182 = 1646+1536），要先减回去。"""
+        rec = {"model": "deepseek-v4.1-flash", "prompt": 3182, "hit": 1536,
+               "miss": 0, "output": 100}
+        prompt, hit, miss, _ = llm_cost._tokens(rec)
+        assert prompt == 1646, "重复计入的 1536 要减掉"
+        assert miss == 110, "未命中 = 真实输入 1646 − 缓存 1536"
+
+    def test_other_models_are_not_touched(self):
+        """只有白名单里的模型才做这个减法——别的模型（如 grok）实测 prompt 是准的。"""
+        rec = {"model": "gemini-3.8-flash", "prompt": 2572, "hit": 0, "miss": 0, "output": 1}
+        assert llm_cost._tokens(rec) == (2572, 0, 2572, 1)

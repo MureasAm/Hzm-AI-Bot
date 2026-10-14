@@ -44,7 +44,8 @@ nonebot.init()
 
 from src.plugins.chatbot import retrieval  # noqa: E402
 from src.plugins.chatbot.rag import embed_query  # noqa: E402
-from src.plugins.chatbot.constants import ZHIPU_BASE_URL, DEEPSEEK_BASE_URL  # noqa: E402
+from src.plugins.chatbot.config import _get_clients  # noqa: E402
+from src.plugins.chatbot.constants import ZHIPU_BASE_URL  # noqa: E402
 from src.plugins.chatbot.persona import load_persona_rules  # noqa: E402
 from src.plugins.chatbot.retrieval import select_behavior_item  # noqa: E402
 from src.plugins.chatbot.routing import classify_l3  # noqa: E402  (L3：一次判行为 + 措辞)
@@ -66,10 +67,6 @@ def _env_key(name: str) -> str:
 
 def _zhipu_key() -> str:
     return _env_key("ZHIPU_API_KEY")
-
-
-def _deepseek_key() -> str:
-    return _env_key("OPENAI_API_KEY")
 
 
 # ==================== 单条 case 判定 ====================
@@ -193,7 +190,14 @@ async def run(cases, verbose: bool, only_id: str = None):
         print("❌ 未找到 ZHIPU_API_KEY（.env.prod）——评测需要与线上同款 embedding")
         return 1
     client = AsyncOpenAI(api_key=key, base_url=ZHIPU_BASE_URL)
-    ds_client = AsyncOpenAI(api_key=_deepseek_key(), base_url=DEEPSEEK_BASE_URL) if _deepseek_key() else None
+    # ⚠️ 对话客户端**必须借线上那个**（`config._get_clients()`），别自己拿
+    #    `OPENAI_API_KEY + DEEPSEEK_BASE_URL` 拼。
+    #    这里原来就是那么拼的：2026-10-14 线上把 `OPENAI_*` 换成了**中转站**（linkapi），
+    #    而下面写死的仍是 DeepSeek 官方的 base_url —— 等于把中转站的 key 发给 DeepSeek 官方，
+    #    **每一条 L3 / corpus 判定都 401**，脚本却照常打 PASS/FAIL、照常出汇总。
+    #    （实测 2026-10-15：48 条只过 33 条、behavior 7/18，全是这个 401 造出来的假红。）
+    #    借线上那个还顺带拿到降级链，与「corpus 一路镜像线上」的定位一致。
+    ds_client, _ = _get_clients()
 
     behaviors = load_persona_rules()
     print("🔍 检索评测 | 行为走 L3（LLM 判意图 + 关键词兜底），其余走 embedding")

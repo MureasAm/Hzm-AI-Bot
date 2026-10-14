@@ -198,7 +198,7 @@ class TestRecentStoresGroup:
         hit = {"id": "st_x", "file": "assets/stickers/st_x.png", "group": "吐槽"}
         seen = {}
 
-        async def fake_pick(client, reply, avoid_groups=None):
+        async def fake_pick(client, reply, avoid_groups=None, **kwargs):
             seen["avoid"] = avoid_groups
             return hit
         monkeypatch.setattr(cw, "pick_sticker", fake_pick)

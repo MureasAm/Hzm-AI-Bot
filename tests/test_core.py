@@ -643,7 +643,10 @@ class TestGroupEventAge:
 
         await core.handle_chat("12345", "群里有啥好玩的", is_group=True)
 
-        block = next((m["content"] for m in captured["msgs"] if "群聊现场" in m["content"]), "")
+        # ⚠️ 必须按**段头**匹配：骨架里也写着"【群聊现场】"（告诉她群里会多一块），
+        #    用 `in` 会先命中骨架那条 —— 断言就变成在测骨架、永远测不到群近况（2026-10-15 踩到）。
+        block = next((m["content"] for m in captured["msgs"]
+                      if m["content"].startswith("【群聊现场】")), "")
         assert "群里在聊新游戏（3天前）" in block, f"群近况该带相对时间，实际：{block}"
         # 刚发生的事不带时间前缀（humanize_gap 对 <90s 返回空串）——读起来就是"现在"，
         # 标个"1分钟前"反而是噪音。
@@ -719,6 +722,42 @@ class TestPrevSessionNote:
         monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
         msgs = core.build_message_list("在吗", [], "", [])
         assert not any("【上次聊过】" in m["content"] for m in msgs)
+
+
+class TestCorpusTimePrefix:
+    """corpus 每条**自己带**时间定性前缀（2026-10-15）。
+
+    段头那句总说明（"都是曾经发生的"）实测管不住模型——见 `docs/架构.md` §4.5「包装语无效」：
+    说明写在整块外面，模型读单条时不会往回看。所以把定性**挂到每条自己身上**。
+    ⚠️ 走的是**注入层**：数据层（statement_final）加前缀会让 421 条向量都多同一个常数偏移、
+    稀释条间区分度，还得重算全库——**别改成数据层**。
+    """
+
+    def _msgs(self, monkeypatch, texts):
+        from src.plugins.chatbot.retrieval import RetrievalItem
+        monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
+        items = [RetrievalItem(source="corpus", item_id=str(i), score=0.9, text=t)
+                 for i, t in enumerate(texts)]
+        return core.build_message_list("你最近忙不忙", items, "", [])
+
+    def test_every_corpus_line_carries_the_prefix(self, monkeypatch):
+        msgs = self._msgs(monkeypatch, ["她第二天要去拿搬家的钥匙。", "她上周熬夜改稿到三点。"])
+        block = [m["content"] for m in msgs if m["content"].startswith("【她经历过的相关背景】")]
+        assert block, "corpus 块没注入"
+        assert block[0].count("- 【这是过去发生过的事】") == 2
+        # 前缀和原句必须**同一条线**上（分开写就等于又变成"块级说明"了）
+        assert "- 【这是过去发生过的事】她第二天要去拿搬家的钥匙。" in block[0]
+
+    def test_behavior_lines_do_not_carry_it(self, monkeypatch):
+        """行为指令是"现在该怎么做"，不是过去的事——不能带这个前缀。"""
+        from src.plugins.chatbot.retrieval import RetrievalItem
+        monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
+        items = [RetrievalItem(source="behavior", item_id="被夸时嘴硬否认", score=1.0,
+                               text="【被夸时嘴硬否认】\n回应模式：压低评价。")]
+        msgs = core.build_message_list("你好厉害", items, "", [])
+        joined = "\n".join(m["content"] for m in msgs)
+        assert "【当前情境下的行为指令】" in joined
+        assert "【这是过去发生过的事】" not in joined
 
 
 class TestRetrievePreferences:

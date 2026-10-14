@@ -19,7 +19,7 @@ NoneBot2 + OneBot v11(NapCat) 的"灰泽满"人格聊天机器人。核心是**�
 
 ## 怎么跑 / 怎么测
 - 启动：NapCat 自己开 → `env\python.exe api_v2.py`(GPT-SoVITS,端口9880) → `python bot.py`（或双击 `启动.bat`）。**改代码/数据后要重启 bot**（有进程内缓存）。
-- 测试：`.venv\Scripts\python.exe -m pytest -q`（**907 个**，全绿才算完）。
+- 测试：`.venv\Scripts\python.exe -m pytest -q`（**947 个**，全绿才算完）。
   ⚠️ **数字的权威在 `docs/地图.md` §10**——改了用例数去那里改一次，然后跑
   `.venv/Scripts/python.exe scripts/check_docs.py` 看还有哪几处没跟上（别只改本文件）。
 - 改**检索/判据/素材**后必跑这两个（unit test 测不出"检索该不该命中"）：
@@ -35,7 +35,7 @@ NoneBot2 + OneBot v11(NapCat) 的"灰泽满"人格聊天机器人。核心是**�
 
 ## 别碰 / 危险
 - `generate-persona` 会覆盖人工人格产物，**还会重建已删除的 `core/traits.json` / `core/styles.json`** → 已加 `--danger`，别乱跑。
-- `generate-vectors` 别省略 `-i`（缺省指向 statement_final；内置 RAW_CORPUS 是过期副本会覆盖线上421条）。
+- `generate-vectors` 别省略 `-i`（缺省指向 statement_final；内置 RAW_CORPUS 是过期副本会覆盖线上420条）。
 - `outputs/`、`data/`、`.env.prod` 不入库；`data/weibo_cookies.json` 是敏感会话。
 - 语音参考音频必须"无尾静音"（否则合成退化成"几个字+长空尾"）。
 
@@ -48,7 +48,7 @@ NoneBot2 + OneBot v11(NapCat) 的"灰泽满"人格聊天机器人。核心是**�
 - 长期记忆：`memory_v2.py`（**类型化条目，2026-10-10 起正位**：真实聊天重建 + 运行时写入/注入；
   临时关掉设 `MEMORY_V2_SHADOW=0` / `MEMORY_V2_INJECT=0`）。**v1 已于 2026-10-12 整个删除**
   ——根 `memory_manager.py` 和 `user_memory/long_term*` 都没了，名字/城市/事实全从 V2 取。
-- 离线工具：`scripts/run_tool.py <工具>`；**59 个脚本各干什么见 `docs/操作手册.md`**
+- 离线工具：`scripts/run_tool.py <工具>`；**63 个脚本各干什么见 `docs/操作手册.md`**
 
 ## 文档指针（按需懒读，别开头全灌）
 **`docs/` = 7 份正文 + 一个历史存档区**。

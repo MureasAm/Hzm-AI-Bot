@@ -61,7 +61,35 @@ EMBEDDING_MODEL = "embedding-3"
 
 # DeepSeek V4 默认开启思考模式；思考模式下 temperature 等参数不被支持，
 # 故对聊天 / 记忆提取调用显式禁用思考。
-THINKING_DISABLED = {"extra_body": {"thinking": {"type": "disabled"}}}
+# ⚠️ 两个键一起发，是为了**跨端点通用**（2026-10-14 三家实测都接受）：
+#   · `extra_body.thinking=disabled` 是 DeepSeek / 智谱那一套；
+#   · `reasoning_effort=none` 是 GPT-5 系那一套——中转站的 luna 是**推理模型**，
+#     **不关它额度会全花在思考上**（实测传 max_tokens=20 能吐 283~1342 个 token）。
+# 各家会忽略自己不认识的键，所以一起发最省事。
+THINKING_DISABLED = {"extra_body": {"thinking": {"type": "disabled"}}, "reasoning_effort": "none"}
+
+# **按模型**的参数覆盖：每种模型"调思考"的写法不一样，认错了它就不当回事。
+# 这里是**查表**，链上每一层按自己的 model 名取；没有条目的层不动调用方的参数。
+#
+# - `deepseek-v4.1-flash`（中转）：收到 `thinking=disabled` 照样思考，而且思考**计入
+#   max_tokens**——主回复额度 150 被烧光后正文永远是空串（`finish_reason=length`）。
+#   它认 DeepSeek 那套 `budget_tokens=0`。（已不在链上，留条目便于换回去。）
+# - `gemini-3.8-flash`（中转）：**它根本关不掉思考**——Google 官方[1]写死它只支持
+#   low/medium/high，默认 medium，没有 minimal。所以只能压到 `low`，压不掉就只能忍。
+#   官方字段是 `generation_config.thinking_level`（实测中转认这个写法，不认
+#   `thinking_budget=0` 那套）。
+#
+# [1] https://ai.google.dev/gemini-api/docs/thinking（2026-10-14 抓的官方支持表）
+MODEL_EXTRA_PARAMS = {
+    "deepseek-v4.1-flash": {"thinking": {"type": "enabled", "budget_tokens": 0}},
+    "gemini-3.8-flash": {"generation_config": {"thinking_level": "low"}},
+}
+
+# 单次请求的超时（秒）。**必须显式设**：openai SDK 默认 600s，而上游偶发"只是卡住不返回"
+# （实测中转站 luna 6 次里 1 次挂到 60s+）——不设的话那一轮会干等十分钟才轮到降级，
+# 用户那边只看到"她不回话"。90s 是给正常长回复留的余量（真实主回复实测都在 30s 内）。
+# 另见 `config._mk_client`（连带把 SDK 自带的 2 次重试关掉——我们的降级链就是重试机制）。
+LLM_TIMEOUT_SEC = 90
 
 # ==================== 对话参数 ====================
 CHAT_TEMPERATURE = 0.85       # 实验：回高温度（低温度让模型更走 RP 默认括号模板）

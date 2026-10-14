@@ -13,13 +13,39 @@
 """
 import json
 import os
+import time
 
 from .constants import PROJECT_ROOT, THINKING_DISABLED
 from .config import log_cache_usage, _get_model_name, extract_chat_content
 
 STICKER_FILE = PROJECT_ROOT / "persona" / "media" / "stickers.json"
 
+#: 表情包决策流水（统计用）。**唯一的数据源**——在此之前"发了哪张"只 print 到控制台，
+#: 落盘一份才谈得上"哪些图从没被用过 / 哪一类被反复用"。读它的是 `scripts/sticker_stats.py`。
+#: 不入库（见 .gitignore）；一行失败静默，绝不因为统计拖垮发送。
+STICKER_LOG = PROJECT_ROOT / "data" / "sticker_log.jsonl"
+
 _stickers_cache = None
+
+
+def log_event(event: str, *, session="", kind: str = "", sticker: dict | None = None,
+              why: str = "") -> None:
+    """记一行表情包决策。event ∈ sent / none / cooldown / sent_failed。"""
+    try:
+        rec = {
+            "t": round(time.time(), 3),
+            "session": str(session or ""),
+            "kind": kind,
+            "event": event,
+            "id": (sticker or {}).get("id", ""),
+            "group": (sticker or {}).get("group", ""),
+            "why": (why or "")[:60],
+        }
+        STICKER_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with open(STICKER_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
 
 # ⚠️ **别重排这段提示词**（2026-10-09）：`{{reply}}/{{avoid}}` 这些**每轮都变**的变量必须留在
 # 后面。DeepSeek 的缓存按**前缀**匹配，变量放前面（原来在 14%）会让后面整份表情目录
@@ -75,7 +101,8 @@ def _options_text(items: list) -> str:
     return "\n".join(lines)
 
 
-async def pick_sticker(deepseek_client, reply: str, avoid_groups: list | None = None) -> dict | None:
+async def pick_sticker(deepseek_client, reply: str, avoid_groups: list | None = None,
+                       session="", kind: str = "") -> dict | None:
     """给这句话挑一张表情；没有十分对应的返回 None。
 
     `avoid_groups`：**最近发过的类别**（不是单张）——别连着发观感相近的图。
@@ -117,18 +144,22 @@ async def pick_sticker(deepseek_client, reply: str, avoid_groups: list | None = 
         data = json.loads(content)
         sid = data.get("id")
         if not sid:
+            log_event("none", session=session, kind=kind, why=str(data.get("why") or ""))
             return None
         hit = next((s for s in items if s["id"] == sid), None)  # 拦住模型编的 id
         if hit is None:
             print(f"⚠️ 表情判定给了不存在的 id={sid!r}，忽略")
+            log_event("none", session=session, kind=kind, why=f"bad_id:{sid}")
             return None
         # 「最近发过的类别」在提示词里也说了，但**模型不一定听**（实测 2 次里 1 次照选）。
         # 所以这里再用代码拦一道：宁可这轮不发，也不连着甩同一类的。
         if hit.get("group") and hit["group"] in (avoid_groups or []):
             print(f"[表情包] 判定选了最近发过的类别「{hit['group']}」，这轮不发")
+            log_event("none", session=session, kind=kind, sticker=hit, why="avoid_group")
             return None
         print(f"[表情包] 选 {sid}［{hit.get('group', '')}］（{str(data.get('why') or '')[:20]}）")
         return hit
     except Exception as e:
         print(f"⚠️ 表情包判定失败（不发）: {e}")
+        log_event("none", session=session, kind=kind, why=f"error:{e}")
         return None

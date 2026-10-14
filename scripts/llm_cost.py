@@ -49,14 +49,50 @@ USAGE_FILE = _common.DATA_DIR / "llm_usage.jsonl"
 #    别再用"prompt 总量"排序，要看 miss 和输出。
 PRICE_HIT, PRICE_MISS, PRICE_OUT = 0.02, 1.0, 4.0
 
+# **按模型的单价**（元/百万，命中 / 未命中 / 输出）。
+#
+# 为什么非有不可（2026-10-14）：降级链上线后一本账里**混着好几个模型**，
+# 全按一套价算会把账算歪——比如中转的 gemini，未命中输入只有 0.375，
+# 是 deepseek 的 1/2.7，按 deepseek 的价报出来会凭空翻倍。
+#
+# ⚠️ **高峰加倍只对 deepseek 官方成立**（用户 2026-10-14 给的口径是 deepseek 的），
+# 中转站那几家没这条——所以加倍只加在 `PEAK_MODELS` 里的模型上。
+PRICE_BY_MODEL = {
+    # 官方 deepseek（FALLBACK_*，链的最后一层）
+    "deepseek-flash": (0.02, 1.0, 4.0),
+    # 中转站（价格由用户 2026-10-14 提供）
+    # ⚠️ 两个站挂着**同名的 gemini 但价不一样**——刚好模型名不同，能分开：
+    "gemini-3.1-flash-lite-preview": (0.0125, 0.125, 0.75),   # krill（现挂）
+    "gemini-3.1-flash-lite": (0.0125, 0.125, 0.75),            # linkapi（与 krill 同价）
+    "gemini-3.8-flash": (0.0375, 0.375, 1.88),
+    "claude-haiku-4-5-20251001": (0.0342, 0.342, 1.71),
+    "deepseek-v4.1-flash": (0.014, 0.7, 2.8),      # 中转七折
+    "gpt-5.6-luna": (0.02, 0.2, 1.2),
+}
+
+# 只有这几个模型吃高峰加倍（deepseek 官方的口径）；中转站的不加
+PEAK_MODELS = {"deepseek-flash"}
+
+# 中转站这些模型**把缓存量重复算进了 prompt**（2026-10-14 实测）：
+# 同一段提示词连问两次，第一次 `prompt=1646`，第二次 `prompt=3182`——正好 1646+1536（cached）。
+# 所以对它们要先减掉那一份，否则输入量凭空翻倍。
+DOUBLE_COUNTS_CACHE = {"deepseek-v4.1-flash"}
+
+
+def _prices_for(rec: dict, fallback):
+    """这条记录用哪套单价：**认识这个模型就用它自己的**，不认识就用传进来的默认/命令行覆盖。"""
+    return PRICE_BY_MODEL.get(str(rec.get("model") or ""), fallback)
+
 # 高峰时段（本地时间，左闭右开）+ 倍率：用户 2026-10-14 给的口径
 # ——「9~12 以及 14~18 价钱双倍」。**按每条记录自己的小时算**，不是按整本账算。
 PEAK_HOURS = ((9, 12), (14, 18))
 PEAK_MULT = 2.0
 
 
-def _mult_for(ts: float) -> float:
-    """这条记录落在高峰段吗（本地时间）。"""
+def _mult_for(ts: float, model: str = "") -> float:
+    """这条记录落在高峰段吗（本地时间）。**只对 `PEAK_MODELS` 里的模型加倍**。"""
+    if model and model not in PEAK_MODELS:
+        return 1.0
     hour = datetime.fromtimestamp(ts).hour
     return PEAK_MULT if any(a <= hour < b for a, b in PEAK_HOURS) else 1.0
 
@@ -113,8 +149,14 @@ def _tokens(rec: dict) -> tuple[int, int, int]:
     hit = int(rec.get("hit") or 0)
     miss = int(rec.get("miss") or 0)
     out = int(rec.get("output") or 0)
+    if str(rec.get("model") or "") in DOUBLE_COUNTS_CACHE:
+        prompt = max(prompt - hit, 0)          # 先把它多算的那份减回去
     if hit + miss == 0:
-        miss = prompt
+        miss = prompt                          # 完全没有缓存字段 → 整段都算未命中
+    elif miss == 0 and prompt > hit:
+        # 报了命中却没报未命中（2026-10-14 实测 1182/1842 条 v4.1 记录是这样）——
+        # 不改的话剩下那截**一分钱都不算**，2.52M 输入 token 会凭空消失。
+        miss = prompt - hit
     return prompt, hit, miss, out
 
 
@@ -172,7 +214,9 @@ def summarize(records: list[dict], prices, peak: bool = True) -> dict:
         tag = str(rec.get("tag") or "（无 tag）")
         t = float(rec.get("t") or 0)
         day = datetime.fromtimestamp(t).strftime("%Y-%m-%d")
-        y = _yen(hit, miss, out, prices, _mult_for(t) if peak else 1.0)
+        model = str(rec.get("model") or "")
+        y = _yen(hit, miss, out, _prices_for(rec, prices),
+                 _mult_for(t, model) if peak else 1.0)
         for bucket, key in ((by_route, route), (by_pair, (route, tag)), (by_day, day)):
             b = bucket[key]
             b[0] += 1
@@ -318,11 +362,17 @@ def main(argv=None) -> int:
           f" ｜ 输出 {_fmt_tok(out)} tok")
     print(f"   估算花费 {_fmt_yen(yen)}（这本账的 {hours:.1f} 小时）"
           f"｜ **折合 {_fmt_yen(yen * 24 / hours)}/天**")
-    print(f"   单价 命中 {prices[0]} / 未命中 {prices[1]} / 输出 {prices[2]} 元每百万"
-          f"（⚠️ 我自己填的，不是账单；对不上就拿 --price-* 覆盖）")
+    known = sorted({str(r.get("model") or "") for r in records} & set(PRICE_BY_MODEL))
+    print(f"   **按模型定价**：认识的模型用自己的价（{ '、'.join(known) or '无' }），"
+          f"其余用 命中 {prices[0]} / 未命中 {prices[1]} / 输出 {prices[2]} 元每百万")
+    print(f"   ⚠️ 单价是手填的、不是账单；对不上就拿 --price-* 覆盖。"
+          f"⚠️ 中转站有的通道不报缓存（实测 haiku / gemini-3.8-flash 全是 0），那些按全价估")
     if not args.no_peak:
-        peak_recs = [r for r in records if _mult_for(float(r.get("t") or 0)) > 1]
-        peak_y = sum(_yen(*_tokens(r)[1:], prices, PEAK_MULT) for r in peak_recs)
+        peak_recs = [r for r in records
+                     if _mult_for(float(r.get("t") or 0), str(r.get("model") or "")) > 1]
+        peak_y = sum(_yen(*_tokens(r)[1:], _prices_for(r, prices),
+                          _mult_for(float(r.get("t") or 0), str(r.get("model") or "")))
+                     for r in peak_recs)
         off_y = yen - peak_y
         print(f"   高峰段（9~12 / 14~18，×{PEAK_MULT:g}）：{len(peak_recs)} 次调用花了 "
               f"{_fmt_yen(peak_y)}（占 {peak_y / yen:.0%}）；其余 {_fmt_yen(off_y)}")

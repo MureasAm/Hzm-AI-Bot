@@ -20,6 +20,11 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# 只收 tests/。必须显式钉死：2026-10-15 把同担交接包放进 assets/handoff/ 之后，
+# 它自带的 40 多个测试文件被一起收集，整个 pytest 直接 25 errors 中断。
+# 那些是**另一个项目**的测试（依赖它自己的包结构与未装的依赖），本仓不跑、也不该跑。
+testpaths = ["tests"]
+norecursedirs = ["assets", "outputs", "video", "env", ".venv", "napcat", "node_modules"]
 
 [tool.nonebot]
 plugin_dirs = ["src/plugins"]

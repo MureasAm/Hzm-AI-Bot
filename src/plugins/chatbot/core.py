@@ -463,7 +463,14 @@ def build_message_list(user_msg: str, fused_items: list,
 
     # 直播记忆（source=corpus）：只当"背景记忆"，不参与风格示范
     if corpus:
-        context = "\n".join(f"- {it.text}" for it in corpus if it.text)
+        # ⚠️ **每条自己带时间定性前缀**（2026-10-15，用户定的）。
+        #    段头那句总说明（"都是曾经发生的"）实测管不住模型——项目自己的
+        #    「包装语无效」结论（`docs/架构.md` §4.5）说的就是这个：说明写在整块外面，
+        #    模型读单条时不会往回看。加在**每条自己身上**，是对那条结论的一次正面下注
+        #    （时间语义是 §4.5 明说"可能仍有效"的那一类，与"规定怎么用"不同）。
+        #    ⚠️ 走**注入层**不改数据：corpus 每条都进 embedding，数据层加前缀 = 给 421 个
+        #    向量加同一个常数偏移、稀释条间区分度，还要重算全库。要回退，改这一行即可。
+        context = "\n".join(f"- 【这是过去发生过的事】{it.text}" for it in corpus if it.text)
         if context:
             messages.append({
                 "role": "system",

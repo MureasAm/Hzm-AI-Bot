@@ -23,7 +23,7 @@ from .config import set_llm_route
 from .memory import get_user_history, append_user_history
 from .group_gate import should_reply_in_group
 from .chatlog import log_turn
-from .stickers import pick_sticker
+from .stickers import pick_sticker, log_event
 from .reply_style import (
     split_reply, split_delay, clean_reply,
 )
@@ -310,13 +310,16 @@ def _sticker_st(target_id: str) -> dict:
 async def _maybe_send_sticker(win: _UserWindow, reply: str) -> None:
     """冷却到点 + 有十分对应的表情 → 补发一张。全程不影响已经发出去的文字。"""
     st = _sticker_st(win.target_id)
+    kind = "private" if win.is_private else "group"
     if st["turns"] < STICKER_COOLDOWN_TURNS:
         st["turns"] += 1
+        log_event("cooldown", session=win.target_id, kind=kind)
         return
     deepseek_client, _ = _get_clients()
     # avoid 传**全部**最近发过的**类别**（不只最近 1 个）：光防"连着发"不够，
     # 用户报的是"同类"太频繁 —— 换个话题回来还会撞上同一类。
-    hit = await pick_sticker(deepseek_client, reply, avoid_groups=st["recent"])
+    hit = await pick_sticker(deepseek_client, reply, avoid_groups=st["recent"],
+                             session=win.target_id, kind=kind)
     if not hit:
         st["turns"] += 1
         return
@@ -327,8 +330,10 @@ async def _maybe_send_sticker(win: _UserWindow, reply: str) -> None:
         else:
             await win.bot.send_group_msg(group_id=win.target_id, message=img)
         print(f"[表情包] 已发送 {hit['id']}［{hit.get('group', '')}］")
+        log_event("sent", session=win.target_id, kind=kind, sticker=hit)
     except Exception as e:
         print(f"⚠️ 表情包发送失败（忽略）: {e}")
+        log_event("sent_failed", session=win.target_id, kind=kind, sticker=hit, why=str(e))
     st["turns"] = 0
     st["recent"] = ([hit.get("group") or hit["id"]] + st["recent"])[:STICKER_RECENT_KEEP]
 

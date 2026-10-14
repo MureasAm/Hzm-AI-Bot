@@ -31,7 +31,7 @@ def _isolate_local_stores(tmp_path, monkeypatch):
     `_ensure_migrated()` 首次运行会去拆真实那份 `user_memory/short_term.json`
     （拆完还改名存档）——只要有一个用例顺手写一条记忆，就会动到线上数据。
     """
-    from src.plugins.chatbot import chatlog, memory, session_memory, config
+    from src.plugins.chatbot import chatlog, memory, session_memory, config, stickers
 
     monkeypatch.setattr(memory, "MEMORY_DIR", tmp_path / "short_term")
     monkeypatch.setattr(memory, "MEMORY_FILE", tmp_path / "short_term.json")
@@ -45,4 +45,7 @@ def _isolate_local_stores(tmp_path, monkeypatch):
     # LLM 用量账本（2026-10-13）：跑用例时调用过 log_cache_usage 就会往
     # data/llm_usage.jsonl 追加——那是**真实花费的账**，不能被测试记录污染。
     monkeypatch.setattr(config, "USAGE_LOG_FILE", tmp_path / "llm_usage.jsonl")
+    # 表情包决策流水（2026-10-15）：`pick_sticker` 每次返回 None 都会记一行，
+    # 直接跑用例就会往真实 data/sticker_log.jsonl 灌测试数据——同一类坑，一起收掉。
+    monkeypatch.setattr(stickers, "STICKER_LOG", tmp_path / "sticker_log.jsonl")
     # （v1 长期记忆 v1 已于 2026-10-12 整个删除，不再需要隔离它的目录/文件）

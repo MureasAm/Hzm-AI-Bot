@@ -10,8 +10,8 @@
 
 ## 两边的端点从哪来
 
-A 侧＝**线上正在用的那套**（`OPENAI_API_BASE/KEY/MODEL`）；B 侧＝`AB_B_*`。
-2026-10-14 线上整体切到中转站的 gemini 之后，这里就把 `AB_B_*`（= 原来的 deepseek）当对照臂。
+A 侧＝**线上正在用的那套**（`OPENAI_API_BASE/KEY/MODEL`）；B 侧＝`FALLBACK_*`
+（那就是线上**自动兜底**用的同一个端点——它是 deepseek 官方）。
 
 ## 用法
 
@@ -73,10 +73,10 @@ async def run_reply(n: int, route: str, model_b: str) -> None:
     from src.plugins.chatbot.config import _get_clients, _get_model_name
     from src.plugins.chatbot.constants import THINKING_DISABLED
 
-    base = _common.get_api_key("AB_B_API_BASE") or _common.get_api_key("JUDGE_API_BASE")
-    key = _common.get_api_key("AB_B_API_KEY") or _common.get_api_key("JUDGE_API_KEY")
+    base = _common.get_api_key("FALLBACK_API_BASE")
+    key = _common.get_api_key("FALLBACK_API_KEY")
     if not (base and key):
-        print("❌ 没配对照端点（.env.prod 里的 AB_B_API_BASE / AB_B_API_KEY）")
+        print("❌ 没配对照端点（.env.prod 里的 FALLBACK_API_BASE / FALLBACK_API_KEY）")
         return
     other = AsyncOpenAI(base_url=base, api_key=key)
     ds, zhipu = _get_clients()
@@ -134,8 +134,8 @@ async def run_judge(n: int, model_b: str) -> None:
     from src.plugins.chatbot.config import _get_clients
     from src.plugins.chatbot.constants import THINKING_DISABLED
 
-    other = AsyncOpenAI(base_url=_common.get_api_key("AB_B_API_BASE") or _common.get_api_key("JUDGE_API_BASE"),
-                        api_key=_common.get_api_key("AB_B_API_KEY") or _common.get_api_key("JUDGE_API_KEY"))
+    other = AsyncOpenAI(base_url=_common.get_api_key("FALLBACK_API_BASE"),
+                        api_key=_common.get_api_key("FALLBACK_API_KEY"))
     ds, _ = _get_clients()
     beh = load_persona_rules()
     turns = _load_real_turns(n, "")
@@ -177,8 +177,8 @@ async def run_replay(n_sessions: int, turns: int, model_b: str) -> None:
     from src.plugins.chatbot.constants import THINKING_DISABLED
     from src.plugins.chatbot.reply_style import clean_reply
 
-    other = AsyncOpenAI(base_url=_common.get_api_key("AB_B_API_BASE") or _common.get_api_key("JUDGE_API_BASE"),
-                        api_key=_common.get_api_key("AB_B_API_KEY") or _common.get_api_key("JUDGE_API_KEY"))
+    other = AsyncOpenAI(base_url=_common.get_api_key("FALLBACK_API_BASE"),
+                        api_key=_common.get_api_key("FALLBACK_API_KEY"))
     ds, zhipu = _get_clients()
     model_a = _get_model_name()
 
@@ -257,13 +257,13 @@ def main(argv=None) -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--n", type=int, default=12, help="取几条真实轮次（默认 12）")
     ap.add_argument("--route", default="私", choices=["私", "群", ""], help="私聊/群聊（默认私）")
-    ap.add_argument("--model-b", default=None, help="B 侧模型（缺省读 .env.prod 的 AB_B_MODEL）")
+    ap.add_argument("--model-b", default=None, help="B 侧模型（缺省读 .env.prod 的 FALLBACK_MODEL）")
     ap.add_argument("--judge", action="store_true", help="跑判据 A/B（行为分类一致率）")
     ap.add_argument("--replay", action="store_true", help="持续上下文回放（cold vs warm 并排）")
     ap.add_argument("--sessions", type=int, default=2, help="回放几段真实会话（默认 2）")
     ap.add_argument("--turns", type=int, default=8, help="每段回放几轮（默认 8）")
     args = ap.parse_args(argv)
-    model_b = args.model_b or _common.get_api_key("AB_B_MODEL") or _common.get_api_key("JUDGE_MODEL") or "gpt-5.6-luna"
+    model_b = args.model_b or _common.get_api_key("FALLBACK_MODEL") or "gpt-5.6-luna"
     if args.judge:
         return asyncio.run(run_judge(args.n, model_b)) or 0
     if args.replay:
