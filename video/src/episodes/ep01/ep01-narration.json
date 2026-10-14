@@ -1,0 +1,888 @@
+{
+  "title": "第一集：人格核心与完整注入链路",
+  "episode": "ep01",
+  "fps": 30,
+  "width": 1920,
+  "height": 1080,
+  "durationMs": 473580,
+  "narrationVoice": "灰泽满 GPT-SoVITS（HZM-SPEAK），全程不切换中性配音",
+  "readme": [
+    "旁白视角（规格 §2.1）：角色感与转场用灰泽满第一人称；架构事实用项目作者/工程视角。",
+    "音色始终是灰泽满。每 20~30 秒最多一次轻吐槽（规格 §2.1）。",
+    "**一行 = 一个完整句子 = 一次 TTS 调用**（不要为了字数把句子切开，那样念出来不连贯）。",
+    "字幕折行由渲染端负责；总时长随内容自然浮动，不为了凑 10 分钟而拉长停顿。",
+    "subtitleHighlight：只对核心词做短高亮（规格 §13.3）。"
+  ],
+  "scenes": [
+    {
+      "id": "cold-open",
+      "startMs": 0,
+      "endMs": 42220,
+      "kicker": "01 · 三板真实回复",
+      "title": "同一个模型，三种上下文",
+      "subtitle": "输入完全相同，改变的只有它当时看到的东西",
+      "visual": "cold-open"
+    },
+    {
+      "id": "system-prompt",
+      "startMs": 42220,
+      "endMs": 81040,
+      "kicker": "02 · 稳定骨架",
+      "title": "system_prompt.txt",
+      "subtitle": "决定她始终是谁，以及表达的边界",
+      "visual": "system-prompt"
+    },
+    {
+      "id": "behavior-core",
+      "startMs": 81040,
+      "endMs": 145800,
+      "kicker": "03 · 情景行为",
+      "title": "behaviors.json",
+      "subtitle": "情景 → 反应 → 例句",
+      "visual": "behavior-core"
+    },
+    {
+      "id": "files-to-messages",
+      "startMs": 145800,
+      "endMs": 171660,
+      "kicker": "04 · 关键转折",
+      "title": "文件不是模型输入",
+      "subtitle": "文件是人维护内容的单位，messages 才是模型接收的单位",
+      "visual": "files-to-messages"
+    },
+    {
+      "id": "three-domains",
+      "startMs": 171660,
+      "endMs": 214020,
+      "kicker": "05 · 三类内容",
+      "title": "人格、事实、现场",
+      "subtitle": "她会怎样反应 · 她知道什么 · 此刻发生了什么",
+      "visual": "three-domains"
+    },
+    {
+      "id": "four-gates",
+      "startMs": 214020,
+      "endMs": 282560,
+      "kicker": "06 · 四种判别",
+      "title": "四个问题，四种判别",
+      "subtitle": "每轮都需要吗 · 提到了吗 · 意思相近吗 · 是哪种人际情景",
+      "visual": "four-gates"
+    },
+    {
+      "id": "content-forms",
+      "startMs": 282560,
+      "endMs": 362560,
+      "kicker": "07 · 文件与内容形式",
+      "title": "什么内容，用什么形态进去",
+      "subtitle": "同一份材料，判别方式与注入段都不一样",
+      "visual": "content-forms"
+    },
+    {
+      "id": "full-trace",
+      "startMs": 362560,
+      "endMs": 430720,
+      "kicker": "08 · 完整链路",
+      "title": "三条消息穿过真实链路",
+      "subtitle": "固定 fixture · 真实代码产生的 trace",
+      "visual": "full-trace"
+    },
+    {
+      "id": "reply-output",
+      "startMs": 430720,
+      "endMs": 452280,
+      "kicker": "09 · 输出侧",
+      "title": "生成之后",
+      "subtitle": "清洗、语音或文字二选一、回写",
+      "visual": "reply-output"
+    },
+    {
+      "id": "closing",
+      "startMs": 452280,
+      "endMs": 473580,
+      "kicker": "10 · 收束",
+      "title": "文件名模型看不见",
+      "subtitle": "它读到的是内容的文本形态、role、注入位置和当前对话",
+      "visual": "closing"
+    }
+  ],
+  "lines": [
+    {
+      "id": "cold-open-1",
+      "sceneId": "cold-open",
+      "startMs": 300,
+      "endMs": 4680,
+      "text": "同一句话，同一个模型，我把它发三遍。",
+      "subtitleHighlight": [
+        "同一个模型"
+      ],
+      "estMs": 3897
+    },
+    {
+      "id": "cold-open-2",
+      "sceneId": "cold-open",
+      "startMs": 5060,
+      "endMs": 8660,
+      "text": "三遍的结果完全不同，而变的不是模型。",
+      "subtitleHighlight": [],
+      "estMs": 3708
+    },
+    {
+      "id": "cold-open-3",
+      "sceneId": "cold-open",
+      "startMs": 9040,
+      "endMs": 13380,
+      "text": "用户消息是同一句：你今天唱得特别好，我真的很喜欢。",
+      "subtitleHighlight": [],
+      "estMs": 5063
+    },
+    {
+      "id": "cold-open-4",
+      "sceneId": "cold-open",
+      "startMs": 13760,
+      "endMs": 17840,
+      "text": "左边这栏，只给模型这一句，什么背景都没有。",
+      "subtitleHighlight": [],
+      "estMs": 4397
+    },
+    {
+      "id": "cold-open-5",
+      "sceneId": "cold-open",
+      "startMs": 18220,
+      "endMs": 23260,
+      "text": "它礼貌地道谢，然后开始介绍自己是人工智能。",
+      "subtitleHighlight": [
+        "礼貌回应"
+      ],
+      "estMs": 4208
+    },
+    {
+      "id": "cold-open-6",
+      "sceneId": "cold-open",
+      "startMs": 23640,
+      "endMs": 30540,
+      "text": "中间这栏，多了一份基础提示词，她会压评价了，但还是有点飘。",
+      "subtitleHighlight": [
+        "稳定骨架"
+      ],
+      "estMs": 5918
+    },
+    {
+      "id": "cold-open-7",
+      "sceneId": "cold-open",
+      "startMs": 30920,
+      "endMs": 35500,
+      "text": "右边这栏，再多一条 behavior：被夸时嘴硬否认。",
+      "subtitleHighlight": [
+        "behavior"
+      ],
+      "estMs": 4370
+    },
+    {
+      "id": "cold-open-8",
+      "sceneId": "cold-open",
+      "startMs": 35880,
+      "endMs": 40820,
+      "text": "先挡回去，再别扭一下，这个动作就是灰泽满。",
+      "subtitleHighlight": [
+        "完整反应动作"
+      ],
+      "estMs": 4397
+    },
+    {
+      "id": "system-prompt-1",
+      "sceneId": "system-prompt",
+      "startMs": 42520,
+      "endMs": 46360,
+      "text": "先别急着看那十几段上下文。",
+      "subtitleHighlight": [],
+      "estMs": 2687
+    },
+    {
+      "id": "system-prompt-2",
+      "sceneId": "system-prompt",
+      "startMs": 46740,
+      "endMs": 51620,
+      "text": "最核心的其实就两件事：我是谁，还有这种时候我会怎么做。",
+      "subtitleHighlight": [
+        "人格"
+      ],
+      "estMs": 5397
+    },
+    {
+      "id": "system-prompt-3",
+      "sceneId": "system-prompt",
+      "startMs": 52000,
+      "endMs": 56240,
+      "text": "第一份是 system_prompt，稳定骨架，每一轮都在场。",
+      "subtitleHighlight": [
+        "常驻"
+      ],
+      "estMs": 4499
+    },
+    {
+      "id": "system-prompt-4",
+      "sceneId": "system-prompt",
+      "startMs": 56620,
+      "endMs": 61800,
+      "text": "它规定的是不应该随话题变化的东西：身份、说话节奏、自我称呼。",
+      "subtitleHighlight": [],
+      "estMs": 6085
+    },
+    {
+      "id": "system-prompt-5",
+      "sceneId": "system-prompt",
+      "startMs": 62180,
+      "endMs": 65080,
+      "text": "它擅长保证她始终是同一个人。",
+      "subtitleHighlight": [],
+      "estMs": 2853
+    },
+    {
+      "id": "system-prompt-6",
+      "sceneId": "system-prompt",
+      "startMs": 65460,
+      "endMs": 70540,
+      "text": "它不适合穷举每一种具体的人际情景，也不是越长越好。",
+      "subtitleHighlight": [],
+      "estMs": 4875
+    },
+    {
+      "id": "system-prompt-7",
+      "sceneId": "system-prompt",
+      "startMs": 70920,
+      "endMs": 75460,
+      "text": "所以不管用户说什么，这张骨架都不动，它保证的是不变。",
+      "subtitleHighlight": [],
+      "estMs": 5230
+    },
+    {
+      "id": "system-prompt-8",
+      "sceneId": "system-prompt",
+      "startMs": 75840,
+      "endMs": 79640,
+      "text": "至于变化，交给第二份文件。",
+      "subtitleHighlight": [],
+      "estMs": 2875
+    },
+    {
+      "id": "behavior-core-1",
+      "sceneId": "behavior-core",
+      "startMs": 81340,
+      "endMs": 86620,
+      "text": "第二份是 behaviors.json，我把它拆成三段：情景、反应、例句。",
+      "subtitleHighlight": [
+        "behavior"
+      ],
+      "estMs": 5709
+    },
+    {
+      "id": "behavior-core-2",
+      "sceneId": "behavior-core",
+      "startMs": 87000,
+      "endMs": 93540,
+      "text": "情景，说的是用户创造了什么处境；这一条是用户真诚夸她唱得好。",
+      "subtitleHighlight": [],
+      "estMs": 5897
+    },
+    {
+      "id": "behavior-core-3",
+      "sceneId": "behavior-core",
+      "startMs": 93920,
+      "endMs": 103100,
+      "text": "反应，说的是她往哪个方向走：先把评价压低或者挡回去，被夸真了再别扭一下，最后漏一点软话。",
+      "subtitleHighlight": [],
+      "estMs": 8607
+    },
+    {
+      "id": "behavior-core-4",
+      "sceneId": "behavior-core",
+      "startMs": 103480,
+      "endMs": 108880,
+      "text": "例句，就是她真实这么说过的几句，挂在这个情景底下。",
+      "subtitleHighlight": [],
+      "estMs": 5063
+    },
+    {
+      "id": "behavior-core-5",
+      "sceneId": "behavior-core",
+      "startMs": 109260,
+      "endMs": 114000,
+      "text": "情景负责选对抽屉，反应负责告诉模型往哪走，",
+      "subtitleHighlight": [],
+      "estMs": 4208
+    },
+    {
+      "id": "behavior-core-6",
+      "sceneId": "behavior-core",
+      "startMs": 114380,
+      "endMs": 120220,
+      "text": "例句负责告诉它，这个动作由灰泽满做出来是什么质感。",
+      "subtitleHighlight": [],
+      "estMs": 4875
+    },
+    {
+      "id": "behavior-core-7",
+      "sceneId": "behavior-core",
+      "startMs": 120600,
+      "endMs": 124800,
+      "text": "这些例句就是 few-shot，它不是让模型复制句子。",
+      "subtitleHighlight": [],
+      "estMs": 4122
+    },
+    {
+      "id": "behavior-core-8",
+      "sceneId": "behavior-core",
+      "startMs": 125180,
+      "endMs": 130720,
+      "text": "它给的是示范，示范必须绑在正确的情景上，而且行为不是固定回复表。",
+      "subtitleHighlight": [],
+      "estMs": 6230
+    },
+    {
+      "id": "behavior-core-9",
+      "sceneId": "behavior-core",
+      "startMs": 131100,
+      "endMs": 137040,
+      "text": "例句影响的是节奏和动作形态，最终那句话还是根据用户当前消息生成。",
+      "subtitleHighlight": [],
+      "estMs": 6042
+    },
+    {
+      "id": "behavior-core-10",
+      "sceneId": "behavior-core",
+      "startMs": 137420,
+      "endMs": 144400,
+      "text": "以前这些职责拆在更多文件里，现在稳定内容进骨架，示范按情景并进 behavior。",
+      "subtitleHighlight": [
+        "behavior"
+      ],
+      "estMs": 6703
+    },
+    {
+      "id": "files-to-messages-1",
+      "sceneId": "files-to-messages",
+      "startMs": 146100,
+      "endMs": 150580,
+      "text": "到这里要拐一个弯，也是整集最关键的一句。",
+      "subtitleHighlight": [],
+      "estMs": 4042
+    },
+    {
+      "id": "files-to-messages-2",
+      "sceneId": "files-to-messages",
+      "startMs": 150960,
+      "endMs": 155060,
+      "text": "文件名，模型是看不见的。",
+      "subtitleHighlight": [
+        "messages"
+      ],
+      "estMs": 2708
+    },
+    {
+      "id": "files-to-messages-3",
+      "sceneId": "files-to-messages",
+      "startMs": 155440,
+      "endMs": 160120,
+      "text": "它不知道有 system_prompt 这个文件，也不知道 behaviors 在哪一层目录。",
+      "subtitleHighlight": [],
+      "estMs": 5510
+    },
+    {
+      "id": "files-to-messages-4",
+      "sceneId": "files-to-messages",
+      "startMs": 160500,
+      "endMs": 165740,
+      "text": "文件是我们维护内容的单位，messages 才是模型真正接收的单位。",
+      "subtitleHighlight": [
+        "messages"
+      ],
+      "estMs": 5348
+    },
+    {
+      "id": "files-to-messages-5",
+      "sceneId": "files-to-messages",
+      "startMs": 166120,
+      "endMs": 170260,
+      "text": "中间隔着三个动作：读取、判断、格式化。",
+      "subtitleHighlight": [],
+      "estMs": 4252
+    },
+    {
+      "id": "three-domains-1",
+      "sceneId": "three-domains",
+      "startMs": 171960,
+      "endMs": 176500,
+      "text": "接下来把这些内容分成三类，全片颜色都按这个来。",
+      "subtitleHighlight": [],
+      "estMs": 4542
+    },
+    {
+      "id": "three-domains-2",
+      "sceneId": "three-domains",
+      "startMs": 176880,
+      "endMs": 181220,
+      "text": "第一类，人格，说的是她会怎样反应，就是刚才那两份。",
+      "subtitleHighlight": [
+        "人格"
+      ],
+      "estMs": 5252
+    },
+    {
+      "id": "three-domains-3",
+      "sceneId": "three-domains",
+      "startMs": 181600,
+      "endMs": 185380,
+      "text": "第二类，事实，说的是她知道什么。",
+      "subtitleHighlight": [
+        "事实"
+      ],
+      "estMs": 3563
+    },
+    {
+      "id": "three-domains-4",
+      "sceneId": "three-domains",
+      "startMs": 185760,
+      "endMs": 194740,
+      "text": "词是什么意思、她一贯的偏好、最深的经历、过去直播里发生过的事、这周的排班表、固定的梗。",
+      "subtitleHighlight": [],
+      "estMs": 8628
+    },
+    {
+      "id": "three-domains-5",
+      "sceneId": "three-domains",
+      "startMs": 195120,
+      "endMs": 198620,
+      "text": "第三类，现场，说的是此刻发生了什么。",
+      "subtitleHighlight": [
+        "现场"
+      ],
+      "estMs": 3897
+    },
+    {
+      "id": "three-domains-6",
+      "sceneId": "three-domains",
+      "startMs": 199000,
+      "endMs": 206940,
+      "text": "用户记忆、会话主题、最近几轮原文、时间、天气、直播状态、群聊、图片。",
+      "subtitleHighlight": [],
+      "estMs": 7505
+    },
+    {
+      "id": "three-domains-7",
+      "sceneId": "three-domains",
+      "startMs": 207320,
+      "endMs": 212620,
+      "text": "关键是其他层补的是事实、记忆和现场，不是另造一套人格。",
+      "subtitleHighlight": [],
+      "estMs": 5397
+    },
+    {
+      "id": "four-gates-1",
+      "sceneId": "four-gates",
+      "startMs": 214320,
+      "endMs": 219400,
+      "text": "内容有了，下一个问题是怎么判断这一轮需不需要它。",
+      "subtitleHighlight": [],
+      "estMs": 4708
+    },
+    {
+      "id": "four-gates-2",
+      "sceneId": "four-gates",
+      "startMs": 219780,
+      "endMs": 224860,
+      "text": "这块有四种判别，每种前面都是一个很朴素的问题。",
+      "subtitleHighlight": [],
+      "estMs": 4542
+    },
+    {
+      "id": "four-gates-3",
+      "sceneId": "four-gates",
+      "startMs": 225240,
+      "endMs": 232720,
+      "text": "第一种，问每轮都需要吗；需要就常驻，比如基础提示词、周表、当前时间。",
+      "subtitleHighlight": [
+        "常驻"
+      ],
+      "estMs": 7128
+    },
+    {
+      "id": "four-gates-4",
+      "sceneId": "four-gates",
+      "startMs": 233100,
+      "endMs": 241580,
+      "text": "第二种，问消息里明确提到了吗；靠关键词和正则，比如名词库、偏好、语料钩子、梗库的粗筛。",
+      "subtitleHighlight": [
+        "关键词"
+      ],
+      "estMs": 8817
+    },
+    {
+      "id": "four-gates-5",
+      "sceneId": "four-gates",
+      "startMs": 241960,
+      "endMs": 248740,
+      "text": "第三种，问意思相近吗；用向量召回，比如过去说过的那些事、还有最深刻的经历。",
+      "subtitleHighlight": [
+        "向量"
+      ],
+      "estMs": 7440
+    },
+    {
+      "id": "four-gates-6",
+      "sceneId": "four-gates",
+      "startMs": 249120,
+      "endMs": 255600,
+      "text": "第四种，问这是哪种人际情景、候选是不是真的相关；这个交给模型判断。",
+      "subtitleHighlight": [
+        "LLM"
+      ],
+      "estMs": 6585
+    },
+    {
+      "id": "four-gates-7",
+      "sceneId": "four-gates",
+      "startMs": 255980,
+      "endMs": 262680,
+      "text": "命中就点亮、进入待注入，没命中就保持灰色，放进本轮不注入。",
+      "subtitleHighlight": [],
+      "estMs": 5918
+    },
+    {
+      "id": "four-gates-8",
+      "sceneId": "four-gates",
+      "startMs": 263060,
+      "endMs": 268160,
+      "text": "但别理解成每个文件只用一种判别，有些路径是组合的。",
+      "subtitleHighlight": [],
+      "estMs": 4875
+    },
+    {
+      "id": "four-gates-9",
+      "sceneId": "four-gates",
+      "startMs": 268540,
+      "endMs": 273780,
+      "text": "语料会先有语义候选，再用词面补位，最后过一遍模型确认。",
+      "subtitleHighlight": [],
+      "estMs": 5397
+    },
+    {
+      "id": "four-gates-10",
+      "sceneId": "four-gates",
+      "startMs": 274160,
+      "endMs": 281160,
+      "text": "梗库是关键词先粗筛，再做语境确认；行为以情景分类为主，另有确定性兜底。",
+      "subtitleHighlight": [],
+      "estMs": 6918
+    },
+    {
+      "id": "content-forms-1",
+      "sceneId": "content-forms",
+      "startMs": 282860,
+      "endMs": 288640,
+      "text": "接下来这一段不逐个念文件，只回答一件事：什么内容用什么形态进去。",
+      "subtitleHighlight": [],
+      "estMs": 6230
+    },
+    {
+      "id": "content-forms-2",
+      "sceneId": "content-forms",
+      "startMs": 289020,
+      "endMs": 293660,
+      "text": "system_prompt：常驻，内容是稳定说明，注入成第一条 system message。",
+      "subtitleHighlight": [
+        "常驻"
+      ],
+      "estMs": 5790
+    },
+    {
+      "id": "content-forms-3",
+      "sceneId": "content-forms",
+      "startMs": 294040,
+      "endMs": 301920,
+      "text": "behaviors：看当前消息的人际情景，内容是情景反应例句，注入成一段行为指令。",
+      "subtitleHighlight": [
+        "behavior"
+      ],
+      "estMs": 6951
+    },
+    {
+      "id": "content-forms-4",
+      "sceneId": "content-forms",
+      "startMs": 302300,
+      "endMs": 308740,
+      "text": "语料：向量候选加词面补位，再过模型确认；它装的是过去发生过的事实陈述。",
+      "subtitleHighlight": [],
+      "estMs": 6918
+    },
+    {
+      "id": "content-forms-5",
+      "sceneId": "content-forms",
+      "startMs": 309120,
+      "endMs": 314360,
+      "text": "它不是一个可以直接复用的当前回答，注入成她经历过的相关背景。",
+      "subtitleHighlight": [],
+      "estMs": 5708
+    },
+    {
+      "id": "content-forms-6",
+      "sceneId": "content-forms",
+      "startMs": 314740,
+      "endMs": 320120,
+      "text": "作用是让她记得经历，但不能拿旧事去编今天的原因。",
+      "subtitleHighlight": [],
+      "estMs": 4708
+    },
+    {
+      "id": "content-forms-7",
+      "sceneId": "content-forms",
+      "startMs": 320500,
+      "endMs": 326940,
+      "text": "名词库、偏好、核心经历、周表，这些事实层各有各的判别方式。",
+      "subtitleHighlight": [],
+      "estMs": 6107
+    },
+    {
+      "id": "content-forms-8",
+      "sceneId": "content-forms",
+      "startMs": 327320,
+      "endMs": 332820,
+      "text": "名词库让她懂词，偏好是她一贯的样子，核心经历是最深的那几条。",
+      "subtitleHighlight": [],
+      "estMs": 5897
+    },
+    {
+      "id": "content-forms-9",
+      "sceneId": "content-forms",
+      "startMs": 333200,
+      "endMs": 338880,
+      "text": "周表是当前排班，梗库是固定该怎么答，命中就直接发出去。",
+      "subtitleHighlight": [],
+      "estMs": 5397
+    },
+    {
+      "id": "content-forms-10",
+      "sceneId": "content-forms",
+      "startMs": 339260,
+      "endMs": 347660,
+      "text": "还有一类只在最终 messages 里露面：时间、群聊现场、图片描述、批量归纳、短消息补全、连续索要次数。",
+      "subtitleHighlight": [
+        "messages"
+      ],
+      "estMs": 9290
+    },
+    {
+      "id": "content-forms-11",
+      "sceneId": "content-forms",
+      "startMs": 348040,
+      "endMs": 352380,
+      "text": "这些只标来源和注入段名，不再展开内部实现。",
+      "subtitleHighlight": [],
+      "estMs": 4208
+    },
+    {
+      "id": "content-forms-12",
+      "sceneId": "content-forms",
+      "startMs": 352760,
+      "endMs": 356040,
+      "text": "所以真的不是把所有文件都塞进去。",
+      "subtitleHighlight": [],
+      "estMs": 3187
+    },
+    {
+      "id": "content-forms-13",
+      "sceneId": "content-forms",
+      "startMs": 356420,
+      "endMs": 361160,
+      "text": "每一层都有机会判断，而不相关的内容能够保持沉默。",
+      "subtitleHighlight": [],
+      "estMs": 4708
+    },
+    {
+      "id": "full-trace-1",
+      "sceneId": "full-trace",
+      "startMs": 362860,
+      "endMs": 366300,
+      "text": "现在把整条链完整跑一遍。",
+      "subtitleHighlight": [],
+      "estMs": 2520
+    },
+    {
+      "id": "full-trace-2",
+      "sceneId": "full-trace",
+      "startMs": 366680,
+      "endMs": 370980,
+      "text": "人物和数据都是虚构的，但走的是真实代码。",
+      "subtitleHighlight": [],
+      "estMs": 4042
+    },
+    {
+      "id": "full-trace-3",
+      "sceneId": "full-trace",
+      "startMs": 371360,
+      "endMs": 379640,
+      "text": "周四晚上六点四十，广州小雨，用户阿澈刚下班，连着发了三条消息，读秒窗口让它们合成一批。",
+      "subtitleHighlight": [],
+      "estMs": 8440
+    },
+    {
+      "id": "full-trace-4",
+      "sceneId": "full-trace",
+      "startMs": 380020,
+      "endMs": 387600,
+      "text": "基础提示词常驻；周表命中，周四十九点开播；名词库当场命中，满神和绿冻都在里面。",
+      "subtitleHighlight": [
+        "常驻"
+      ],
+      "estMs": 7773
+    },
+    {
+      "id": "full-trace-5",
+      "sceneId": "full-trace",
+      "startMs": 387980,
+      "endMs": 394880,
+      "text": "核心经历向量命中了作家梦，也就是乌色月这一条；偏好命中了下雨天。",
+      "subtitleHighlight": [
+        "向量"
+      ],
+      "estMs": 6230
+    },
+    {
+      "id": "full-trace-6",
+      "sceneId": "full-trace",
+      "startMs": 395260,
+      "endMs": 401340,
+      "text": "行为分类把情景判成被推着要求时打太极，于是行为指令整段亮起。",
+      "subtitleHighlight": [
+        "LLM"
+      ],
+      "estMs": 5708
+    },
+    {
+      "id": "full-trace-7",
+      "sceneId": "full-trace",
+      "startMs": 401720,
+      "endMs": 408420,
+      "text": "语料召回了九条候选，模型确认后只留下一条，其余八条安静退场。",
+      "subtitleHighlight": [],
+      "estMs": 5897
+    },
+    {
+      "id": "full-trace-8",
+      "sceneId": "full-trace",
+      "startMs": 408800,
+      "endMs": 414780,
+      "text": "长期记忆给名字和城市，会话记忆给正在磨她念书这件事。",
+      "subtitleHighlight": [],
+      "estMs": 5042
+    },
+    {
+      "id": "full-trace-9",
+      "sceneId": "full-trace",
+      "startMs": 415160,
+      "endMs": 420540,
+      "text": "短期记忆带上她前两次都没答应，时间天气带上周四和广州小雨。",
+      "subtitleHighlight": [],
+      "estMs": 5542
+    },
+    {
+      "id": "full-trace-10",
+      "sceneId": "full-trace",
+      "startMs": 420920,
+      "endMs": 426160,
+      "text": "连续索要判定第三次，批量归纳说明这三条属于同一批。",
+      "subtitleHighlight": [],
+      "estMs": 4875
+    },
+    {
+      "id": "full-trace-11",
+      "sceneId": "full-trace",
+      "startMs": 426540,
+      "endMs": 429320,
+      "text": "最后拼出十五段 messages。",
+      "subtitleHighlight": [
+        "messages"
+      ],
+      "estMs": 2327
+    },
+    {
+      "id": "reply-output-1",
+      "sceneId": "reply-output",
+      "startMs": 431020,
+      "endMs": 433720,
+      "text": "模型生成之后，还没结束。",
+      "subtitleHighlight": [],
+      "estMs": 2708
+    },
+    {
+      "id": "reply-output-2",
+      "sceneId": "reply-output",
+      "startMs": 434100,
+      "endMs": 439780,
+      "text": "先做防复读检测，必要时重新生成，然后清洗掉多余括号和换行。",
+      "subtitleHighlight": [],
+      "estMs": 5730
+    },
+    {
+      "id": "reply-output-3",
+      "sceneId": "reply-output",
+      "startMs": 440160,
+      "endMs": 445360,
+      "text": "再决定语音还是文字，语音成功就不再发拆分文字。",
+      "subtitleHighlight": [],
+      "estMs": 4542
+    },
+    {
+      "id": "reply-output-4",
+      "sceneId": "reply-output",
+      "startMs": 445740,
+      "endMs": 450880,
+      "text": "然后写回短期记忆和长期记忆，这一集到这里就够了。",
+      "subtitleHighlight": [],
+      "estMs": 4708
+    },
+    {
+      "id": "closing-1",
+      "sceneId": "closing",
+      "startMs": 452580,
+      "endMs": 456280,
+      "text": "基础提示词负责让她始终是同一个人；",
+      "subtitleHighlight": [
+        "人格"
+      ],
+      "estMs": 3353
+    },
+    {
+      "id": "closing-2",
+      "sceneId": "closing",
+      "startMs": 456660,
+      "endMs": 461340,
+      "text": "behavior 负责让这个人在不同情景下做出不同反应。",
+      "subtitleHighlight": [
+        "人格"
+      ],
+      "estMs": 4160
+    },
+    {
+      "id": "closing-3",
+      "sceneId": "closing",
+      "startMs": 461720,
+      "endMs": 467560,
+      "text": "文件名模型看不见，它读到的是内容的文本形态、role 和注入位置。",
+      "subtitleHighlight": [
+        "messages"
+      ],
+      "estMs": 5800
+    },
+    {
+      "id": "closing-4",
+      "sceneId": "closing",
+      "startMs": 467940,
+      "endMs": 472180,
+      "text": "下一集讲记忆，她为什么还记得你之前说过什么。",
+      "subtitleHighlight": [
+        "fact"
+      ],
+      "estMs": 4375
+    }
+  ]
+}

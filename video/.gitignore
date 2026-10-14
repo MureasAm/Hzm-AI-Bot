@@ -1,5 +1,12 @@
 node_modules/
 out/
 *.log
-public/audio/*.wav
-public/audio/voiceover-report.json
+
+# 旁白音频全是**产物**：由 `scripts/generate-voiceover.py` 从 narration/ 文本
+# 重新合成（150+ 个逐句 wav + 合并轨 m4a + 生成报告），70MB+，不入库。
+#
+# ⚠️ 原来只写了 `public/audio/*.wav`——gitignore 的 `*` **不跨 `/`**，
+#    于是覆盖不到 `audio/ep01/` 那一整个子目录（2026-10-15 发现）。
+#    同一类"新子目录漏网"的坑，见根 .gitignore 里 user_memory 那条的注释。
+public/audio/*
+!public/audio/README.md

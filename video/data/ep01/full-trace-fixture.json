@@ -1,0 +1,170 @@
+{
+  "_readme": [
+    "EP01 完整链路演示的**固定虚构 fixture**（规格 §10.1）。",
+    "全部数据均为虚构、固定、可复现：时间固定为 2026-10-08 周四 18:40（+08:00），",
+    "天气固定为广州小雨，用户「阿澈」为虚构人物。",
+    "",
+    "⚠️ 本文件不含任何真实用户数据。生成 full-trace-result.json 的脚本会把",
+    "user_memory/ 与 Memory V2 存储整体重定向到临时目录，绝不读写真实 user_memory/。",
+    "",
+    "seed 段是**喂给真实代码的输入**（不是展示数据）：capture-full-trace.py 会把它写进",
+    "隔离存储，再调用真实的 handle_chat。展示用的字段是 clock / weather / userProfile /",
+    "session / recentTurns / incomingBatch。"
+  ],
+  "fixtureId": "ep01-full-trace-v1",
+  "fictional": true,
+  "frozenAt": {
+    "note": "制作时冻结的仓库状态",
+    "commit": "97a1e9540912372ad993c5e4249d2b97dd325030",
+    "commitDate": "2026-10-11"
+  },
+  "clock": "2026-10-08T18:40:00+08:00",
+  "clockDisplay": "周四 18:40",
+  "weather": {
+    "city": "广州",
+    "text": "小雨",
+    "temperatureC": 24
+  },
+  "userProfile": {
+    "name": "阿澈",
+    "city": "广州",
+    "note": "虚构用户"
+  },
+  "session": {
+    "topic": "用户在磨灰泽满念《乌色月》",
+    "mood": null
+  },
+  "scheduleNote": "周表取自 persona/world/schedule.json：周四 19:00 开播",
+  "recentTurns": [
+    {
+      "t": "2026-10-08T18:31:00+08:00",
+      "user": "在吗满神",
+      "bot": "在呢，怎么了"
+    },
+    {
+      "t": "2026-10-08T18:33:00+08:00",
+      "user": "能念一段乌色月给我听吗",
+      "bot": "……那个还没写完呢，念什么念。以后再说"
+    },
+    {
+      "t": "2026-10-08T18:36:00+08:00",
+      "user": "可以念一段乌色月给我听吗",
+      "bot": "灰泽满自己都没敢回头看那段，念出来多丢人"
+    }
+  ],
+  "incomingBatch": [
+    "满神，我这边还在下雨，刚下班",
+    "你今晚几点播来着？",
+    "下播后念一段《乌色月》给我听呗，这都第三遍了"
+  ],
+  "incomingBatchNote": "由读秒窗口（5~10 秒）合成一批，不压成一句人为的超长问题",
+  "seed": {
+    "_note": "喂给真实代码的输入状态。全部通过真实 API 写入隔离存储，不手改内部状态文件。",
+    "traceUserId": "_ep01_fixture_",
+    "memoryV2Items": [
+      {
+        "kind": "fact",
+        "key": "preferred_name",
+        "value": "阿澈",
+        "explicit": true,
+        "confidence": 0.95,
+        "temporal_scope": "timeless"
+      },
+      {
+        "kind": "fact",
+        "key": "city",
+        "value": "广州",
+        "explicit": true,
+        "confidence": 0.95,
+        "temporal_scope": "current"
+      },
+      {
+        "kind": "interaction_preference",
+        "key": "banter_tolerance",
+        "value": "high",
+        "explicit": true,
+        "confidence": 0.9,
+        "temporal_scope": "timeless"
+      },
+      {
+        "kind": "interaction_preference",
+        "key": "topic_preference",
+        "value": "engage",
+        "explicit": true,
+        "confidence": 0.9,
+        "temporal_scope": "timeless"
+      }
+    ],
+    "sessionState": {
+      "topic": "用户在磨灰泽满念《乌色月》",
+      "events": [
+        "用户两次要灰泽满念《乌色月》，都被挡回去了"
+      ]
+    },
+    "shortTerm": [
+      {
+        "t": 1791455460,
+        "text": "用户：在吗满神"
+      },
+      {
+        "t": 1791455480,
+        "text": "灰泽满：在呢，怎么了"
+      },
+      {
+        "t": 1791455580,
+        "text": "用户：能念一段乌色月给我听吗"
+      },
+      {
+        "t": 1791455600,
+        "text": "灰泽满：……那个还没写完呢，念什么念。以后再说"
+      },
+      {
+        "t": 1791455760,
+        "text": "用户：可以念一段乌色月给我听吗"
+      },
+      {
+        "t": 1791455780,
+        "text": "灰泽满：灰泽满自己都没敢回头看那段，念出来多丢人"
+      }
+    ],
+    "sameRequestReference": {
+      "_note": [
+        "「连续索要次数」在生产里由 routing.classify_l3 的 LLM 判定（same_request），不是本地计数。",
+        "memory.count_consecutive_requests 是**死代码**（全仓库只有它自己的定义，聊天路径不调用）。",
+        "下面这三句是 fixture 的**输入**，脚本会用真实的本地 bigram 判据做一次交叉核对，",
+        "只作为参考值写进结果，标明 method=local-reference，绝不冒充线上判定。"
+      ],
+      "sequence": [
+        "能念一段乌色月给我听吗",
+        "可以念一段乌色月给我听吗",
+        "下播后念一段《乌色月》给我听呗，这都第三遍了"
+      ],
+      "threshold": 0.6,
+      "expectedCount": 3
+    }
+  },
+  "expectedPaths": {
+    "_note": "规格 §10.3 / §10.4 列的预期亮灭。**脚本不预设结果**——真实跑出来是什么就记什么，",
+    "_note2": "capture 脚本只把这一节原样带进结果文件，供人工核对『命中是否与代码一致』（规格 §15 Phase 0 第 5 步）。",
+    "shouldHit": [
+      "system prompt（常驻）",
+      "schedule（固定演示周表）",
+      "terms（『满神』命中，优先级 on-demand；『乌色月』**不是** terms 词条，只存在于 core story 与 corpus）",
+      "core story（《乌色月》相关核心经历）",
+      "behavior（用户要求她做一件事/反复索要的情景）",
+      "用户长期记忆（名字、城市）",
+      "会话记忆（正在磨她念作品）",
+      "短期记忆（前两次索要与此前回复）",
+      "当前时间/天气（固定的周四 18:40、广州小雨）",
+      "连续索要（第三次）",
+      "批量归纳（三条消息属于同一批）"
+    ],
+    "shouldNotHit": [
+      "群聊现场（私聊，本轮不注入）",
+      "图片描述（无图片）",
+      "preference（按真实判别结果，不相关就保持灰色）",
+      "corpus（按真实召回与 LLM 确认结果，不预设必须命中）",
+      "legendary（没有真实触发就不亮）"
+    ]
+  }
+}
