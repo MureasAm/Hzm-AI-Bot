@@ -60,7 +60,6 @@ def _args(**over):
             RetrievalItem(source="corpus", item_id="c1", score=0.8,
                           text="灰泽满上周五鸽了直播，第二天自己先笑。"),
         ],
-        memory_context="用户住在杭州，养了一只叫豆豆的猫",
         user_history=["user：在吗", "灰泽满：干嘛", "user：问你个事"],
         batch_summary="用户连发了三条问直播时间",
         preference_items=[{"category": "食物", "text": "爱吃椰子鸡"}],

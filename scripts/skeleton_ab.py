@@ -88,7 +88,7 @@ async def _one(query: str, prompt_a: str, prompt_b: str, client, zhipu) -> dict:
     out = {}
     for tag, prompt in (("A", prompt_a), ("B", prompt_b)):
         core.SYSTEM_PROMPT = prompt
-        msgs = core.build_message_list(query, fused, "", [])
+        msgs = core.build_message_list(query, fused, [])
         out[tag] = await core.generate_reply(msgs)
     return out
 

@@ -76,6 +76,12 @@ def _lcs_len(a: str, b: str) -> int:
 _TIME_HOOK_RE = re.compile(r"凌晨|半夜|深夜|大半夜|大清早|一大早|[0-9]{1,2}\s*点")
 # 开头的一整组括号（可连着几组）：「（心虚）」「(笑)」「【小声】」
 _LEADING_PAREN_RE = re.compile(r"^(?:[（(【\[][^）)】\]]*[）)】\]]\s*)+")
+# 「说话人标注」：`灰泽满：……好啦，那那记着呢` 这种——**带冒号的名字是标注，不是她的话**。
+# 出处：注入里给的例句是 `粉丝说：{用户那句} → 灰泽满：{她的话}`（persona.py），
+# 模型偶尔把标注一起吐出来；历史记忆行也是 `灰泽满：{内容}` 这个格式（memory.py）。
+# 这类东西在 QQ 里一眼出戏，所以确定性兜底剥掉（黄金律 3：后处理只兜底，不改人设）。
+# ⚠️ 必须要求**冒号紧跟**名字：`她说：…`「灰泽满刚刚…」这类正常句子不能被误伤。
+_SPEAKER_LABEL_RE = re.compile(r"^(?:灰泽满|hzm|小满|满姐|满神|粉丝说|对方|用户|她|我)\s*[：:]\s*")
 
 
 def uses_time_hook(reply: str) -> bool:
@@ -265,13 +271,19 @@ def clean_reply(reply: str) -> str:
     text = re.sub(r"[ \t]*(?:\r?\n[ \t]*)+", "\n", text)
     text = re.sub(r"(?<=[，,。；;：:！!？?、…～~）)】\]])\n+", "", text)
     text = re.sub(r"\n+", "，", text)
-    # 去掉开头的连续括号前缀，如 （咽口水）你看...
+    # 去掉开头的括号前缀和说话人标注，如 （咽口水）你看… / 灰泽满：……好啦
+    # ⚠️ 两者会交替出现（「（心虚）灰泽满：X」），所以循环剥到剥不动为止。
     stripped = text
-    while stripped.startswith("（"):
-        idx = stripped.find("）")
-        if idx == -1:
+    for _ in range(4):
+        before = stripped
+        while stripped.startswith("（"):
+            idx = stripped.find("）")
+            if idx == -1:
+                break
+            stripped = stripped[idx + 1:].lstrip()
+        stripped = _SPEAKER_LABEL_RE.sub("", stripped)
+        if stripped == before:
             break
-        stripped = stripped[idx + 1:].lstrip()
     if not stripped:
         return text or reply  # 剥光了就回原样（用归一后的，别把换行又带出去）
     text = stripped

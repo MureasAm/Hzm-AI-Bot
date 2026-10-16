@@ -17,7 +17,7 @@ from src.plugins.chatbot import injection as inj
 EXPECTED_IDS = [
     "identity", "schedule", "profile", "preferences", "core_stories", "group",
     "terms", "session", "prev_session", "behaviors", "corpus", "commitment",
-    "memory", "history", "same_request", "batch", "query_hint", "now", "mood",
+    "history", "same_request", "batch", "query_hint", "now", "mood", "daily",
 ]
 
 

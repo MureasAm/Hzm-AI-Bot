@@ -47,7 +47,7 @@ RHYTHM = {"role": "system", "content": "【回复节奏】日常闲聊一句话�
 
 def base_msgs() -> list:
     """真实链路搭好的 messages（不含测试内容）。最后一条是用户那句话。"""
-    return core.build_message_list(QUERY, [], "", [])
+    return core.build_message_list(QUERY, [], [])
 
 
 def at_system(where: str) -> list:

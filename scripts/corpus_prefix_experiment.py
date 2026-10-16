@@ -59,7 +59,7 @@ HEADER_RE = re.compile(r"^【她经历过的相关背景】")
 def _msgs(kind: str, query: str) -> list:
     """按条件造 messages：只改 corpus 那一段的**外层包装**，条目内容一个字不动。"""
     it = RetrievalItem(source="corpus", item_id="0", score=0.9, text=FACT)
-    msgs = core.build_message_list(query, [it], "", [])
+    msgs = core.build_message_list(query, [it], [])
     out = []
     for m in msgs:
         c = m.get("content") or ""

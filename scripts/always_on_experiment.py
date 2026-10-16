@@ -203,7 +203,7 @@ async def run(*, source: str, state_path: Path, turns: int, per_user: int, out_d
 
         gen = {}
         for tag, block in variants.items():
-            messages = core.build_message_list(msg, [], "", [], profile_context=block)
+            messages = core.build_message_list(msg, [], [], profile_context=block)
             gen[tag] = await core.generate_reply(messages)
 
         row = {"user": _v2tool.redact_user_id(uid), "msg": msg[:60],

@@ -14,6 +14,7 @@ import hashlib
 import json
 
 from . import injection as inj
+from . import daily_memory
 import os
 import re
 import threading
@@ -26,6 +27,9 @@ from .constants import PROJECT_ROOT, THINKING_DISABLED
 
 DEFAULT_STATE_FILE = PROJECT_ROOT / "user_memory" / "memory_v2_shadow.json"
 DEFAULT_AUDIT_FILE = PROJECT_ROOT / "user_memory" / "memory_v2_audit.jsonl"
+# 每日记忆（第 20 块）跟长期记忆**同一次调用提取，但分开存**：它的寿命是"一天"，
+# 塞进长期那份（268KB、无限增长）或会话那份（3 小时就清）都不合适。
+# 存储实例在 `daily_memory` 里（读路径每轮也要用它，必须共用同一把锁）。
 
 SCHEMA_VERSION = 2
 MAX_SOURCE_CHARS = 240
@@ -144,7 +148,10 @@ MEMORY_V2_EXTRACT_PROMPT = """你是灰泽满私聊机器人的记忆候选提�
      **类别只能从这张表里挑**：
         住地 `location` ／ 身份 `identity` ／ 健康 `health` ／ 家人 `family` ／ 工作学习 `work`
         关系 `relationship` ／ 喜好 `interest` ／ 习惯 `habit` ／ 过往事件 `past_event`
-   · **判据：同一个人、同一个类别下面，两件不同的事必须能用名字分开。**
+   · **习惯类（`habit_*`）要把「频率 + 原因」一起写进去**：不是"早上要跑步"，
+     而是"每天早上要去跑早操（学校要求）"。（2026-10-17 实测：只记了前者的半截，
+     她连着几天都在问"你起这么早干嘛去"——用户已经说过好几遍是学校要求的。）
+   · 判据：同一个人、同一个类别下面，两件不同的事必须能用名字分开。
      后半截写不出具体的东西，就说明这条本来就不该记。
    · ⛔ **不许用 `moment` / `info` / `situation` / `experience` / `thing` 这类空壳名**：
      它们既认不了亲（同一件事合不到一起，只会越加越多），也查不出来
@@ -169,8 +176,18 @@ MEMORY_V2_EXTRACT_PROMPT = """你是灰泽满私聊机器人的记忆候选提�
    topic_preference=engage|avoid                      话题偏好与雷区
    self_reference=name|first_person|nickname          她该怎么自称
    用户明确说喜欢/不喜欢时 explicit=true；仅从互动表现推断时 explicit=false。
+   ⚠️ **用户嫌她"阴阳怪气／挤兑人／说话冲／不好好讲话"，要她改语气 → `banter_tolerance=low`。**
+      （2026-10-17 实测漏了：用户 3498594329 明说"以后能保证好好讲话、不要冲人、不要阴阳怪气"，
+       记忆里却只有 `address_style` 一条。这类是用户对相处方式的**明确要求**，必须记。）
 3. commitment：灰泽满本轮明确答应用户、需要以后兑现的事。承诺只从灰泽满回复中提取，
    用户自己的计划不是灰泽满的承诺；actor 必须是 assistant，explicit 必须为 true。
+4. daily：用户**当天很单纯的日常**——吃了什么、几点上课/下课、去哪、什么时候睡的这类
+   **纯事件**。只记"有事发生"的句子（"中午吃了炸鸡""下午的课取消了"）。
+   · **状态、情绪、喜好、关系一律不记**（"他最近很累""不爱吃辣""和室友关系一般"）——
+     那些归 fact / interaction_preference。
+   · 讲灰泽满/她自己/机器人的不记（跟 fact 同一条铁律）。
+   · 时点**不用你写**，系统会带上这句对话发生的时间。
+   · 写成**一句话、30 字以内**；这轮没有就留空数组。
 
 【反例清单——抽到这些一律不记】
 - 灰泽满自己/机器人自身的事：版本号、功能、更新日志、"你是不是 AI"、她自己的身份设定。
@@ -220,9 +237,12 @@ temporal_scope 必须是 past/current/future/timeless：用户过去经历用 pa
       "confidence": 0.0,
       "actor": "assistant"
     }}
+  ],
+  "daily": [
+    {{"text": "一句话、30字以内的纯日常事件（吃了什么/几点上课/去哪）"}}
   ]
 }}
-没有候选时返回 {{"items":[]}}。不要 markdown，不要额外文字。
+没有候选时返回 {{"items":[], "daily":[]}}。不要 markdown，不要额外文字。
 
 【本轮对话】
 用户：{user_text}
@@ -273,7 +293,12 @@ def injection_enabled() -> bool:
 
 
 def parse_extraction_payload(content: str) -> dict:
-    """Parse model output without repairing or guessing malformed data."""
+    """Parse model output without repairing or guessing malformed data.
+
+    `daily` 是 2026-10-17 加的（每日记忆，跟 items 走**同一次调用**）：这里只做
+    "是字符串、非空、一轮最多 3 条"的收口，真正的入库闸门在 `daily_memory` 里。
+    """
+    empty = {"items": [], "daily": []}
     raw = (content or "").strip()
     if raw.startswith("```json"):
         raw = raw[len("```json"):]
@@ -283,14 +308,21 @@ def parse_extraction_payload(content: str) -> dict:
         raw = raw[:-3]
     raw = raw.strip()
     if not raw or raw == "null":
-        return {"items": []}
+        return empty
     try:
         payload = json.loads(raw)
     except (TypeError, json.JSONDecodeError):
-        return {"items": []}
+        return empty
     if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
-        return {"items": []}
-    return {"items": payload["items"][:20]}
+        return empty
+    texts: list[str] = []
+    daily = payload.get("daily")
+    if isinstance(daily, list):
+        for d in daily[:3]:
+            text = str(d.get("text") or "").strip() if isinstance(d, dict) else ""
+            if text:
+                texts.append(text)
+    return {"items": payload["items"][:20], "daily": texts}
 
 
 def build_extraction_prompt(
@@ -371,6 +403,9 @@ async def extract_and_ingest(
 
     log_cache_usage(response, "记忆提取")
     payload = parse_extraction_payload(_response_text(response))
+    # 每日记忆搭同一次调用（2026-10-17）：判据同源、输入同一份，省一次 LLM。
+    if daily_memory.enabled() and payload.get("daily"):
+        daily_memory.add_events(user_id, payload["daily"], now=observed_at)
     return store.ingest(
         user_id,
         payload["items"],
@@ -441,6 +476,44 @@ def _relevance(query: str, record: dict) -> float:
     if not query_terms or not memory_terms:
         return 0.0
     return len(query_terms & memory_terms) / max(1, min(len(query_terms), len(memory_terms)))
+
+
+# 单字兜底时要先排掉的**虚字**：不排的话「今天午饭吃的啥」靠一个"天"（来自"每天"）
+# 或一个"的"就能跟任意事实蹭上，长句会被塞进一堆无关事实。
+_FUNC_CHARS = set("的了呢吧吗啊嗯哈是不没都我你他她它们这个有和就在吗呀哦噢")
+
+
+def _fact_relevance(query: str, record: dict) -> float:
+    """fact 的相关度——在 `_relevance` 上补一档**单字兜底**。
+
+    为什么必须补（2026-10-17，用户报的）：查 `_relevance` 只看二字组重合，而**招呼/表情
+    这类短消息几乎没有二字组能对上任何事实**——实测用户 2151983431 的事实里明明有
+    `morning_running：早上要跑步`，但他发「早安」时 query 的二字组是 {早安}，跟
+    {早上, 上要, 要跑, 跑步} 交集为空 → **0 分 → 这条事实根本不会被注入**，
+    于是她连着几天都在问"你起这么早干嘛去"。他发「在跑早操」同理。
+
+    改法：二字组能对上就按原分；**对不上时退回单字重合，但只给 0.35 的权重**——
+    够越过 `> 0` 的门槛被带进来，又排在所有真正二字组命中的事实后面，
+    不会把正经相关的事实挤掉。
+
+    ⚠️ 只用于 fact。**commitment 仍走严格的 `_relevance`**：把"早上要跑步"捞出来是补上下文，
+    把一条不相干的约定捞出来会让她凭空提一嘴没做完的事。
+    """
+    score = _relevance(query, record)
+    if score > 0:
+        return score
+    strip = lambda s: set(re.sub(r"[^一-鿿A-Za-z0-9]", "", s or "")) - _FUNC_CHARS  # noqa: E731
+    q_chars = strip(query)
+    m_chars = strip(f"{record.get('key', '')}{record.get('value', '')}")
+    if not q_chars or not m_chars:
+        return 0.0
+    ratio = len(q_chars & m_chars) / max(1, len(q_chars))
+    # ⚠️ 门槛 0.25：长句里蹭到一个字不算相关，否则短句没捞回来、长句反而被塞进一堆弱相关事实。
+    #    实测："早安" → {早} 1/2 = 0.50 ✅ ｜ "今天早上起来了吗" → {早} 1/4 = 0.25 ✅ ｜
+    #    "今天午饭吃的啥" → 只剩虚字"天"在 memory 里出现，1/6 ❌
+    if ratio < 0.25:
+        return 0.0
+    return 0.35 * ratio
 
 
 class ShadowMemoryStore:
@@ -766,12 +839,13 @@ class ShadowMemoryStore:
 
     def _select_facts(self, active: list[dict], query: str) -> list[dict]:
         facts = [m for m in active if m.get("kind") == "fact"]
-        facts.sort(key=lambda m: (m.get("key") not in _ALWAYS_ON_FACT_KEYS, -_relevance(query, m)))
+        facts.sort(key=lambda m: (m.get("key") not in _ALWAYS_ON_FACT_KEYS,
+                                  -_fact_relevance(query, m)))
         return [
             m for m in facts
             if (
                 (m.get("key") in _ALWAYS_ON_FACT_KEYS and m.get("temporal_scope") != "past")
-                or _relevance(query, m) > 0
+                or _fact_relevance(query, m) > 0
                 or (m.get("temporal_scope") == "past" and any(k in query for k in ("以前", "过去", "曾经")))
             )
         ][:4]

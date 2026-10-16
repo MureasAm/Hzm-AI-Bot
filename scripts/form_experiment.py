@@ -123,7 +123,7 @@ FACTS = {
 
 def _messages_for(fact: dict, form_val) -> list:
     """真实链路搭好 messages，再按条件挂一层。只变这一层，其余完全一致。"""
-    msgs = core.build_message_list(fact["query"], [], "", [])
+    msgs = core.build_message_list(fact["query"], [], [])
     last_user = msgs[-1]                               # 真正的"用户这句话"
 
     if form_val is None:                               # ① 基线：什么都不加

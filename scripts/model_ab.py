@@ -91,7 +91,7 @@ async def run_reply(n: int, route: str, model_b: str) -> None:
         # 用**现在**的语料按这条消息重新检索，两个模型共用同一份提示词
         ctx = await core.gather_retrieval(user_msg, user_msg, "", ds, zhipu)
         msgs = core.build_message_list(
-            user_msg, ctx["fused_items"], "", [],
+            user_msg, ctx["fused_items"], [],
             preference_items=ctx["preference_items"], core_stories=ctx["core_stories"])
         outs = {}
         for name, client, model in (("A", ds, model_a), ("B", other, model_b)):
@@ -222,7 +222,7 @@ async def run_replay(n_sessions: int, turns: int, model_b: str) -> None:
             print(f"〔{i}〕用户：{u}")
             print(f"      她真实：{real[:64]}")
             for mode in ("cold", "user", "self"):
-                msgs = core.build_message_list(u, ctx["fused_items"], "", list(hist[mode]))
+                msgs = core.build_message_list(u, ctx["fused_items"], list(hist[mode]))
                 try:
                     a = await gen(ds, model_a, msgs, frequency_penalty=0.3, **THINKING_DISABLED)
                 except Exception as e:

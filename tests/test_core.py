@@ -263,7 +263,7 @@ class TestSummarizeBatch:
 class TestBatchSummaryInjection:
     def test_injected_as_system_before_user(self, monkeypatch):
         monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
-        msgs = core.build_message_list("在吗\n明天有空吗", [], "", [],
+        msgs = core.build_message_list("在吗\n明天有空吗", [], [],
                                        batch_summary="用户约你明天见面")
         assert msgs[-1]["role"] == "user"
         assert any(m["role"] == "system" and "这批消息的归纳" in m["content"]
@@ -271,7 +271,7 @@ class TestBatchSummaryInjection:
 
     def test_no_summary_no_injection(self, monkeypatch):
         monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
-        msgs = core.build_message_list("在吗", [], "", [])
+        msgs = core.build_message_list("在吗", [], [])
         assert not any("这批消息的归纳" in m["content"] for m in msgs)
 
 
@@ -389,7 +389,7 @@ class TestHistoryGapNote:
     def test_gap_note_is_not_prepended_anymore(self, monkeypatch):
         monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
         msgs = core.build_message_list(
-            "在吗", [], "", ["用户：在吗", "灰泽满：在呢"], history_gap_note="3天")
+            "在吗", [], ["用户：在吗", "灰泽满：在呢"], history_gap_note="3天")
         block = [m["content"] for m in msgs if m["content"].startswith("【最近对话记录】")]
         assert block
         # 旧的一行汇总**不该**再出现（否则等于同一件事说两遍）
@@ -398,7 +398,7 @@ class TestHistoryGapNote:
     def test_no_note_when_empty(self, monkeypatch):
         monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
         msgs = core.build_message_list(
-            "在吗", [], "", ["用户：在吗"], history_gap_note="")
+            "在吗", [], ["用户：在吗"], history_gap_note="")
         block = [m["content"] for m in msgs if m["content"].startswith("【最近对话记录】")]
         assert block and "距离上一轮对话" not in block[0]
 
@@ -533,7 +533,7 @@ class TestConsistencyRuleWording:
     def _block(self, monkeypatch):
         monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
         monkeypatch.setattr(core, "load_schedule", lambda: {})
-        msgs = core.build_message_list("你怎么又鸽了", [], "", ["用户：你又鸽了", "灰泽满：在忙"])
+        msgs = core.build_message_list("你怎么又鸽了", [], ["用户：你又鸽了", "灰泽满：在忙"])
         return next(m["content"] for m in msgs if m["content"].startswith("【最近对话记录】"))
 
     def test_scoped_to_facts_not_wording(self, monkeypatch):
@@ -560,7 +560,7 @@ class TestConsistencyRuleWording:
         """整段都是她说的话时（如刚推完动态还没人回），干脆不注入这一块。"""
         monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
         monkeypatch.setattr(core, "load_schedule", lambda: {})
-        msgs = core.build_message_list("在吗", [], "", ["[3小时前] 灰泽满：睡了"])
+        msgs = core.build_message_list("在吗", [], ["[3小时前] 灰泽满：睡了"])
         assert not [m for m in msgs if m["content"].startswith("【最近对话记录】")]
 
     def test_timed_prefix_does_not_hide_her_lines(self, monkeypatch):
@@ -585,7 +585,7 @@ class TestScheduleInjection:
     def _inject(self, monkeypatch, sched):
         monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
         monkeypatch.setattr(core, "load_schedule", lambda: sched)
-        msgs = core.build_message_list("你怎么又鸽了", [], "", [])
+        msgs = core.build_message_list("你怎么又鸽了", [], [])
         block = [m["content"] for m in msgs if "周表" in m["content"]]
         return block[0] if block else ""
 
@@ -656,7 +656,7 @@ class TestGroupEventAge:
 class TestPreferences:
     def test_injects_retrieved_preferences(self, monkeypatch):
         monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
-        msgs = core.build_message_list("在吗", [], "", [], preference_items=[
+        msgs = core.build_message_list("在吗", [], [], preference_items=[
             {"category": "食物", "text": "爱吃椰子鸡", "score": 0.6},
             {"category": "作息", "text": "夜猫子", "score": 0.5}])
         injected = [m["content"] for m in msgs if "灰泽满的偏好" in m["content"]]
@@ -664,7 +664,7 @@ class TestPreferences:
 
     def test_no_preference_items_no_injection(self, monkeypatch):
         monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
-        msgs = core.build_message_list("在吗", [], "", [])
+        msgs = core.build_message_list("在吗", [], [])
         assert not any("灰泽满的偏好" in m["content"] for m in msgs)
 
 
@@ -673,7 +673,7 @@ class TestMemoryV2Segments:
 
     def _msgs(self, monkeypatch, **kwargs):
         monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
-        return core.build_message_list("在吗", [], "", [], **kwargs)
+        return core.build_message_list("在吗", [], [], **kwargs)
 
     def test_absent_by_default(self, monkeypatch):
         msgs = self._msgs(monkeypatch)
@@ -713,14 +713,14 @@ class TestPrevSessionNote:
 
     def test_injects_when_present(self, monkeypatch):
         monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
-        msgs = core.build_message_list("在吗", [], "", [],
+        msgs = core.build_message_list("在吗", [], [],
                                        prev_session_note="【上次聊过】3天前你们聊到「香水」。")
         hits = [m["content"] for m in msgs if "【上次聊过】" in m["content"]]
         assert hits and "3天前" in hits[0]
 
     def test_absent_by_default(self, monkeypatch):
         monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
-        msgs = core.build_message_list("在吗", [], "", [])
+        msgs = core.build_message_list("在吗", [], [])
         assert not any("【上次聊过】" in m["content"] for m in msgs)
 
 
@@ -738,7 +738,7 @@ class TestCorpusTimePrefix:
         monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
         items = [RetrievalItem(source="corpus", item_id=str(i), score=0.9, text=t)
                  for i, t in enumerate(texts)]
-        return core.build_message_list("你最近忙不忙", items, "", [])
+        return core.build_message_list("你最近忙不忙", items, [])
 
     def test_every_corpus_line_carries_the_prefix(self, monkeypatch):
         msgs = self._msgs(monkeypatch, ["她第二天要去拿搬家的钥匙。", "她上周熬夜改稿到三点。"])
@@ -754,7 +754,7 @@ class TestCorpusTimePrefix:
         monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
         items = [RetrievalItem(source="behavior", item_id="被夸时把夸奖调小", score=1.0,
                                text="【被夸时把夸奖调小】\n回应模式：压低评价。")]
-        msgs = core.build_message_list("你好厉害", items, "", [])
+        msgs = core.build_message_list("你好厉害", items, [])
         joined = "\n".join(m["content"] for m in msgs)
         assert "【当前情境下的行为指令】" in joined
         assert "【这是过去发生过的事】" not in joined
@@ -1074,13 +1074,13 @@ class TestBuildMessageListImage:
 
     def test_image_only_composes_user_message(self, monkeypatch):
         self._now(monkeypatch)
-        msgs = core.build_message_list("", [], "", [], vision_desc="一碗面")
+        msgs = core.build_message_list("", [], [], vision_desc="一碗面")
         assert msgs[-1]["role"] == "user"
         assert msgs[-1]["content"] == "[图片：一碗面]"
 
     def test_text_plus_image(self, monkeypatch):
         self._now(monkeypatch)
-        msgs = core.build_message_list("看看这张", [], "", [], vision_desc="一碗面")
+        msgs = core.build_message_list("看看这张", [], [], vision_desc="一碗面")
         assert msgs[-1]["content"] == "看看这张\n[图片：一碗面]"
 
 

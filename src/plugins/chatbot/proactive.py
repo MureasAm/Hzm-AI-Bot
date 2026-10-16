@@ -280,7 +280,7 @@ async def compose_proactive(content: str, source: str = "B站",
         # 记忆两路传空——主动发言是**广播给所有好友**的，没有"这个用户"这回事。
         messages = build_message_list(
             PROACTIVE_PROMPT.format(source=source, content=text, image_block=image_block),
-            ctx["fused_items"], "", [],
+            ctx["fused_items"], [],
             preference_items=ctx["preference_items"],
             core_stories=ctx["core_stories"],
         )

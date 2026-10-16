@@ -166,7 +166,7 @@ async def run(*, v1_dir: Path, turns: int, per_user: int, out_dir: Path) -> dict
         # ⚠️ A2 是**对照组**：和 A 完全同一条件再生成一次。CHAT_TEMPERATURE=0.85 很高，
         #    同 prompt 两次也会差很多——没有 A2 就没法把"注入的影响"和"采样噪声"分开。
         for name, block in (("A", ""), ("A2", ""), ("B", arm_b), ("C", arm_c)):
-            messages = core.build_message_list(msg, [], "", [], profile_context=block)
+            messages = core.build_message_list(msg, [], [], profile_context=block)
             gen[name] = await core.generate_reply(messages)
         rows.append({"user": _v2tool.redact_user_id(uid), "msg": msg, **gen,
                      "tags": tags, "behaviors": [tag2behavior.get(t, "") for t in tags]})

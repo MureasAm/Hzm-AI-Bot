@@ -63,7 +63,7 @@ async def _gen(text: str, client, zhipu, with_retrieval: bool) -> str:
             query_text=text, retrieval_query=text, history_text="",
             deepseek_client=client, zhipu_client=zhipu, is_user_msg=True)
         fused = ctx["fused_items"]
-    msgs = core.build_message_list(text, fused, "", [])
+    msgs = core.build_message_list(text, fused, [])
     return await core.generate_reply(msgs)
 
 

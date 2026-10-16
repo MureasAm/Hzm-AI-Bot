@@ -653,7 +653,22 @@ class TestShadowExtraction:
 
     @pytest.mark.parametrize("content", ["", "null", "[]", "{broken", '{"items":"no"}'])
     def test_parser_fails_closed(self, content):
-        assert parse_extraction_payload(content) == {"items": []}
+        # ⚠️ 契约里 **`daily` 也一起回空**：它跟 items 走同一次调用（2026-10-17），
+        #    解析失败时两边都不能漏出半个结果。
+        assert parse_extraction_payload(content) == {"items": [], "daily": []}
+
+    def test_parser_carries_daily_events(self):
+        """每日记忆搭同一次调用：`daily` 收成字符串列表，一轮最多 3 条。"""
+        payload = ('{"items":[],"daily":[{"text":"中午吃了炸鸡"},{"text":"下午的课取消了"},'
+                   '{"text":"晚上去跑步"},{"text":"第四条要被截掉"}]}')
+        assert parse_extraction_payload(payload)["daily"] == [
+            "中午吃了炸鸡", "下午的课取消了", "晚上去跑步"]
+
+    def test_parser_tolerates_missing_or_dirty_daily(self):
+        """老输出里没有 daily（或塞了脏东西）时，items 照常，daily 回空列表。"""
+        assert parse_extraction_payload('{"items":[]}')["daily"] == []
+        assert parse_extraction_payload('{"items":[],"daily":"中午吃了炸鸡"}')["daily"] == []
+        assert parse_extraction_payload('{"items":[],"daily":[{"text":"  "},"裸字符串"]}')["daily"] == []
 
     def test_prompt_separates_user_plan_from_assistant_commitment(self, store, clock):
         prompt = build_extraction_prompt(

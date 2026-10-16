@@ -32,6 +32,7 @@ from .constants import SPLIT_DELAY_MIN_MS, SPLIT_DELAY_MAX_MS  # noqa: F401 — 
 from . import context_probe
 from . import group_memory
 from . import injection as inj
+from . import daily_memory
 from . import memory_v2
 from .routing import (
     LEGENDARY_REPLIES, LEGENDARY_CONFIRMS, legendary_confirmed, legendary_hit, classify_l3,
@@ -343,7 +344,7 @@ async def confirm_ambiguous_terms(user_msg: str, deepseek_client=None) -> set:
 
 
 def build_message_list(user_msg: str, fused_items: list,
-                       memory_context: str, user_history: list,
+                       user_history: list,
                        vision_desc: str = "", weather_city: str = "",
                        batch_summary: str = "", preference_items: list = None,
                        core_stories: list = None, session_context: str = "",
@@ -351,7 +352,7 @@ def build_message_list(user_msg: str, fused_items: list,
                        group_context: str = "", history_gap_note: str = "",
                        prev_session_note: str = "", same_request: dict = None,
                        profile_context: str = "", commitment_context: str = "",
-                       emotion_context: str = "") -> list:
+                       emotion_context: str = "", daily_context: str = "") -> list:
     """按优先级组装发送给模型的消息列表。
 
     fused_items 为融合后的 RetrievalItem 列表（corpus + behavior），按源分组注入。
@@ -455,9 +456,12 @@ def build_message_list(user_msg: str, fused_items: list,
     if commitment_context:
         messages.append({"role": "system", "content": commitment_context})
 
-    # 长期记忆注入
-    if memory_context:
-        messages.append({"role": "system", "content": inj.T("memory", context=memory_context)})
+    # ⚠️ 这里原来注「长期记忆」（第 13 块 `memory`）。2026-10-17 整段删掉：
+    #    它的内容来自 v1 的长期记忆卡（根 `memory_manager.py` → `user_memory/long_term/*`），
+    #    而 v1 已于 2026-10-12 整个删除，生产者不存在了；`memory_context` 在调用侧
+    #    恒为空串，`if` 永远不成立。它想装的东西现在由 03（相处方式 + 相关事实）
+    #    和 12（未完成约定）承担，接上反而是同一批事实一轮出现两次。
+    #    参数已一并移除（含 20 处调用点）。
 
     # 短期记忆注入
     # ⚠️ **她自己说过的话不再回灌进上下文**（2026-10-14，用户决定；实测见
@@ -539,6 +543,12 @@ def build_message_list(user_msg: str, fused_items: list,
     # （文案在 persona/injection/19_mood/block.json；session_memory.mood_note 渲染。）
     if emotion_context:
         messages.append({"role": "system", "content": emotion_context})
+
+    # 【他今天的日常】（第 20 块）：**每轮都注**，放最尾——跟【当前时间】同理，
+    # 它是"每分钟都可能变"的动态段，放中间会把后面的块一起拖成缓存 miss。
+    # 条目 <2 条时 daily_memory 自己会返回空串（宁可不提）。
+    if daily_context:
+        messages.append({"role": "system", "content": inj.T("daily", context=daily_context)})
 
     messages.append({"role": "user", "content": final_user})
     return messages
@@ -890,7 +900,6 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     # --- 🧠 长期记忆：**只有 V2**（2026-10-12 起 v1 整个删除）---
     # v1 的卡（user_memory/long_term/*.json）连同 memory_manager.py 一起清掉了；
     # 名字/城市/长期事实全从 V2 取（见 _user_name_for / _weather_city_for）。
-    memory_context = ""
     # 群聊现场事实：在场成员 + 群内近况（轻量群记忆，只在本群注入）
     group_context = ""
     if is_group:
@@ -912,10 +921,12 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
 
     # --- 🧠 Memory V2 注入（可选；与影子提取分开的开关，默认关，见 docs/记忆v2设计.md §上线路径）---
     # 两段分开放：相处方式靠前 / 未完成约定中段。
-    profile_context = commitment_context = ""
+    profile_context = commitment_context = daily_context = ""
     if not is_group and memory_v2.injection_enabled():
         profile_context = _MEMORY_V2_STORE.build_preference_context(user_id, retrieval_query)
         commitment_context = _MEMORY_V2_STORE.build_commitment_context(user_id, retrieval_query)
+        if daily_memory.enabled():
+            daily_context = daily_memory.context(user_id)
     # 当下情绪住在**会话记忆**里（2026-10-10 从长期记忆搬来），跟话题一起 3h 消散。
     # 它**不受 v2 开关控制**——情绪是会话级感知，生产里就该生效；注入位置仍是紧挨用户消息。
     emotion_context = "" if is_group else mood_note(user_id)
@@ -928,7 +939,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     # 术语语境确认：confirm:true 的命中做一次便宜 LLM 判断，剔除误触词条（词→意思守卫）
     denied_terms = await confirm_ambiguous_terms(user_msg, deepseek_client)
     messages = build_message_list(
-        user_msg, fused_items, memory_context, user_history_timed,
+        user_msg, fused_items, user_history_timed,
         vision_desc=vision_desc, weather_city=weather_city, batch_summary=batch_summary,
         preference_items=preference_items, core_stories=core_stories,
         session_context=session_context, query_hint=query_hint,
@@ -936,7 +947,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         history_gap_note=history_gap_note, prev_session_note=_prev_session_note,
         same_request=ctx.get("same_request"),
         profile_context=profile_context, commitment_context=commitment_context,
-        emotion_context=emotion_context,
+        emotion_context=emotion_context, daily_context=daily_context,
     )
 
     # --- 🤖 调用大模型 ---
