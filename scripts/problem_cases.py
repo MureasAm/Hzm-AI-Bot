@@ -594,7 +594,7 @@ async def main(argv=None) -> int:
     print("\n下一步（改哪里）：\n"
           "   定位整条链 → python scripts/trace_chain.py \"<那句话>\"\n"
           "   查召回入口 → python scripts/entry_audit.py all\n"
-          "   素材文件   → 检索层 persona/world/*.json ｜ 生成层 persona/behavior|speech/*.json")
+          "   素材文件   → 全在 persona/injection/<序号_块名>/ 下（一块一个文件夹，见 docs/地图.md）")
     return 0
 
 

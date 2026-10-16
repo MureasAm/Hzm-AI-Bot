@@ -35,7 +35,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-LIB_FILE = ROOT / "persona" / "media" / "stickers.json"
+LIB_FILE = ROOT / "persona" / "decision" / "stickers.json"
 LOG_FILE = ROOT / "data" / "sticker_log.jsonl"
 
 

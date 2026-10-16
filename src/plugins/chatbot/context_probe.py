@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 import httpx
 from lunar_python import Solar
 
+from . import injection as inj
 from .constants import WEATHER_CACHE_SECONDS, WEATHER_GEO_CACHE_SECONDS, BILI_STATE_FILE
 from .config import get_weather_base_url, get_weather_city, get_weather_key
 
@@ -187,7 +188,10 @@ def _live_status_text() -> str:
 def get_now_context(city: str = "") -> str:
     """生成一行感知注入文本。含北京时间、墨尔本当地时间（灰泽满所在地）、农历/节气/节日、
     真实直播状态、天气（city 传用户城市则按用户城市，否则默认墨尔本）。如：
-    【当前时间】北京时间 8月10日 周一 02:36（墨尔本当地时间 04:36），农历六月廿八，灰泽满所在地：澳洲，灰泽满现在没有在直播，天气：Light Rain 11℃
+    【当前时间】北京时间 8月10日 周一 02:36（墨尔本当地时间 04:36），农历六月廿八，灰泽满所在地：澳洲，灰泽满现在没有在直播，天气：Light Rain 11℃。（农历和节气是中国历法的日期参考，……）
+
+    ⚠️ 结尾那两句是**读取这一行数据的守则**，必须挂在这一行自己身上（2026-10-16 从骨架搬来）：
+    骨架是最前面那块、这行是最后一块，中间隔着十几块——守则写在骨架里等于写在离它最远的地方。
     """
     dt_cn = datetime.now(_CST)
     dt_mel = datetime.now(_MEL)
@@ -202,4 +206,4 @@ def get_now_context(city: str = "") -> str:
     weather = _weather_line(city)
     if weather:
         parts.append(weather)
-    return "【当前时间】" + "，".join(parts)
+    return inj.T("now", "head") + "，".join(parts) + inj.T("now", "tail")

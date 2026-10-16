@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+
+from . import injection as inj
 import os
 import re
 import threading
@@ -92,31 +94,34 @@ _BOT_SELF_KEY_PREFIXES = ("bot", "hzm")
 _BOT_SELF_KEYS = {"version", "changelog", "release_notes", "bot_info"}
 _BOT_SELF_VALUE_SUBJECTS = ("灰泽满", "hzm", "机器人", "assistant")
 
-_PREFERENCE_BEHAVIORS = {
-    ("support_style", "comfort"): "用户低落时先接住情绪，不要马上讲道理或给方案。",
-    ("support_style", "problem_solving"): "用户求助时可以更快给出具体办法，但先简短确认其感受。",
-    ("support_style", "balanced"): "用户低落时先回应感受，再视情况给一个简短办法。",
-    ("banter_tolerance", "low"): "减少针对用户的互怼和挤兑，保留灰泽满自己的嘴硬语气即可。",
-    ("banter_tolerance", "light"): "普通闲聊可以轻度调侃，碰到认真或低落内容时收住。",
-    ("banter_tolerance", "high"): "普通闲聊可以更强地互怼；用户明显低落时暂停。",
-    ("directness", "gentle"): "涉及拒绝或纠正时说得委婉一点，但不要虚假附和。",
-    ("directness", "direct"): "可以直接说结论，不必层层铺垫。",
-    ("directness", "balanced"): "结论说清楚，同时保留一点缓冲。",
-    ("care_initiative", "proactive"): "察觉用户状态变化时可以主动关心一句，但不要连续追问。",
-    ("care_initiative", "reserved"): "用户没有主动展开时不要追问隐私或情绪原因。",
-    ("care_initiative", "balanced"): "可以关心一次；用户不展开就自然换回当前话题。",
-    ("address_style", "nickname"): "称呼用户时用他给出的昵称或称呼，别一上来就泛泛地叫'你'。",
-    ("address_style", "plain"): "别用亲昵称谓（'宝宝''亲爱的'这类），直接叫名字或干脆不称呼。",
-    ("address_style", "casual"): "称呼随意点就好，用'你''喂''诶'这类，不必刻意恭维或套近乎。",
-    ("reply_length", "short"): "回复尽量短，一两句就够，别铺陈解释。",
-    ("reply_length", "medium"): "回复控制在一两句话到一小段，别长篇大论。",
-    ("reply_length", "long"): "用户聊得起劲时可以多说几句，别急着收尾。",
-    ("topic_preference", "engage"): "用户主动聊起他喜欢的话题时多顺着聊两句，别急着收尾或硬转台。",
-    ("topic_preference", "avoid"): "用户明显不想聊某个话题时不要追问，被带到就自然岔开去别处。",
-    ("self_reference", "name"): "自称时用'灰泽满'这个名字就行。",
-    ("self_reference", "first_person"): "自称时用'我'就好，少报全名。",
-    ("self_reference", "nickname"): "自称时用用户给她的昵称或简称。",
+# 「什么都能装」的栏目名。提取器提示词里明令禁止（"别用 `current_situation`/`past_experience`/
+# `info` 这类装什么都行的通用键——通用键会让不同的事互相顶掉"），但实测它照用不误：
+# 某用户攒了 **5 条 `fact/moment`**（分手／表白／求婚／亲一下各一条），四件不同的事挤在一个名字下。
+# 坏的后果是**两头都坏**——既认不了亲（"同一件事"合不到一起，只会越加越多），也查不出来
+# （要问"他表白那次"，翻 `moment` 出来五条，分不清哪条是哪条），还**占位置**
+# （「相关用户事实」一次只带 4 条，五条 `moment` 能把位置占满）。
+#
+# ⚠️ **现在只记不拦**（2026-10-16）：命中就写进审计的 `generic_key` 标记，**条目照收**。
+#    理由：退掉 ≠ 清理干净，退掉 = **这件事压根没被记住**——那五条 `moment` 里有一条是
+#    "用户向灰泽满求婚"，退了她以后就完全不知道有这回事。我们要的是**逼它改个具体名字**，
+#    不是**丢事**。所以先跑几天看命中率：如果它撞了黑名单会自己换个具体名字再写一遍，那就该真拦；
+#    如果它宁可空手也不换，拦了就是纯丢东西、白搭。
+#    要改成真拦：在 `_normalize_item` 里把末尾那行 `return normalized, "accepted"` 之前加一句
+#    `if kind == "fact" and key in _GENERIC_FACT_KEYS: return None, "generic_key_blocked"`。
+_GENERIC_FACT_KEYS = {
+    # 空壳名：什么都能装，既认不了亲也查不出来
+    "moment", "info", "information", "situation", "event", "events", "experience",
+    "thing", "things", "stuff", "detail", "details", "note", "notes",
+    "misc", "other", "general", "current_situation", "past_experience",
+    # 光秃秃的类别名（本身就不止一件事的类别）——等于空壳。**`location`/`timezone`/
+    # `preferred_name`/`occupation` 不在里面**：那几个天然只有一件事，一个词就够。
+    # （2026-10-16 探针上出现的 `health=感冒了` —— 光写个 `health`，回头"腰疼"也写 `health`，
+    #   两条就顶掉了，又是同一个坑。）
+    "health", "family", "work", "relationship", "interest", "habit", "past_event",
 }
+
+# 相处方式的「键 → 行为句」表**在 persona/injection/03_profile/block.json 里**
+# （2026-10-16 从这儿搬走的：它是注入文案，不该住在代码里）。取用见 injection.behavior_sentence。
 
 
 # ⚠️ **变量一律放最后**（2026-10-10 修）：DeepSeek 缓存按**前缀**匹配——把 {observed_at} /
@@ -133,9 +138,17 @@ MEMORY_V2_EXTRACT_PROMPT = """你是灰泽满私聊机器人的记忆候选提�
 1. fact：关于**用户本人**的、会影响回应的稳定事实——称呼/昵称、地域时区、身份（学生/社畜）、
    正在经历的大事（搬家/考试/生病）、明确喜好（"月饼一般，芒果味的可以"）。
    **必须是关于"用户本人"的**；讲灰泽满/机器人自己的内容一律不算 fact。
-   · key 用**具体到事**的小写英文（`location`/`preferred_name`/`timezone`/`exam_status`…），
-     **别用 `current_situation`/`past_experience`/`info` 这类装什么都行的通用键**——
-     通用键会让不同的事互相顶掉。
+   · key 的写法：**先写类别，再写具体是哪件事**——`health_recent_cold`、`family_daughter_accident`、
+     `relationship_confession`、`work_exam_failed`。本身就只有一件事的类别（名字/住地/时区/职业）
+     用一个词就够：`preferred_name`、`location`、`timezone`、`occupation`。
+     **类别只能从这张表里挑**：
+        住地 `location` ／ 身份 `identity` ／ 健康 `health` ／ 家人 `family` ／ 工作学习 `work`
+        关系 `relationship` ／ 喜好 `interest` ／ 习惯 `habit` ／ 过往事件 `past_event`
+   · **判据：同一个人、同一个类别下面，两件不同的事必须能用名字分开。**
+     后半截写不出具体的东西，就说明这条本来就不该记。
+   · ⛔ **不许用 `moment` / `info` / `situation` / `experience` / `thing` 这类空壳名**：
+     它们既认不了亲（同一件事合不到一起，只会越加越多），也查不出来
+     （要问"他表白那次"，翻出来五条分不清哪条是哪条），还白占位置。
    · `preferred_name` / `nickname` 的 value **只写名字本身**（如"草草子哥"），
      **不要写成"用户希望被称呼为X"这种整句**——那个句子会被当成名字注入，又长又怪。
    · temporal_scope：**经历**用 past（可叠加，不倒旧的）；**地域/时区/身份**这类长期成立用 timeless；
@@ -143,13 +156,15 @@ MEMORY_V2_EXTRACT_PROMPT = """你是灰泽满私聊机器人的记忆候选提�
    · valid_for：**只有"时效性近况"**（在准备考试 / 这周军训 / 最近感冒）才填其大概期限，
      从用户话里的时间词读（"这几天"→3d、"最近/这一阵"→14d、"这学期"→90d）；
      没有明确期限、或不是近况，一律 "none"。
-   explicit 必须为 true。一次性状态、推断身份不提取。
+   · explicit：用户在话里**明说**了才填 true；只是从语气/表现里猜出来的填 false。
+     **false 的 fact 会被代码拦掉**——所以"猜的"等于这条别写。
+   一次性状态不提取。
 2. interaction_preference：用户想被怎样对待（针对这个人的相处方式，不是性格标签）。key/value 只能是：
    support_style=comfort|problem_solving|balanced    低落时怎么接
    banter_tolerance=low|light|high                    玩笑尺度
    directness=gentle|direct|balanced                  拒绝/纠正的方式
    care_initiative=proactive|reserved|balanced        主动关心阈值
-   address_style=nickname|plain|casual                称呼偏好
+   address_style=nickname|plain|casual                **他希望灰泽满怎么称呼他自己**
    reply_length=short|medium|long                     回复长度偏好
    topic_preference=engage|avoid                      话题偏好与雷区
    self_reference=name|first_person|nickname          她该怎么自称
@@ -168,6 +183,11 @@ MEMORY_V2_EXTRACT_PROMPT = """你是灰泽满私聊机器人的记忆候选提�
   大货，A2证…"，被当真存成 occupation/location/age/income/savings 五条，之后她张口就是
   "明天还得握方向盘的人"。
 - 单次闲聊、寒暄、玩梗（"在吗""哈哈哈""晚安"）。
+- **称呼需求的方向搞反**：`address_style` 填的是「**用户希望灰泽满怎么称呼他自己**」。
+  他说"我想叫你宝宝""我能不能叫你满姐"——那是**他想叫她**，方向相反，**不要填 address_style**。
+  （实测踩坑 2026-10-16：同一个句式"我想叫你宝宝"，两条记录分别被填成 `nickname` 和 `plain`，
+  两个相反的值——至少有一个是错的。另有一条从"小满好好休息哦"里读出了"他想被称呼"，
+  原文里根本没有这回事。）
 - 只出现一次、不会影响下次回应的状态（"他刚打了个哈欠""他刚发了个表情"）。
 - 已能从别处拿到的：时间/星期/农历、天气、直播场次状态——那是感知模块的活。
 - 用户自己的计划/打算——那是用户的事，不是她的承诺。
@@ -212,8 +232,27 @@ temporal_scope 必须是 past/current/future/timeless：用户过去经历用 pa
 观测时间：{observed_at}
 证据会话：{session_id}
 
-【当前已知记忆摘要（避免重复提取）】
+【这个人已经记过的（kind/key=value）】
 {current_summary}
+
+⚠️ **写之前先把上面这张清单对一遍——这是这份提示词里最要紧的一步。**
+  · 这轮要说的事，**清单里已经有了（哪怕措辞不一样）→ 那是同一件事，用清单里那个 key，
+    不要另起一个新名字**。
+    例：清单里已经有 `recent_cold=用户最近感冒了`，这轮他说"感冒还挺严重的"——
+    **这是同一件事**：写 `key="recent_cold"`，**不要**新起 `recent_illness`。
+    （踩坑 2026-10-16：就是没做这一步，同一个人的感冒被记成了 `recent_cold` / `recent_illness` /
+    `recent_insomnia` 三条，一次注入全端出来。）
+  · 这轮的事**是对清单里某一条的更新**（状态变了、程度变了、续上了）→ **也用那一条的 key**，
+    让新值去顶掉旧值。
+  · ⚠️ **但"同一类事情又发生了一次"是另一回事——必须起新 key，不能复用。**
+    第二次表白、又搬一次家、再考一场试，都是**新的一件事**。复用旧 key 会把上一条**顶掉**，
+    那就**丢了一条历史**。
+    例：清单里有 `relationship_confession=用户首次表白`，这轮他说"我们交往吧，我是认真的"——
+    起 `relationship_dating_request`；**不要**写回 `relationship_confession`。
+    （踩坑 2026-10-16：探针上真的复用了，首次表白那条当场被顶没。）
+    判据：**复用后上一条会被顶掉，而它并不该消失 → 那就是新的一件事。**
+  · 清单里的 key **哪怕不符合上面的类别写法，也照它原样用**——复用比整齐重要。
+  · 只有**确实是另一件事**时，才起一个新 key。
 """
 
 
@@ -538,6 +577,9 @@ class ShadowMemoryStore:
             "valid_for": valid_for,
             "source": normalized_source,
         }
+        # 栏目名是"什么都能装"的那种 → 打标记（只记不拦，见 _GENERIC_FACT_KEYS 的说明）
+        if kind == "fact" and key in _GENERIC_FACT_KEYS:
+            normalized["generic_key"] = True
         return normalized, "accepted"
 
     @staticmethod
@@ -675,11 +717,16 @@ class ShadowMemoryStore:
                             other["invalidated_at"] = now.isoformat()
 
                 accepted.append(json.loads(json.dumps(existing, ensure_ascii=False)))
-                self._audit({
+                record = {
                     "t": now.isoformat(), "user_id": user_id, "decision": "accepted",
                     "memory_id": existing["id"], "kind": existing["kind"],
                     "key": existing["key"], "status": existing["status"],
-                })
+                }
+                if item.get("generic_key"):
+                    # 命中"什么都能装"的栏目名。**只记不拦**（2026-10-16）——先攒几天命中率，
+                    # 看撞上之后它会不会自己换个具体名字（见 _GENERIC_FACT_KEYS 的说明）。
+                    record["generic_key"] = True
+                self._audit(record)
 
             user["updated_at"] = now.isoformat()
             self._save(state)
@@ -734,9 +781,9 @@ class ShadowMemoryStore:
         preferences = [m for m in active if m.get("kind") == "interaction_preference"]
         lines: list[str] = []
         if preferences:
-            lines.append("【和这个绿冻的相处方式】只调整相处方式，不改变灰泽满的核心性格、事实和边界。")
+            lines.append(inj.T("profile", "head"))
             for memory in preferences[:MAX_PREFERENCE_ITEMS]:
-                behavior = _PREFERENCE_BEHAVIORS.get((memory.get("key"), memory.get("value")))
+                behavior = inj.behavior_sentence(memory.get("key"), memory.get("value"))
                 if behavior:
                     lines.append(behavior)
         facts = self._select_facts(active, query)
@@ -745,7 +792,7 @@ class ShadowMemoryStore:
                 f"{'过去事实/' if m.get('temporal_scope') == 'past' else ''}{m.get('key')}：{m.get('value')}"
                 for m in facts
             )
-            lines.append(f"【相关用户事实】{rendered}")
+            lines.append(inj.T("profile", "fact", rendered=rendered))
         return lines
 
     def _commitment_lines(self, active: list[dict], query: str) -> list[str]:
@@ -754,7 +801,7 @@ class ShadowMemoryStore:
         if not commitments:
             return []
         rendered = "；".join(str(m.get("value")) for m in commitments[:2])
-        return [f"【相关未完成约定】{rendered}"]
+        return [inj.T("commitment", rendered=rendered)]
 
     def _fit(self, lines: list[str], budget: int) -> str:
         if not lines:

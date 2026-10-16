@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""离线预计算 persona/world/core_stories.json 的核心记忆向量。
+"""离线预计算 persona/injection/05_core_stories/core_stories.json 的核心记忆向量。
 
-输出 persona/world/core_story_vectors.json（stories 数组：id/category/text/vector）。
+输出 persona/injection/05_core_stories/core_story_vectors.json（stories 数组：id/category/text/vector）。
 运行时 retrieval.py 读缓存，按当前消息语义检索命中的核心记忆，注入【她的核心记忆】。
 
 用法：
     python scripts/precompute_core_stories.py
     python scripts/run_tool.py precompute core-stories
 
-注意：改过 persona/world/core_stories.json 后需重跑本脚本。
+注意：改过 persona/injection/05_core_stories/core_stories.json 后需重跑本脚本。
 """
 import asyncio
 import json
@@ -20,8 +20,8 @@ from openai import AsyncOpenAI
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = PROJECT_ROOT / ".env.prod"
-STORIES_FILE = PROJECT_ROOT / "persona" / "world" / "core_stories.json"
-OUTPUT_FILE = PROJECT_ROOT / "persona" / "world" / "core_story_vectors.json"
+STORIES_FILE = PROJECT_ROOT / "persona" / "injection" / "05_core_stories" / "core_stories.json"
+OUTPUT_FILE = PROJECT_ROOT / "persona" / "injection" / "05_core_stories" / "core_story_vectors.json"
 EMBEDDING_MODEL = "embedding-3"
 ZHIPU_BASE_URL = "https://open.bigmodel.cn/api/paas/v4/"
 

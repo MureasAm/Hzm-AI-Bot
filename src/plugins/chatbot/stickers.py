@@ -3,7 +3,7 @@
 
 **为什么要先打标**：表情包文件名是一串哈希，模型不知道每张画的是什么、什么时候该发。
 `scripts/label_stickers.py` 离线用视觉模型问出 desc/tags/use_when，存
-`persona/media/stickers.json`。加新表情：丢进 assets/stickers/ 再跑一次那个脚本。
+`persona/decision/stickers.json`。加新表情：丢进 assets/stickers/ 再跑一次那个脚本。
 
 **为什么用 LLM 判、不用向量阈值**：要的是"**十分**对应"。阈值调不准——
 群聊接话门那边已经吃过教训（同一份数据、判据稍动就从 0% 跳到 74%）。
@@ -15,10 +15,8 @@ import json
 import os
 import time
 
-from .constants import PROJECT_ROOT, THINKING_DISABLED
+from .constants import PROJECT_ROOT, THINKING_DISABLED, STICKER_FILE
 from .config import log_cache_usage, _get_model_name, extract_chat_content
-
-STICKER_FILE = PROJECT_ROOT / "persona" / "media" / "stickers.json"
 
 #: 表情包决策流水（统计用）。**唯一的数据源**——在此之前"发了哪张"只 print 到控制台，
 #: 落盘一份才谈得上"哪些图从没被用过 / 哪一类被反复用"。读它的是 `scripts/sticker_stats.py`。

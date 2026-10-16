@@ -48,8 +48,16 @@ nonebot.init()
 
 import src.plugins.chatbot.core as core  # noqa: E402
 from src.plugins.chatbot import memory  # noqa: E402
+import _common  # noqa: E402
 
-TRACE_USER = "_trace_only_"      # 用完就清，别污染真实记忆
+# ⚠️ 三个 store（短期/会话/长期）一起指到临时目录（2026-10-16）：
+#    追踪是**只读探查**，跑一次 `handle_chat` 就会往 user_memory/ 里写东西。
+#    原来靠下面的 `cleanup()` 事后清，但那段代码**早就失效了** —— 它还在找
+#    `user_memory/session.json` 这种单文件，而那 2026-10-08 就按会话拆成目录了，
+#    所以它一直在"清理"三个不存在的文件。改成开跑前就隔离，压根不留痕迹。
+_common.isolate_user_stores()
+
+TRACE_USER = "_trace_only_"
 LOG = []
 
 
@@ -119,21 +127,12 @@ def install_traps():
 
 
 def cleanup():
-    """清掉本次追踪写进记忆的东西——追踪是只读操作，不该留下痕迹。"""
-    try:
-        import json as _j
-        for f in ("user_memory/short_term.json", "user_memory/session.json", "user_memory/long_term.json"):
-            p = ROOT / f
-            if not p.exists():
-                continue
-            d = _j.loads(p.read_text(encoding="utf-8"))
-            rm = [k for k in d if str(k).startswith("_trace")]
-            for k in rm:
-                d.pop(k)
-            if rm:
-                p.write_text(_j.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
-    except Exception as e:
-        print(f"⚠️ 清理追踪痕迹失败：{e}")
+    """已废弃（2026-10-16）：改用启动时 `_common.isolate_user_stores()` 隔离。
+
+    原来它事后去删 `user_memory/{short_term,session,long_term}.json` 里以 `_trace` 开头的键，
+    但那三个**单文件**早已不存在（短期/会话都按 id 拆成目录了，long_term 整个删了），
+    所以它其实什么都没清，痕迹一直留着。隔离比事后清理可靠，这里保留空壳只为兼容调用点。
+    """
 
 
 # ==================== 端到端基线（改动前后对比） ====================

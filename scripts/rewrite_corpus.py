@@ -45,7 +45,7 @@ nonebot.init()
 from openai import AsyncOpenAI  # noqa: E402
 from src.plugins.chatbot.constants import DEEPSEEK_BASE_URL, THINKING_DISABLED  # noqa: E402
 
-SRC = ROOT / "persona" / "world" / "statement_final.json"
+SRC = ROOT / "persona" / "injection" / "11_corpus" / "statement_final.json"
 REVIEW = ROOT / "outputs" / "corpus_rewrite_review.json"
 ENV_FILE = ROOT / ".env.prod"
 
@@ -140,7 +140,7 @@ async def main():
         out = {"_readme": data["_readme"], "statements": items} if isinstance(data, dict) else items
         SRC.write_text(json.dumps(out, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         print(f"✅ 已写回 {n} 条 → {SRC}")
-        print("⚠️ 别忘了重算向量：python scripts/run_tool.py generate-vectors -i persona/world/statement_final.json")
+        print("⚠️ 别忘了重算向量：python scripts/run_tool.py generate-vectors -i persona/injection/11_corpus/statement_final.json")
         print("⚠️ 以及跑 retrieval_eval 确认没退化")
         return
 

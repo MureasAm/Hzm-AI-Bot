@@ -1,0 +1,11 @@
+{
+  "_readme": "第 7 块·名词库（lorebook）。\n【什么时候注】priority=always 的词每轮注；其余按 keyword/别名/正则命中才注。\n【改什么】改同目录 terms.json。\n【两个方向】meaning = 让模型**听懂**；usage = 让她**主动用**（只在命中时才注入，避免每条都蹦黑话）。\n\n【改数据前先对一眼】这件事属于哪一类：\n  她「发生过」→ 11_corpus/statement_final.json ｜ 她「一贯如此」→ 04_preferences/preferences.json\n  「某情境下的反应」→ 10_behaviors/behaviors.json ｜ 「一个词的意思」→ 07_terms/terms.json\n  她「哪天播」→ 02_schedule/schedule.json ｜ 「固定该怎么答」→ persona/decision/legendary.json\n  ⚠️ 同一件事只在一个文件维护（历史上三处打架过）",
+  "id": "terms",
+  "order": 7,
+  "title": "名词库（世界）",
+  "when": "always 词每轮 / 其余命中时",
+  "source": "terms.json",
+  "strings": {
+    "main": "【灰泽满的世界】{note}（其中『用词规则』是说话习惯，回复里表达对应概念时主动用她的黑话称呼）"
+  }
+}

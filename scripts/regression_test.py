@@ -72,16 +72,11 @@ def _init():
     #    **真实** user_memory/memory_v2_shadow.json 里写一堆 regr_* 测试用户。
     core.update_memory_v2_shadow_task = lambda *a, **k: asyncio.sleep(0)
 
-    # 把记忆文件指向临时目录，避免污染线上数据
-    tmp = tempfile.mkdtemp(prefix="hzm_test_")
-    import src.plugins.chatbot.memory as mem
-    mem.use_storage(Path(tmp))
-    # v2 的影子库同样指到临时目录（否则注入会读到真实库里的真人记忆）
-    import src.plugins.chatbot.memory_v2 as mv2
-    core._MEMORY_V2_STORE = mv2.ShadowMemoryStore(
-        state_file=Path(tmp) / "memory_v2_shadow.json",
-        audit_file=Path(tmp) / "memory_v2_audit.jsonl",
-    )
+    # 三个 store 一起指到临时目录，避免污染线上数据。
+    # ⚠️ 2026-10-16 之前这里**漏了会话记忆** —— `user_memory/session/` 里攒了 78 个
+    #    `regr_*` 假会话。收口到 _common.isolate_user_stores()，以后加存储只改那一处。
+    import _common
+    _common.isolate_user_stores()
     return core
 
 

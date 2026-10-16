@@ -48,7 +48,7 @@ def overlap(a: str, b: str) -> float:
 
 def main():
     behaviors = json.loads(
-        (ROOT / "persona" / "behavior" / "behaviors.json").read_text(encoding="utf-8")
+        (ROOT / "persona" / "injection" / "10_behaviors" / "behaviors.json").read_text(encoding="utf-8")
     )["behaviors"]
 
     queries = []

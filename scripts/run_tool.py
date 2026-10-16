@@ -203,10 +203,10 @@ def _run_analyze_pace(args):
 
 def _add_generate_vectors(sub):
     p = sub.add_parser("generate-vectors", help="场景化陈述 → 语料向量库")
-    p.add_argument("-i", "--input", default="persona/world/statement_final.json",
-                   help="场景化陈述 JSON（缺省 persona/world/statement_final.json；不要依赖内置 RAW_CORPUS，那是过期副本）")
+    p.add_argument("-i", "--input", default="persona/injection/11_corpus/statement_final.json",
+                   help="场景化陈述 JSON（缺省 persona/injection/11_corpus/statement_final.json；不要依赖内置 RAW_CORPUS，那是过期副本）")
     p.add_argument("-o", "--output", default=None,
-                   help="输出路径（默认 persona/world/corpus_vectors.json，机器人读取）")
+                   help="输出路径（默认 persona/injection/11_corpus/corpus_vectors.json，机器人读取）")
     p.add_argument("--only-index", default="",
                    help="只重算这些 statement 索引，如 --only-index 335,410,420")
     p.set_defaults(func=_run_generate_vectors)
@@ -239,7 +239,7 @@ def _run_generate_vectors(args):
 def _add_generate_persona(sub):
     p = sub.add_parser("generate-persona",
                        help="⚠️危险：场景化陈述 → 覆盖人格三件套（traits/styles/behaviors）。会覆盖人工审批产物，需 --danger")
-    p.add_argument("-i", "--input", default="persona/world/statement_final.json",
+    p.add_argument("-i", "--input", default="persona/injection/11_corpus/statement_final.json",
                    help="场景化陈述 JSON（缺省 statement_final.json）")
     p.add_argument("-o", "--out-dir", default=None,
                    help="输出目录（默认 persona/，机器人读取）")

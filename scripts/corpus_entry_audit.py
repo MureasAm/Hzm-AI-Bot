@@ -31,7 +31,6 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _common  # noqa: E402
 
-WORLD = _common.WORLD_DIR
 OUT = _common.OUTPUTS_DIR / "eval" / "corpus_entry_audit.json"
 OUT_MD = _common.OUTPUTS_DIR / "corpus_no_entry.md"
 
@@ -54,9 +53,9 @@ def main() -> int:
     _common.ensure_utf8_stdout()
 
     st = [x["statement"] for x in json.loads(
-        (WORLD / "statement_final.json").read_text(encoding="utf-8"))["statements"]]
-    asks = json.loads((WORLD / "corpus_asks.json").read_text(encoding="utf-8"))["asks"]
-    kw = json.loads((WORLD / "corpus_keywords.json").read_text(encoding="utf-8"))["keywords"]
+        _common.STATEMENT_FILE.read_text(encoding="utf-8"))["statements"]]
+    asks = json.loads(_common.CORPUS_ASKS_FILE.read_text(encoding="utf-8"))["asks"]
+    kw = json.loads(_common.CORPUS_KEYWORDS_FILE.read_text(encoding="utf-8"))["keywords"]
     ask_keys = list(asks)
 
     # ==================== 单调相似度对齐 ====================

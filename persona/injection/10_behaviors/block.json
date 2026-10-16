@@ -1,0 +1,11 @@
+{
+  "_readme": "第 10 块·行为指令。\n【什么时候注】按「判别词 + LLM 意图分类」命中才注（**不走向量**）。\n【改什么】改同目录 behaviors.json；改完**不用重算向量**。\n【一条行为长什么样】trigger（什么情境）→ response（做什么）→ samples（真实原话示范）。\n⚠️ response 描述**做什么**，不写「用哪个词」——台词归 samples。\n\n【改数据前先对一眼】这件事属于哪一类：\n  她「发生过」→ 11_corpus/statement_final.json ｜ 她「一贯如此」→ 04_preferences/preferences.json\n  「某情境下的反应」→ 10_behaviors/behaviors.json ｜ 「一个词的意思」→ 07_terms/terms.json\n  她「哪天播」→ 02_schedule/schedule.json ｜ 「固定该怎么答」→ persona/decision/legendary.json\n  ⚠️ 同一件事只在一个文件维护（历史上三处打架过）",
+  "id": "behaviors",
+  "order": 10,
+  "title": "行为指令",
+  "when": "命中行为时",
+  "source": "behaviors.json（判别词：behavior_keywords.json）",
+  "strings": {
+    "main": "【当前情境下的行为指令】\n{text}"
+  }
+}

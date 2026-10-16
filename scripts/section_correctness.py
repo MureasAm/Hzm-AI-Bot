@@ -113,8 +113,7 @@ async def main():
         pass
 
     core.update_memory_v2_shadow_task = lambda *a, **k: asyncio.sleep(0)
-    tmp = tempfile.mkdtemp(prefix="seccorr_")
-    mem.use_storage(Path(tmp))
+    tmp = _common.isolate_user_stores()   # 短期/会话/长期三个 store 一起隔离
     global _ORIG
     _ORIG = core.generate_reply
     core.generate_reply = _capture

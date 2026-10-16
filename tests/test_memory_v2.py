@@ -273,6 +273,57 @@ def test_bot_self_facts_are_rejected_and_user_facts_survive(store, clock):
     assert [m["key"] for m in accepted] == ["preferred_name"]
 
 
+def test_generic_fact_key_is_kept_but_flagged(store, clock, tmp_path):
+    """「什么都能装」的栏目名**只记不拦**（2026-10-16）。
+
+    为什么不是直接拒：退掉 ≠ 清理干净，退掉 = **这件事压根没被记住**。
+    实测那 5 条 `fact/moment` 里有一条是"用户向灰泽满求婚"——退了她以后就完全不知道有这回事。
+    要的是**逼它改个具体名字**，不是**丢事**。所以先收下、打标记、写审计，跑几天看命中率。
+    """
+    accepted = store.ingest(
+        "u1",
+        [
+            {"kind": "fact", "key": "moment", "value": "用户向灰泽满求婚",
+             "explicit": True, "confidence": 0.9},
+            {"kind": "fact", "key": "proposal", "value": "用户向灰泽满求婚",
+             "explicit": True, "confidence": 0.9},
+        ],
+        source=_source(now=clock, user="请嫁给我"),
+        now=clock,
+    )
+    # 两条都收下了——拦的话第一条就没了
+    assert [m["key"] for m in accepted] == ["moment", "proposal"]
+
+    rows = [json.loads(line) for line in
+            (tmp_path / "memory_v2_audit.jsonl").read_text(encoding="utf-8").splitlines()]
+    flagged = {r["key"]: r.get("generic_key")
+               for r in rows if r.get("decision") == "accepted"}
+    assert flagged["moment"] is True, "笼统栏目名要在审计里留痕，才能攒命中率"
+    assert flagged.get("proposal") is None, "具体栏目名不该被标记"
+
+
+def test_generic_key_set_covers_the_names_actually_observed():
+    """名单要盯着**真实出现过的**名字，不是凭想象列的——`moment` 是实测攒了 5 条的那个。"""
+    from src.plugins.chatbot import memory_v2
+    assert "moment" in memory_v2._GENERIC_FACT_KEYS
+    assert "info" in memory_v2._GENERIC_FACT_KEYS
+    assert "preferred_name" not in memory_v2._GENERIC_FACT_KEYS
+    assert "location" not in memory_v2._GENERIC_FACT_KEYS
+
+
+def test_prompt_pins_the_direction_of_address_style():
+    """`address_style` 填的是「**他希望灰泽满怎么称呼他自己**」，方向不能反。
+
+    实测踩坑 2026-10-16：同一个句式"我想叫你宝宝"，两条记录分别被填成 `nickname` 和 `plain`
+    两个相反的值——不管哪个对，至少有一个是错的。
+    """
+    prompt = build_extraction_prompt(
+        user_text="u", assistant_text="a", current_summary="",
+        session_id="s", observed_at=datetime(2026, 10, 6, 20, 0, 0))
+    assert "他希望灰泽满怎么称呼他自己" in prompt
+    assert "我想叫你宝宝" in prompt, "光说「方向」不够，要有一条能被认出来的反例"
+
+
 def test_user_plan_cannot_be_stored_as_assistant_commitment(store, clock):
     accepted = store.ingest(
         "u1",
@@ -473,12 +524,12 @@ class TestPreferenceDimensions:
         assert accepted == []
 
     def test_all_dimension_values_have_behavior_sentences(self):
-        from src.plugins.chatbot import memory_v2
+        from src.plugins.chatbot import injection, memory_v2
 
         assert len(memory_v2._PREFERENCE_VALUES) == 8
         for key, values in memory_v2._PREFERENCE_VALUES.items():
             for value in values:
-                behavior = memory_v2._PREFERENCE_BEHAVIORS.get((key, value))
+                behavior = injection.behavior_sentence(key, value)
                 assert behavior, f"缺少行为句：{key}={value}"
 
 

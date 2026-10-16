@@ -29,23 +29,44 @@ OUT_STATEMENTS = OUTPUTS_DIR / "statements"    # 场景化陈述
 OUT_EVAL = OUTPUTS_DIR / "eval"                    # 评测（persona/retrieval/regression 子目录）
 OUT_REGRESSION = OUT_EVAL / "regression"
 
-# ==================== 运行时固定契约（勿改默认值）====================
+# ==================== 运行时固定契约 ====================
 DATA_DIR = PROJECT_ROOT / "data"
-PERSONA_DIR = PROJECT_ROOT / "persona"
-# persona/ 按分层职责分子目录：core 核心人设 / behavior 行为 / speech 说话 / world 世界
-CORE_DIR = PERSONA_DIR / "core"
-BEHAVIOR_DIR = PERSONA_DIR / "behavior"
-SPEECH_DIR = PERSONA_DIR / "speech"
-WORLD_DIR = PERSONA_DIR / "world"
 ENV_FILE = PROJECT_ROOT / ".env.prod"
 
-# 机器人启动要读的固定文件（与 src/plugins/chatbot/constants.py 对齐）
-# 向量缓存跟源文件放一起（persona/*/），corpus 向量也归 persona/world/（人物记忆）
-VECTOR_FILE = WORLD_DIR / "corpus_vectors.json"
-CORE_STORY_VECTOR_FILE = WORLD_DIR / "core_story_vectors.json"
-BEHAVIORS_FILE = BEHAVIOR_DIR / "behaviors.json"
-PREFERENCES_FILE = WORLD_DIR / "preferences.json"
-CORE_STORIES_FILE = WORLD_DIR / "core_stories.json"
+# ⚠️ persona 的路径**唯一真值在 `src/plugins/chatbot/constants.py`**（2026-10-16 收口）。
+#    这里以前抄了一份，两份各自漂移——抄的那份还留着 `speech/` 这个 2026-10-04 就删掉的目录。
+#    constants.py 只 import pathlib，脚本引用它不会拉起 nonebot（别的脚本早就这么用了）。
+# ⚠️ persona 的路径**唯一真值在 `src/plugins/chatbot/constants.py`**（2026-10-16 收口）。
+#    这里以前抄了一份，两份各自漂移——抄的那份还留着 `speech/` 这个 2026-10-04 就删掉的目录。
+#
+# ⚠️ 但**不能写 `from src.plugins.chatbot.constants import ...`**：那会先执行包的
+#    `__init__.py`，而它第 52 行就是 `@get_driver().on_bot_connect` → 脚本里直接
+#    `ValueError: NoneBot has not been initialized`。所以**按文件路径单独加载这一个模块**
+#    （constants.py 只 import pathlib，没有别的依赖）。
+import importlib.util as _ilu  # noqa: E402
+
+_spec = _ilu.spec_from_file_location(
+    "_hzm_constants", PROJECT_ROOT / "src" / "plugins" / "chatbot" / "constants.py")
+_c = _ilu.module_from_spec(_spec)
+_spec.loader.exec_module(_c)
+
+PERSONA_DIR = _c.PERSONA_DIR
+INJECTION_DIR = _c.INJECTION_DIR
+SYSTEM_PROMPT_FILE = _c.SYSTEM_PROMPT_FILE
+SCHEDULE_FILE = _c.SCHEDULE_FILE
+PREFERENCES_FILE = _c.PREFERENCES_FILE
+CORE_STORIES_FILE = _c.CORE_STORIES_FILE
+TERMS_FILE = _c.TERMS_FILE
+BEHAVIORS_FILE = _c.BEHAVIORS_FILE
+BEHAVIOR_KEYWORDS_FILE = _c.BEHAVIOR_KEYWORDS_FILE
+STATEMENT_FILE = _c.STATEMENT_FILE
+VECTOR_FILE = _c.VECTOR_FILE
+CORPUS_KEYWORDS_FILE = _c.CORPUS_KEYWORDS_FILE
+CORPUS_ASKS_FILE = _c.CORPUS_ASKS_FILE
+CORE_STORY_VECTOR_FILE = _c.CORE_STORY_VECTOR_FILE
+DECISION_DIR = _c.DECISION_DIR
+LEGENDARY_FILE = _c.LEGENDARY_FILE
+STICKER_FILE = _c.STICKER_FILE
 
 
 def get_api_key(name: str) -> str | None:
@@ -88,6 +109,47 @@ def report_saved(*paths):
 def warn_fixed_path(path) -> None:
     """提示某个路径是机器人启动要读的固定位置。"""
     print(f"   ⚠️ {path} 是机器人启动要读的固定位置，如需改输出请用 --out 并手动迁移")
+
+
+def isolate_user_stores(root=None, *, load_plugins: bool = False):
+    """把**用户数据**（短期记忆 / 会话记忆 / 长期记忆 v2）全部指到临时目录。
+
+    ## 为什么要有这个函数（2026-10-16）
+
+    离线实验会直接跑 `core.handle_chat`，它一路上会往 `user_memory/` 里写东西。
+    之前**短期记忆和 v2 长期记忆各自隔离了、会话记忆漏了**，实测后果：
+
+        user_memory/session/ 共 585 个文件，其中 337 个是实验造的假会话
+        （regr_* 78 ／ abl_* 36 ／ sect_* 120 ／ skel_* 40 ／ sit_* 32 …）
+
+    占 58%。**隔离这件事以前散在 8 个脚本里各写各的，所以漏一层没人发现** ——
+    现在收口到这一处，以后再加存储只改这个函数。
+
+    用法（`nonebot.load_plugins` 之后、跑第一条消息之前）：
+
+        import _common
+        tmp = _common.isolate_user_stores()          # 自己建临时目录
+        tmp = _common.isolate_user_stores("out/x")   # 或者指定目录
+
+    ⚠️ 会替换 `core._MEMORY_V2_STORE`（它是模块级实例，改不了路径）。
+    """
+    import tempfile
+    from pathlib import Path
+
+    import src.plugins.chatbot.core as core
+    import src.plugins.chatbot.memory as mem
+    import src.plugins.chatbot.memory_v2 as mv2
+    import src.plugins.chatbot.session_memory as sm
+
+    root = Path(root) if root else Path(tempfile.mkdtemp(prefix="hzm_offline_"))
+    root.mkdir(parents=True, exist_ok=True)
+    mem.use_storage(root)                    # 短期记忆（按会话分文件）
+    sm.use_storage(root)                     # 会话记忆（话题/事件/情绪）← 之前一直漏的就是它
+    core._MEMORY_V2_STORE = mv2.ShadowMemoryStore(   # 长期记忆 v2（影子库 + 审计）
+        state_file=root / "memory_v2_shadow.json",
+        audit_file=root / "memory_v2_audit.jsonl",
+    )
+    return root
 
 
 def chatlog_lines():

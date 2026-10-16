@@ -2,6 +2,7 @@
 
 模块结构：
 - constants.py  路径 / API / 阈值常量
+- injection.py  19 个注入块的加载与渲染（块定义在 persona/injection/<序号_块名>/block.json）
 - config.py     NoneBot 配置读取助手
 - context_probe.py  时间/农历/天气感知
 - persona.py    人格加载与语义行为匹配（trigger 向量缓存）

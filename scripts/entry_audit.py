@@ -86,7 +86,7 @@ async def audit_legendary(ds, model, zp, sem):
 
 
 async def audit_core_story(ds, model, zp, sem):
-    cs = json.loads((ROOT / "persona/world/core_stories.json").read_text(encoding="utf-8"))
+    cs = json.loads((ROOT / "persona/injection/05_core_stories/core_stories.json").read_text(encoding="utf-8"))
     stories = cs["stories"] if isinstance(cs, dict) and "stories" in cs else cs
     return await _run(ds, model, zp, sem, "core_story", [
         {"id": s["id"], "desc": f"{s.get('category','')}：{s.get('text','')[:70]}",

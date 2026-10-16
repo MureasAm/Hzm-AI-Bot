@@ -8,9 +8,12 @@ if not exist "%PY%" set "PY=python"
 
 echo ============================================
 echo   灰泽满周表更新
-echo   识图后只覆盖 persona\world\schedule.json 的 weekly 字段
+echo   识图后只覆盖 persona\injection\02_schedule\schedule.json 的 weekly 字段
 echo ============================================
 echo.
+
+REM 第一个参数是 preview -> 只看识图结果，不写文件
+if /i "%~1"=="preview" goto PREVIEW
 
 REM 拖进来的文件一定带扩展名；没扩展名就是双击/只传了参数 -> 收图夹模式
 if "%~x1"=="" goto INBOX
@@ -30,6 +33,14 @@ goto END
 echo [模式] 收图夹 - 处理 data\schedule_inbox\ 里最新的一张图
 echo        想把某一张图直接跑掉，把那张图拖到本文件上就行
 echo.
+goto RUN
+
+:PREVIEW
+echo [模式] 预览 - 识图收图夹里最新的一张，只打印结果，不写文件
+echo --------------------------------------------
+"%PY%" "%~dp0scripts\update_schedule.py" --preview
+echo --------------------------------------------
+goto END
 
 :RUN
 echo --------------------------------------------

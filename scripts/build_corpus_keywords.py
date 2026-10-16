@@ -21,7 +21,7 @@
 2. **有没有真发生**：拿 `data/chat_log/` 回放，看真实聊天里被勾出来过几次
 3. **勾错了没有**：同回放，看误报
 
-⚠️ 本脚本只**产出数据**（`persona/world/corpus_keywords.json`），不改线上。
+⚠️ 本脚本只**产出数据**（`persona/injection/11_corpus/corpus_keywords.json`），不改线上。
 
 用法：
     python scripts/build_corpus_keywords.py --limit 10   # 先看 10 条
@@ -43,8 +43,8 @@ from openai import AsyncOpenAI  # noqa: E402
 from src.plugins.chatbot.constants import DEEPSEEK_BASE_URL, THINKING_DISABLED  # noqa: E402
 import _common  # noqa: E402
 
-SRC = ROOT / "persona" / "world" / "statement_final.json"
-OUT = ROOT / "persona" / "world" / "corpus_keywords.json"
+SRC = ROOT / "persona" / "injection" / "11_corpus" / "statement_final.json"
+OUT = ROOT / "persona" / "injection" / "11_corpus" / "corpus_keywords.json"
 
 PROMPT = """下面是"灰泽满"（虚拟主播）的一段经历，她用**语义检索**找不到，需要一个"钩子"——
 用户提到某个具体词时，这条经历就该被想起来。

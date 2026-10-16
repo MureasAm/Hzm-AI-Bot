@@ -8,9 +8,32 @@ from pathlib import Path
 # constants.py -> chatbot -> plugins -> src -> 项目根
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
-SYSTEM_PROMPT_FILE = PROJECT_ROOT / "persona" / "core" / "system_prompt.txt"
-BEHAVIORS_FILE = PROJECT_ROOT / "persona" / "behavior" / "behaviors.json"
-TERMS_FILE = PROJECT_ROOT / "persona" / "world" / "terms.json"                 # 灰泽满名词库(lorebook)：核心词always注入+命中注入
+# ==================== persona：19 个注入块，一块一个文件夹 ====================
+# 目录名 = "序号_块名"，**序号就是注入顺序**（core.build_message_list 按它排）。
+# 每个文件夹里有一个 `block.json`：这块的段头 + 文案模板 + 它从哪拿内容 + 什么时候注。
+# ⚠️ **注入文案一律写在 block.json 里，不要写回 Python**（2026-10-16 从 4 个 py 文件里抽出来。
+#    抽之前文案散在 core/memory_v2/session_memory/context_probe，改一次要翻四处，
+#    而且骨架里说【行为指令】、代码里叫【当前情境下的行为指令】这种脱节就是这么来的）。
+PERSONA_DIR = PROJECT_ROOT / "persona"
+INJECTION_DIR = PERSONA_DIR / "injection"
+# decision/ = **不进提示词、由代码自己决定的**那两份：入口的硬路由（legendary）+ 出口的配图判定（stickers）。
+DECISION_DIR = PERSONA_DIR / "decision"
+BLOCK_FILE = "block.json"                     # 每个注入块文件夹里那个约定文件名
+
+SYSTEM_PROMPT_FILE = PERSONA_DIR / "core" / "system_prompt.txt"                # 第 1 块·骨架
+SCHEDULE_FILE = INJECTION_DIR / "02_schedule" / "schedule.json"                # 第 2 块 地面真值：她哪天几点播
+PREFERENCES_FILE = INJECTION_DIR / "04_preferences" / "preferences.json"       # 第 4 块（按 keywords 子串命中，不走向量）
+CORE_STORIES_FILE = INJECTION_DIR / "05_core_stories" / "core_stories.json"    # 第 5 块
+TERMS_FILE = INJECTION_DIR / "07_terms" / "terms.json"                         # 第 7 块 名词库：核心词 always + 命中注入
+BEHAVIORS_FILE = INJECTION_DIR / "10_behaviors" / "behaviors.json"             # 第 10 块
+BEHAVIOR_KEYWORDS_FILE = INJECTION_DIR / "10_behaviors" / "behavior_keywords.json"  # 行为判定的确定性兜底
+STATEMENT_FILE = INJECTION_DIR / "11_corpus" / "statement_final.json"          # 第 11 块 的源文本（运行时读的是下面的向量库）
+VECTOR_FILE = INJECTION_DIR / "11_corpus" / "corpus_vectors.json"              # 第 11 块 直播记忆向量库
+CORPUS_KEYWORDS_FILE = INJECTION_DIR / "11_corpus" / "corpus_keywords.json"    # corpus 的「钩子」
+CORPUS_ASKS_FILE = INJECTION_DIR / "11_corpus" / "corpus_asks.json"            # corpus 的「用户会怎么说」
+CORE_STORY_VECTOR_FILE = INJECTION_DIR / "05_core_stories" / "core_story_vectors.json"
+LEGENDARY_FILE = DECISION_DIR / "legendary.json"                              # 不进提示词：命中就直发（硬路由）
+STICKER_FILE = DECISION_DIR / "stickers.json"                                 # 不进提示词：回复后判"配哪张图"
 
 MEMORY_FILE = PROJECT_ROOT / "user_memory" / "short_term.json"                 # 【旧】单文件：已拆，留作迁移源
 MEMORY_DIR = PROJECT_ROOT / "user_memory" / "short_term"                       # 【现】短期记忆：一个会话一个文件
@@ -44,12 +67,8 @@ STICKER_COOLDOWN_TURNS = 3
 # ⚠️ 别按"张"来理解这个数字：库里有 18 类，记 8 类等于把近一半锁死，
 # 所以从 8 降到 3（≈ 最近三次表情包不重类）。
 STICKER_RECENT_KEEP = 3
-SCHEDULE_FILE = PROJECT_ROOT / "persona" / "world" / "schedule.json"          # 她的周表(手动维护,注入地面真值)
-
-VECTOR_FILE = PROJECT_ROOT / "persona" / "world" / "corpus_vectors.json"         # 直播记忆向量库（灰泽满的人物记忆，归 world/）
-# 偏好：**已不用向量**，按 keywords 子串命中（2026-09-26 改判据）。
-PREFERENCES_FILE = PROJECT_ROOT / "persona" / "world" / "preferences.json"
-CORPUS_KEYWORDS_FILE = PROJECT_ROOT / "persona" / "world" / "corpus_keywords.json"  # corpus 的「钩子」
+# （周表 / 向量 / 偏好 / 勾子的路径统一写在文件头那段 persona 里，这里不再重复定义
+#   —— 2026-10-16 之前它们在这里又写了一遍，同一份路径改目录要改两处。）
 
 # ==================== API ====================
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
@@ -205,6 +224,5 @@ AUTO_ACCEPT_FRIEND = True
 PREFERENCE_TOP_N = 2              # 最多注入几条偏好条目
 
 # 核心记忆（印象最深的结晶，独立于 corpus 单独检索，低阈值高浮现）
-CORE_STORY_VECTOR_FILE = PROJECT_ROOT / "persona" / "world" / "core_story_vectors.json"
 CORE_STORY_THRESHOLD = 0.42       # 比偏好/行为低，核心故事更容易浮出（但低于此不注入，防乱触发）
 CORE_STORY_TOP_N = 2              # 最多注入几条核心记忆

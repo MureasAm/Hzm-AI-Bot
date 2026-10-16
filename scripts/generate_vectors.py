@@ -1,7 +1,7 @@
 """把场景化陈述向量化，产出机器人运行时读的 corpus 向量库。
 
-输入 `persona/world/statement_final.json`（322 条她的直播经历），
-输出 `persona/world/corpus_vectors.json`（[{text, vector}]，裸 list）。
+输入 `persona/injection/11_corpus/statement_final.json`（322 条她的直播经历），
+输出 `persona/injection/11_corpus/corpus_vectors.json`（[{text, vector}]，裸 list）。
 
 ⚠️ **必须显式传 `-i`**：内置的 RAW_CORPUS 是 2026-08 的过期副本，
 不带 -i 会用它覆盖线上 322 条（`_load_corpus` 里 `raise SystemExit` 拦着）。
@@ -13,7 +13,7 @@ corpus_vectors.json（里面有 text 原文副本），**从不读源文件**。
 ⚠️ 上游失败（如 embedding 余额不足）时本脚本**直接 return 不写文件**；
 `run_tool` 那边会用 mtime 判断到底写没写，别再无条件报"已保存"。
 
-用法：python scripts/run_tool.py generate-vectors -i persona/world/statement_final.json
+用法：python scripts/run_tool.py generate-vectors -i persona/injection/11_corpus/statement_final.json
 """
 import json
 import asyncio
@@ -24,7 +24,7 @@ import re
 # 项目根目录（scripts/ 的上一级），所有路径基于它构建
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = PROJECT_ROOT / ".env.prod"
-OUTPUT_VECTOR_FILE = PROJECT_ROOT / "persona" / "world" / "corpus_vectors.json"
+OUTPUT_VECTOR_FILE = PROJECT_ROOT / "persona" / "injection" / "11_corpus" / "corpus_vectors.json"
 
 def clean_timestamps(text: str) -> str:
     """
@@ -287,7 +287,7 @@ def _load_corpus(input_path) -> list:
     RAW_CORPUS——那是 2026-08 的过期副本，不带 -i 会用它覆盖线上 322 条 corpus。
     """
     if not input_path:
-        raise SystemExit("❌ 必须指定 -i（如 -i persona/world/statement_final.json），"
+        raise SystemExit("❌ 必须指定 -i（如 -i persona/injection/11_corpus/statement_final.json），"
                           "不要依赖内置 RAW_CORPUS（过期副本，会覆盖线上 corpus）")
     with open(input_path, "r", encoding="utf-8") as f:
         data = json.load(f)

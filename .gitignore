@@ -237,6 +237,10 @@ assets/handoff/
 **/proof_segments.json
 **/proof-corrections.jsonl
 **/vup.db
+# 3,605 条弹幕↔原话训练对（原文，不能公开再分发）
+**/a2-sft-round*.jsonl
+# 从语料导出的术语表（含真实人名/ASR 变体）
+**/灰泽满Hazel-glossary.json
 
 # 表情包决策流水（2026-10-15 起）：一行一轮，含会话 ID。
 # 是统计用的本机运行产物，不入库（同 data/llm_usage.jsonl 的处置）。

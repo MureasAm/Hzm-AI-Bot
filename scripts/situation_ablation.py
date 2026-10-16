@@ -146,8 +146,7 @@ def _hit(rule, text):
 async def run(per_scenario: int, scenarios: list, seed: int) -> int:
     core.update_memory_v2_shadow_task = lambda *a, **k: asyncio.sleep(0)
     import tempfile
-    tmp = tempfile.mkdtemp(prefix="sitabl_")
-    pa.mem.use_storage(Path(tmp))
+    tmp = _common.isolate_user_stores()   # 短期/会话/长期三个 store 一起隔离
     pa._ORIG_REPLY = core.generate_reply
     core.generate_reply = pa._capture
     gen = pa._ORIG_REPLY

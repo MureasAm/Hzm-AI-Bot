@@ -1,0 +1,9 @@
+{
+  "_readme": "第 1 块·骨架（基础提示词）。\n【这块是什么】人格总纲：身份边界、人格底色、事实纪律、说话风格、运行时索引。\n【什么时候注】每轮恒定，永远是第一块。\n【改什么】改 persona/core/system_prompt.txt —— 那个文件本身就是注入内容，这里不存文案。\n⚠️ 它是前缀缓存唯一的稳定头，位置不能动。",
+  "id": "identity",
+  "order": 1,
+  "title": "骨架（基础提示词）",
+  "when": "每轮恒定",
+  "kind": "raw_file",
+  "source": "../../core/system_prompt.txt"
+}

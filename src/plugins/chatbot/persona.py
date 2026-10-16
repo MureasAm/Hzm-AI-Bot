@@ -16,7 +16,7 @@ _schedule_cache = None
 
 
 def load_terms() -> list:
-    """加载 persona/world/terms.json 名词库（模块级缓存）。"""
+    """加载 persona/injection/07_terms/terms.json 名词库（模块级缓存）。"""
     global _terms_cache
     if _terms_cache is not None:
         return _terms_cache
@@ -32,7 +32,7 @@ def load_terms() -> list:
 
 
 def load_schedule():
-    """加载 persona/world/schedule.json（只有周表，手动维护）。
+    """加载 persona/injection/02_schedule/schedule.json（只有周表，手动维护）。
 
     周表是回答"明天/这周/几点播"类问题的**地面真值**——记忆里带"明天/下周"的话
     是过去某场直播当时的说法，可能早已过期，不能当现在的安排答。

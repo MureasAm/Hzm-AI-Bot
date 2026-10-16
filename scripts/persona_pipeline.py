@@ -31,7 +31,7 @@ import _common
 
 TARGETS = ("corpus", "behaviors")   # voice-samples / phrases 已下线（2026-10-04：并入 behaviors）
 PIPELINE_DIR = _common.OUTPUTS_DIR / "persona_pipeline"
-STATEMENT_FILE = _common.WORLD_DIR / "statement_final.json"
+STATEMENT_FILE = _common.STATEMENT_FILE
 _SELF_PRONOUN_RE = re.compile(r"(?<!其)[她他](?!们|俩)")
 
 

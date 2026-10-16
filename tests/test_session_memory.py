@@ -85,8 +85,10 @@ class TestSessionGapSeconds:
 class TestPreviousSessionNote:
     """过期会话**不再静默丢掉**，而是带着"隔了多久"降级成「上次聊过」。
 
-    背景：12 小时那道闸原来是静默的——过了就整个丢掉，她连"上次你不是说要加粉丝群吗"
+    背景：这道闸原来是静默的——过了就整个丢掉，她连"上次你不是说要加粉丝群吗"
     都说不出来。时间戳只决定了"丢不丢"，没决定"怎么定性"，这里补上后半句。
+
+    ⚠️ 2026-10-16 改：阈值从 12h 收到 3h（**等于话题消散那条**），两块不再有盲区。
     """
 
     def _write_stale(self, f, hours, topic="香水", events=("聊了檀香",)):
@@ -100,11 +102,23 @@ class TestPreviousSessionNote:
         self._write_stale(_isolate_file, 1)
         assert sm.previous_session_note("u1") == ""
 
-    def test_between_decay_and_note_thresholds_no_note(self, _isolate_file):
-        """两个阈值已拆开：话题 3h 就消散，但没隔够 12h 不发「上次聊过」。"""
+    @pytest.mark.parametrize("hours", [0.5, 1, 2, 3, 4, 5, 8, 12, 13, 48])
+    def test_no_gap_between_the_two_blocks(self, _isolate_file, hours):
+        """**任何间隔下，两块里至少有一块有内容。**
+
+        原来话题消散是 3h、「上次聊过」是 12h，中间 3~12h 是**盲区**：第 8 块不注了、
+        第 9 块还没到 → 那一场对谁都不存在。实测线上 245 个真实会话里 **54 个**落在那儿，
+        而且方向是反的（8 小时前什么都不说，13 小时前反而说"上次聊过"）。
+        """
+        self._write_stale(_isolate_file, hours)
+        assert sm.build_session_context("u1") or sm.previous_session_note("u1"), \
+            f"隔 {hours} 小时：两块都空 —— 又漏出盲区了"
+
+    def test_just_past_decay_gets_note(self, _isolate_file):
+        """刚过 3 小时那一刻就降级成「上次聊过」——不能再有"什么都不说"的一挡。"""
         self._write_stale(_isolate_file, 5)
-        assert sm.get_session("u1")["topic"] == ""       # 话题已消散
-        assert sm.previous_session_note("u1") == ""      # 但还不到念"上次聊过"的时候
+        assert sm.get_session("u1")["topic"] == ""       # 话题已按 3h 消散
+        assert "上次聊过" in sm.previous_session_note("u1")   # 但立刻有话说
 
     def test_clearly_old_session_gets_note(self, _isolate_file):
         self._write_stale(_isolate_file, 13)

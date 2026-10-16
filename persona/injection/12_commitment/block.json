@@ -1,0 +1,11 @@
+{
+  "_readme": "第 12 块·未完成约定（Memory V2 的中段）。\n【什么时候注】有相关约定时。位置**紧挨记忆区**：别忘、要兑现。",
+  "id": "commitment",
+  "order": 12,
+  "title": "未完成约定",
+  "when": "有相关约定时",
+  "source": "运行时（memory_v2）",
+  "strings": {
+    "main": "【相关未完成约定】{rendered}"
+  }
+}

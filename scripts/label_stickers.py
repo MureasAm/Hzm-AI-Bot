@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""给 assets/stickers/ 里的表情包打标，产出 persona/media/stickers.json。
+"""给 assets/stickers/ 里的表情包打标，产出 persona/decision/stickers.json。
 
 **为什么要打标**：表情包文件名是一串哈希，模型不知道每张画的是什么、什么时候该发。
 运行时要用「回复内容 ↔ 表情含义」匹配，所以先离线把每张的**画面描述 + 语义标签 +
@@ -28,7 +28,7 @@ from openai import AsyncOpenAI
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = PROJECT_ROOT / ".env.prod"
 STICKER_DIR = PROJECT_ROOT / "assets" / "stickers"
-OUT_FILE = PROJECT_ROOT / "persona" / "media" / "stickers.json"
+OUT_FILE = PROJECT_ROOT / "persona" / "decision" / "stickers.json"
 
 ZHIPU_BASE_URL = "https://open.bigmodel.cn/api/paas/v4/"
 DEFAULT_VISION_MODEL = "glm-4.6v"
@@ -140,7 +140,7 @@ async def run(force: bool = False, out_file: str | None = None):
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(
         {"_readme": "表情包标注（scripts/label_stickers.py 生成）。运行时按 desc+tags+use_when "
-                    "与回复内容匹配；改动后无需重算向量（未走向量，见 media/stickers.py 的说明）。",
+                    "与回复内容匹配；改动后无需重算向量（未走向量，见 stickers.py 的说明）。",
          "stickers": result},
         ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"\n✅ 写入 {out_path}（{len(result)} 张）")

@@ -47,7 +47,7 @@ from src.plugins.chatbot.constants import ZHIPU_BASE_URL, DEEPSEEK_BASE_URL  # n
 
 ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = ROOT / ".env.prod"
-OUT_FILE = ROOT / "persona" / "world" / "corpus_asks.json"
+OUT_FILE = ROOT / "persona" / "injection" / "11_corpus" / "corpus_asks.json"
 
 N_ASKS = 6          # 每条先生成几个候选（多的会被自验证滤掉）
 CONCURRENCY = 6
@@ -92,7 +92,7 @@ async def main():
     zp = AsyncOpenAI(api_key=_key("ZHIPU_API_KEY"), base_url=ZHIPU_BASE_URL)
     model = _key("OPENAI_MODEL") or "deepseek-flash"
 
-    sf = json.loads((ROOT / "persona/world/statement_final.json").read_text(encoding="utf-8"))
+    sf = json.loads((ROOT / "persona/injection/11_corpus/statement_final.json").read_text(encoding="utf-8"))
     # statement_final.json 现在是 {"_readme":..., "statements":[{"statement":...}]}（2026-09-27 起）
     items = sf["statements"] if isinstance(sf, dict) else sf
     texts = [x["statement"] for x in items]

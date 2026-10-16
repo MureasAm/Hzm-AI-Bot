@@ -80,7 +80,7 @@ def measure() -> dict:
         "run_tool 子命令数": _run_tool_subcommands(),
         "运行时文件数": len(list((ROOT / "src/plugins/chatbot").glob("*.py"))),
         "tests 文件数": len(list((ROOT / "tests").glob("*.py"))),
-        "behaviors 条数": jlen(ROOT / "persona/behavior/behaviors.json", "behaviors"),
+        "behaviors 条数": jlen(ROOT / "persona/injection/10_behaviors/behaviors.json", "behaviors"),
         "骨架字数": len((ROOT / "persona/core/system_prompt.txt").read_text(encoding="utf-8")),
         "入库文件数": len(subprocess.run(
             ["git", "ls-files"], capture_output=True, text=True, cwd=str(ROOT)

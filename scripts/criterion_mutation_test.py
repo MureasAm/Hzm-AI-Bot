@@ -46,7 +46,7 @@ BARE_PROMPT = "# 灰泽满\n你就是灰泽满，正在 QQ 里和绿冻聊天。
 # ⚠️ **只有这些文件会被注入/还原**，守卫就查它们——别查整个 persona/：
 #    那会因为**不相干的**未提交改动而拒绝跑（本仓真踩过：`schedule.json` 是用户
 #    自己在改的周表，不是我的东西，却被那条粗判挡住了一次）。
-TOUCHED = ["persona/core/system_prompt.txt", "persona/behavior/behaviors.json"]
+TOUCHED = ["persona/core/system_prompt.txt", "persona/injection/10_behaviors/behaviors.json"]
 
 
 # ==================== 注入手法 ====================
@@ -118,7 +118,7 @@ def _mutate_verbatim(name: str, reply: str):
             b.setdefault("samples", []).append({"user": "你怎么又迟到了，说好八点的",
                                                "reply": reply})
     _save(BEHAVIORS, d)
-    return ["persona/behavior/behaviors.json"]
+    return ["persona/injection/10_behaviors/behaviors.json"]
 
 
 def mutate_verbatim_deflect():

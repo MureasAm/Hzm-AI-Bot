@@ -11,7 +11,7 @@ import os
 import time
 
 from nonebot import get_driver
-from openai import AsyncOpenAI, RateLimitError
+from openai import AsyncOpenAI, RateLimitError, APIConnectionError
 
 from .constants import (
     VISION_MODEL, PUSH_INTERVAL, WEATHER_BASE_URL,
@@ -36,9 +36,10 @@ _clients_cache = None
 
 # 降级链：某一层失败之后，**隔多久才再回头试它**（秒）。两档，因为两种失败的代价差几十倍：
 #
-# - **线路挂了**（抛异常：500 / 超时 / 连接断）→ `LLM_CHAIN_RETRY_SEC`（默认 600 = 10 分钟）
-#   回头**探一次**。探一次的代价只有 ~1s（`max_retries=0`，见 `_mk_client`），
-#   所以可以探得勤一点，线路一好就自己回来。
+# - **线路挂了**（服务端 5xx / 超时）→ `LLM_CHAIN_RETRY_SEC`（默认 180 = 3 分钟）回头**探一次**。
+#   探一次的代价只有 ~0.3~1s（`max_retries=0`，见 `_mk_client`），所以值得探勤一点，线路一好就自己回来。
+#   ⚠️ **原来是 600 秒**，2026-10-15 用户反馈"十多分钟都走下一层，是不是太长了"——是的：
+#   一次失败探一次的代价才 1 秒，锁 10 分钟纯属浪费，而且**这 10 分钟的调用全落到更贵的层上**。
 # - **抖了一下**（HTTP 200 但响应不能用：没有 choices / 正文空）→ `LLM_CHAIN_FLAKY_SEC`
 #   （默认 60 = 1 分钟）**马上再试**。这一档代价大得多（可能要等到超时，实测最长 60s+），
 #   但这一层**多半是好的**（实测 6 次里 1 次卡死、其余毫秒级正常），
@@ -46,7 +47,7 @@ _clients_cache = None
 #
 # ⚠️ 两档都**不是**"每次调用都去撞"（用户 2026-10-14 否掉的方案）：
 # 同一层在窗口内只会被试一次。设成 0 = 本次进程内**永不回头**。
-_CHAIN_RETRY_SEC = float(os.environ.get("LLM_CHAIN_RETRY_SEC", "600") or 600)
+_CHAIN_RETRY_SEC = float(os.environ.get("LLM_CHAIN_RETRY_SEC", "180") or 180)
 _CHAIN_FLAKY_SEC = float(os.environ.get("LLM_CHAIN_FLAKY_SEC", "60") or 60)
 
 
@@ -148,13 +149,21 @@ class _ChainCompletions:
                 resp = await client.chat.completions.create(**payload)
             except Exception as e:
                 last_err = e
-                # 429 = **"你问太快了"，不是"我挂了"**（2026-10-14 实测中转站 luna：
-                # 连发 5 次之后桶就空了，之后每个 429 都在 0.2s 内被拒）。
-                # 它跟 500/超时不是一回事——用长窗口会把一个"慢一点"当成"坏掉了"，
-                # 一小时里只要撞上两次，这一层就基本等于没了。
-                self._mark_down(i, soft=isinstance(e, RateLimitError))
+                # **"抖一下"和"真挂了"要分开**——两类都不该用 10 分钟的长窗口：
+                #   · 429 = "你问太快了"（实测中转站 luna 连发 5 次后桶就空，之后全 0.2s 被拒）；
+                #   · **APIConnectionError = 网络层连不上**，请求**可能根本没到站**
+                #     （2026-10-15 用户发现："我这其中转站没收到失败日志，但代码报了
+                #     APIConnectionError"——**两边对得上**，因为那是本地/链路的问题）。
+                #     这种错**一点也不能说明那条渠道坏了**，锁它十分钟等于白花钱走贵的那层。
+                soft = isinstance(e, (RateLimitError, APIConnectionError))
+                self._mark_down(i, soft=soft)
                 nxt = "全线切到下一层" if i < len(self._layers) - 1 else "没有下一层了"
-                kind = "限流（慢一点，不是坏了）" if isinstance(e, RateLimitError) else type(e).__name__
+                if isinstance(e, RateLimitError):
+                    kind = "限流（慢一点，不是坏了）"
+                elif isinstance(e, APIConnectionError):
+                    kind = "连不上（网络层，不是它坏了）"
+                else:
+                    kind = type(e).__name__
                 print(f"⚠️ 模型 {label} 调用失败（{kind}: {str(e)[:60]}）→ {nxt}")
                 continue
             # ⚠️ **HTTP 成功 ≠ 拿到能用的响应**（2026-10-14 真实撞到）：

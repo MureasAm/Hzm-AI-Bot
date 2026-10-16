@@ -31,6 +31,7 @@ from .corpus_judge import judge_corpus
 from .constants import SPLIT_DELAY_MIN_MS, SPLIT_DELAY_MAX_MS  # noqa: F401 — test_core 校验分段延迟上下限时读它
 from . import context_probe
 from . import group_memory
+from . import injection as inj
 from . import memory_v2
 from .routing import (
     LEGENDARY_REPLIES, LEGENDARY_CONFIRMS, legendary_confirmed, legendary_hit, classify_l3,
@@ -373,13 +374,7 @@ def build_message_list(user_msg: str, fused_items: list,
     sched = load_schedule()
     weekly = sched.get("weekly") if sched else None
     if weekly:
-        lines = "、".join(f"{x.get('day')} {x.get('time')}" for x in weekly if x.get('day'))
-        messages.append({
-            "role": "system",
-            "content": f"【灰泽满的周表】她的固定直播安排：{lines}。"
-                       f"被问'明天/这周/几点播/来不来直播'时，以这个周表为准回答（带她的嘴硬风格），"
-                       f"不要拿直播记忆里过去某场的旧安排当现在的计划。",
-        })
+        messages.append({"role": "system", "content": inj.T("schedule", weekly=inj.format_weekly(weekly))})
 
     # Memory V2【靠前】相处方式：偏好→行为句 + 话题相关事实（个体适配，优先级最高）。
     # 位置靠前是有意的：它是"针对这个人的长期适配"，不该被后面的通用素材盖过。
@@ -392,10 +387,7 @@ def build_message_list(user_msg: str, fused_items: list,
             f"{p.get('category', '')}：{p.get('text', '')}" for p in preference_items
         )
         if prefs_text:
-            messages.append({
-                "role": "system",
-                "content": f"【灰泽满的偏好】{prefs_text}（这是她稳定真实的偏好，若与直播记忆/聊天记录冲突，以本条为准）",
-            })
+            messages.append({"role": "system", "content": inj.T("preferences", items=prefs_text)})
 
     # 核心记忆（印象最深的结晶）：粉丝常提及的过去故事，命中才注入
     if core_stories:
@@ -403,36 +395,26 @@ def build_message_list(user_msg: str, fused_items: list,
             f"{s.get('category', '')}：{s.get('text', '')}" for s in core_stories
         )
         if story_text:
-            messages.append({
-                "role": "system",
-                "content": f"【她的核心记忆】{story_text}（这是她过去最深刻的经历，粉丝常拿这些开玩笑。被问你的书/事迹时，大方承认、可提议念给TA听或说个片段概括，别一口气把原文/全文念出来——除非对方明确说'念一下'）",
-            })
+            messages.append({"role": "system", "content": inj.T("core_stories", items=story_text)})
 
     # 群聊现场（轻量群记忆注入）：在场成员 + 群内近况。群 = 好几个不同的绿冻在场，
     # 回给刚才直接点名搭话的那位，别把不同的人当成同一个"你"。
+    # ⚠️「好几个绿冻，别当成同一个人」和「只认点名/@」两条**挂在这一块上**（2026-10-16 从骨架搬来）：
+    #    它们只在群聊成立，而私聊时这块压根不注入——留在骨架里就是一条永远在场的群聊规则。
     if group_context:
-        messages.append({
-            "role": "system",
-            "content": f"【群聊现场】这是群聊。{group_context}",
-        })
+        messages.append({"role": "system", "content": inj.T("group", context=group_context)})
 
     # 名词库（terms/lorebook）：核心词 always 注入 + 命中用户消息的词注入——让模型懂"绿冻/枪神8/slg"这类词并带对的态度
     terms_note = build_terms_note(user_msg, denied_terms=denied_terms)
     if terms_note:
-        messages.append({
-            "role": "system",
-            "content": f"【灰泽满的世界】{terms_note}（其中『用词规则』是说话习惯，回复里表达对应概念时主动用她的黑话称呼）",
-        })
+        messages.append({"role": "system", "content": inj.T("terms", note=terms_note)})
 
     # 会话级记忆（当前话题 + 本场事件）：让模型接得住会话调性
     if session_context:
-        messages.append({
-            "role": "system",
-            # ⚠️ 段头原为【当前会话】——那在**断言"这是正在进行的对话"**（2026-10-05 改）。
-            #    它可能是几小时前那场、早就自然结束了，所以改成中性的【会话记忆】，
-            #    里面只陈述"话题是什么 + 什么时候开始的"，判断交给模型。
-            "content": f"【会话记忆】{session_context}",
-        })
+        # ⚠️ 段头原为【当前会话】——那在**断言"这是正在进行的对话"**（2026-10-05 改）。
+        #    它可能是几小时前那场、早就自然结束了，所以改成中性的【会话记忆】，
+        #    里面只陈述"话题是什么 + 什么时候开始的"，判断交给模型。
+        messages.append({"role": "system", "content": inj.T("session", context=session_context)})
 
     # 上一场会话（已过期，带"隔了多久"）：**不能并进上面那块**——
     # 那句写的是"你们这一场对话"，把几天前的东西塞进去她会当成现在。
@@ -456,33 +438,18 @@ def build_message_list(user_msg: str, fused_items: list,
     if behaviors:
         behavior_text = "\n\n".join(it.text for it in behaviors if it.text)
         if behavior_text:
-            messages.append({
-                "role": "system",
-                "content": f"【当前情境下的行为指令】\n{behavior_text}"
-            })
+            messages.append({"role": "system", "content": inj.T("behaviors", text=behavior_text)})
 
     # 直播记忆（source=corpus）：只当"背景记忆"，不参与风格示范
     if corpus:
         # ⚠️ **每条自己带时间定性前缀**（2026-10-15，用户定的）。
-        #    段头那句总说明（"都是曾经发生的"）实测管不住模型——项目自己的
-        #    「包装语无效」结论（`docs/架构.md` §4.5）说的就是这个：说明写在整块外面，
-        #    模型读单条时不会往回看。加在**每条自己身上**，是对那条结论的一次正面下注
-        #    （时间语义是 §4.5 明说"可能仍有效"的那一类，与"规定怎么用"不同）。
+        #    段头那句总说明（"都是曾经发生的"）实测管不住模型——项目自己的教训是：
+        #    说明写在整块外面，模型读单条时不会往回看。加在**每条自己身上**才对。
         #    ⚠️ 走**注入层**不改数据：corpus 每条都进 embedding，数据层加前缀 = 给 421 个
-        #    向量加同一个常数偏移、稀释条间区分度，还要重算全库。要回退，改这一行即可。
-        context = "\n".join(f"- 【这是过去发生过的事】{it.text}" for it in corpus if it.text)
+        #    向量加同一个常数偏移、稀释条间区分度，还要重算全库。要回退，改 block.json 的 item。
+        context = "\n".join(inj.T("corpus", "item", text=it.text) for it in corpus if it.text)
         if context:
-            messages.append({
-                "role": "system",
-                "content": f"【她经历过的相关背景】以下是她过去直播里经历过的事（背景记忆，都是曾经发生的，不是现在）。"
-                           f"**别拿背景记忆编当下的因果**——"
-                           f"① 她一贯的毛病（迟到/睡过头/拖延/临时鸽/熬夜）是她的常态：被问'怎么又迟到/又鸽/为什么迟到'这类时，"
-                           f"直接认领常态就好，嘴硬自洽地接，"
-                           f"不需要也编不出'这一次'的具体原因，别硬解释；"
-                           f"② 某次具体的旧记忆（那次和谁连麦、那次赶作业到半夜）只当讲古素材，**绝不能拿来当这次迟到/鸽的理由去编因果**；"
-                           f"若确实在说当下且感知没给原因，就大方说不知道/打哈哈，别从旧事现编一个。"
-                           f"\n{context}"
-            })
+            messages.append({"role": "system", "content": inj.T("corpus", items=context)})
 
     # Memory V2【中段】未完成约定：别忘、要兑现（system 中段，紧挨记忆区）。
     if commitment_context:
@@ -490,10 +457,7 @@ def build_message_list(user_msg: str, fused_items: list,
 
     # 长期记忆注入
     if memory_context:
-        messages.append({
-            "role": "system",
-            "content": f"【关于这个绿冻的长期记忆】\n{memory_context}"
-        })
+        messages.append({"role": "system", "content": inj.T("memory", context=memory_context)})
 
     # 短期记忆注入
     # ⚠️ **她自己说过的话不再回灌进上下文**（2026-10-14，用户决定；实测见
@@ -519,26 +483,13 @@ def build_message_list(user_msg: str, fused_items: list,
                 #   现在改成：**每条消息自己带 [多久前]**（由 memory.get_user_history_timed 渲染），
                 #   只给事实、不给"该怎么理解"的说明，判断交给模型。
                 #   history_gap_note 参数保留（调用方还在传），但不再拼进历史块。
-                # 【别自相矛盾】：旧的【一致性规则】写的是"借口要与之前保持一致"——那是**直接教它复读**：
-                # 一旦第一次用了某个借口（"威严""搬家"），规则就把它锁死（实测各被锁了一轮又一轮）。
-                # 改成**只约束事实别打架**，明确不管说法与态度。
                 # （原先这里还有一条【防复读】"别把上轮那句原样搬出来"——她自己的话已经不注入了，
                 #   那条没有对象了，2026-10-14 一并删掉；防复读现在是三道确定性闸在管。）
-                context += (
-                    "\n\n【别自相矛盾】同一件事的**事实**别前后打架——说过的原因、安排、答应过的事"
-                    "（如'今天为什么没播''这周播不播'），别改口成另一套。这条只管**事实**，"
-                    "不管**说法和态度**：被反复追问同一件事时，换个说法、换个角度、或者干脆松口/推进，"
-                    "都比把上轮那句原样再说一遍自然。"
-                )
-                messages.append({
-                    "role": "system",
-                    "content": f"【最近对话记录】\n{context}"
-                })
+                text = inj.T("history", context=context) + inj.T("history", "contradiction")
+                messages.append({"role": "system", "content": text})
         else:
-            messages.append({
-                "role": "system",
-                "content": f'【关于这个绿冻的上一轮记忆】\n我说："{user_history}"'
-            })
+            messages.append({"role": "system",
+                             "content": inj.T("history", "fallback", history=user_history)})
 
     # 连续索要（客观事实，不含指令）：她需要知道"这已经是第几次了"。
     # 为什么必须有（2026-10-04 从真实记录发现）：上下文只带最近 10 条，
@@ -548,11 +499,9 @@ def build_message_list(user_msg: str, fused_items: list,
     #    "怎么应对"是 behaviors 的事；而且实测"管怎么用"的说明无效、事实类信息有效。
     if same_request and int(same_request.get("count") or 1) >= 2:
         what = same_request.get("what") or "同一件事"
-        messages.append({
-            "role": "system",
-            "content": f"【客观情况】用户已经连续 {same_request['count']} 轮在向灰泽满要{what}了"
-                       f"（换着说法也算同一件事）。前面 {same_request['count'] - 1} 轮都没有答应。",
-        })
+        messages.append({"role": "system", "content": inj.T(
+            "same_request", count=same_request["count"], what=what,
+            prev=same_request["count"] - 1)})
 
 
     # 感知源②：图片消息——把视觉描述并入用户消息，避免空消息让模型以为"对方没说话"
@@ -562,10 +511,7 @@ def build_message_list(user_msg: str, fused_items: list,
 
     # 感知源③：批量归纳（用户连发多条时，作为理解整批的提示层，原文仍完整保留）
     if batch_summary:
-        messages.append({
-            "role": "system",
-            "content": f"【这批消息的归纳】{batch_summary}"
-        })
+        messages.append({"role": "system", "content": inj.T("batch", summary=batch_summary)})
 
     # 短消息语境提示：用户消息 ≤4 字时，把扩充后的完整语义作为提示给模型
     # （正文仍是原 msg，这里帮模型理解"咋这样"这种短句的真实含义）
@@ -577,19 +523,9 @@ def build_message_list(user_msg: str, fused_items: list,
             # （我曾在这里写过"委屈/可怜 → 她该放软、别嘴硬顶着"，那是提示词补丁，已回退：
             #   同一个会话里我刚把 😅 那行的"规定动作"删掉，转手又加一条，方向自相矛盾。
             #   见 docs/历史/待办清单.md / 交接文档：纯表情消息目前会跳过 L3，所以数据层压根没参与。）
-            emoji_hint = (
-                f"【用户发了表情】{query_hint}\n"
-                "用户只发了一个表情，没有任何文字。**以这个表情本身的情绪为准**，别读成别的情绪"
-                "（尤其别因为她上一句在嘴硬，就把这个表情读成'他在怼我/他对我无语'）。\n"
-                "按这个情绪自然回应，**具体怎么反应以注入的【行为指令】与她的样本为准，这里不规定**。\n"
-                "不要复述表情，不要顺着当前话题硬接，只回应这个情绪。"
-            )
-            messages.append({"role": "system", "content": emoji_hint})
+            messages.append({"role": "system", "content": inj.T("query_hint", "emoji", hint=query_hint)})
         else:
-            messages.append({
-                "role": "system",
-                "content": f"【用户这条消息的语境】{query_hint}\n（上面是这条消息在当前语境下的完整意思——短消息或指代性消息（如'能读给我听听吗'）需要结合前文才能理解，按这个理解回复）"
-            })
+            messages.append({"role": "system", "content": inj.T("query_hint", "short", hint=query_hint)})
 
     # 感知源①：当前时间/农历/天气（始终注入，占预算极少；天气按该用户所在城市）。
     # **放在最后**：它是唯一"每分钟必变"的块，而 DeepSeek 的缓存按**前缀**匹配——
@@ -600,6 +536,7 @@ def build_message_list(user_msg: str, fused_items: list,
         messages.append({"role": "system", "content": now_context})
 
     # Memory V2【最后】当下情绪：紧挨用户消息（跟【当前时间】一样放尾部），只影响这一轮语气。
+    # （文案在 persona/injection/19_mood/block.json；session_memory.mood_note 渲染。）
     if emotion_context:
         messages.append({"role": "system", "content": emotion_context})
 

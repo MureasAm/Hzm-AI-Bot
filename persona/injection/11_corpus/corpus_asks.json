@@ -1,5 +1,5 @@
 {
- "_readme": "【角色】**入口工具**（不进提示词）—— corpus 每条「用户可能怎么说」，生成时逐条自验证过。\n\n【一条东西该进哪个文件】—— 改数据前先对一眼（单一真值，别在两处维护）\n  这件事「发生过」        → `world/statement_final.json`（corpus）\n  这是她「一贯如此」       → `world/preferences.json`\n  这是她「会怎么开口」     → `speech/voice_samples.json`\n  这是「某情境下的反应」   → `behavior/behaviors.json`\n  这是「一个词的意思」     → `world/terms.json`\n  这是「固定该怎么答」     → `world/legendary.json`\n  ⚠️ 同一件事**只在一个文件维护**（历史上 terms/behaviors/提示词三处打架过）\n\n———\ncorpus 的「用户可能怎么说」索引（scripts/build_corpus_asks.py 生成）。每条都已经过**自验证**：拿这个问法去检索，能把它自己捞回来才留下。用途：检索时 query 对 statement 向量和 asks 向量都算，取最高分——解决『口语问句 vs 第三人称叙述』不同构导致真信号被阈值挡掉的问题。",
+ "_readme": "【角色】**入口工具**（不进提示词）—— corpus 每条「用户可能怎么说」，生成时逐条自验证过。\n\n【一条东西该进哪个文件】—— 改数据前先对一眼（单一真值，别在两处维护）\n  persona/injection/ 下**一个注入块一个文件夹**，文件夹里的 block.json 写着这块该放什么、别放什么。\n  她「发生过」→ 11_corpus ｜ 她「一贯如此」→ 04_preferences ｜「某情境下的反应」→ 10_behaviors\n  「一个词的意思」→ 07_terms ｜ 她「哪天播」→ 02_schedule ｜「固定该怎么答」→ persona/decision/legendary.json\n  ⚠️ 同一件事**只在一个文件维护**（历史上三处打架过）\n\n———\ncorpus 的「用户可能怎么说」索引（scripts/build_corpus_asks.py 生成）。每条都已经过**自验证**：拿这个问法去检索，能把它自己捞回来才留下。用途：检索时 query 对 statement 向量和 asks 向量都算，取最高分——解决『口语问句 vs 第三人称叙述』不同构导致真信号被阈值挡掉的问题。",
  "asks": {
   "首播前一晚熬夜到凌晨，灰泽满发了一句\"晚安\"，又在括号里补上\"又熬夜了\"，说\"明天要开始准备首播了><\"。": [
    "你是不是经常熬夜",

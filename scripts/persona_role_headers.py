@@ -33,32 +33,28 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _common  # noqa: E402
 
 # 跨文件的归属判据（§1.2）——**同一份，写进每一份文件**
+# ⚠️ 2026-10-16：不再逐个列举路径。persona 改成「一个注入块一个文件夹」之后，
+#    路径都归 `persona/injection/<序号_块名>/`，列举出来只会再次漂移（上一版就把
+#    `speech/voice_samples.json` 这个 2026-10-04 就删掉的目录留在了表里）。
 ROUTE = ("【一条东西该进哪个文件】—— 改数据前先对一眼（单一真值，别在两处维护）\n"
-         "  这件事「发生过」        → `world/statement_final.json`（corpus）\n"
-         "  这是她「一贯如此」       → `world/preferences.json`\n"
-         "  这是她「会怎么开口」     → `speech/voice_samples.json`\n"
-         "  这是「某情境下的反应」   → `behavior/behaviors.json`\n"
-         "  这是「一个词的意思」     → `world/terms.json`\n"
-         "  这是「固定该怎么答」     → `world/legendary.json`\n"
-         "  ⚠️ 同一件事**只在一个文件维护**（历史上 terms/behaviors/提示词三处打架过）")
+         "  persona/injection/ 下**一个注入块一个文件夹**，文件夹里的 block.json 写着这块该放什么、别放什么。\n"
+         "  她「发生过」→ 11_corpus ｜ 她「一贯如此」→ 04_preferences ｜「某情境下的反应」→ 10_behaviors\n"
+         "  「一个词的意思」→ 07_terms ｜ 她「哪天播」→ 02_schedule ｜「固定该怎么答」→ persona/decision/legendary.json\n"
+         "  ⚠️ 同一件事**只在一个文件维护**（历史上三处打架过）")
 
 # 每份文件的角色（模型拿它干什么）
 ROLE = {
-    "core/traits.json": "**是这样的人**（底色）—— 让她「是这种人」，不是「知道这件事」。每条 = 倾向 + 证据。",
-    "core/styles.json": "**怎么说**（概括层）—— 语言层面的稳定特征。⚠️ 只放**概括**，具体措辞→phrases、成句示范→voice_samples。",
-    "behavior/behaviors.json": "**怎么做** —— 「什么情境 → 做什么」。⚠️ response 描述**做什么**，不写「用哪个词」（台词归 samples）。",
-    "behavior/behavior_keywords.json": "**怎么做** 的确定性兜底 —— 用户含这些词就直接命中行为、跳过 L3。⚠️ 只是兜底，主判据是 L3。",
-    "speech/voice_samples.json": "**怎么说** —— 她本人真实说过的话（问答对）。⚠️ 唯一「既传得进又不被抄」的形式；带 user 字段会撞车。",
-    "speech/phrases.json": "**怎么说** —— 同意思 → 她的原话**碎片**（2~5 字，不自足 → 不会被整句抄）。",
-    "world/terms.json": "**懂词** —— 某个词/人物/梗的意思。命中才注入。",
-    "world/preferences.json": "**是这样的人** —— 去掉「某次直播」这个场合仍然成立的事。类别 + 事实。",
-    "world/core_stories.json": "**记得**（最深处）—— 印象最深的经历，低阈值浮现。事件陈述。",
-    "world/legendary.json": "**固定该怎么答** —— 命中触发词就**直接发出去**（硬路由，不进提示词）。",
-    "world/schedule.json": "**地面真值** —— 她哪天几点播。每轮注入（被问时间以它为准）。",
-    "world/statement_final.json": "**记得** —— 她「发生过什么」。⚠️ **只该有事实**：不要把「她当时怎么说的」写进去（引语会被整句搬走）。",
-    "world/corpus_asks.json": "**入口工具**（不进提示词）—— corpus 每条「用户可能怎么说」，生成时逐条自验证过。",
-    "world/corpus_keywords.json": "**入口工具**（不进提示词）—— corpus 每条的「钩子」：用户提到这些词就把该条递过去让 LLM 判。",
-    "media/stickers.json": "**配图** —— 表情包标注（desc/tags/use_when），判「这句话配哪张」。",
+    "injection/02_schedule/schedule.json": "**地面真值** —— 她哪天几点播。每轮注入（被问时间以它为准）。",
+    "injection/04_preferences/preferences.json": "**是这样的人** —— 去掉「某次直播」这个场合仍然成立的事。类别 + 事实。",
+    "injection/05_core_stories/core_stories.json": "**记得**（最深处）—— 印象最深的经历，低阈值浮现。事件陈述。",
+    "injection/07_terms/terms.json": "**懂词** —— 某个词/人物/梗的意思。命中才注入。",
+    "injection/10_behaviors/behaviors.json": "**怎么做** —— 「什么情境 → 做什么」。⚠️ response 描述**做什么**，不写「用哪个词」（台词归 samples）。",
+    "injection/10_behaviors/behavior_keywords.json": "**怎么做** 的确定性兜底 —— 用户含这些词就直接命中行为、跳过 L3。⚠️ 只是兜底，主判据是 L3。",
+    "injection/11_corpus/statement_final.json": "**记得** —— 她「发生过什么」。⚠️ **只该有事实**：不要把「她当时怎么说的」写进去（引语会被整句搬走）。",
+    "injection/11_corpus/corpus_asks.json": "**入口工具**（不进提示词）—— corpus 每条「用户可能怎么说」，生成时逐条自验证过。",
+    "injection/11_corpus/corpus_keywords.json": "**入口工具**（不进提示词）—— corpus 每条的「钩子」：用户提到这些词就把该条递过去让 LLM 判。",
+    "decision/legendary.json": "**固定该怎么答** —— 命中触发词就**直接发出去**（硬路由，不进提示词）。",
+    "decision/stickers.json": "**配图** —— 表情包标注（desc/tags/use_when），判「这句话配哪张」。",
 }
 
 

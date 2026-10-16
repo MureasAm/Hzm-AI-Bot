@@ -1,10 +1,10 @@
 """检索抽象层：两路 RRF 融合 + 两路直达 + 预算控制。
 
 来源（全部同步 CPU，query 向量由调用方传入，全程只调 1 次 embedding）：
-- corpus        背景记忆（persona/world/corpus_vectors.json）        → 走 RRF
+- corpus        背景记忆（persona/injection/11_corpus/corpus_vectors.json）        → 走 RRF
 - behavior      行为触发（L3 LLM 意图分类 + behavior_keywords 判别词兜底，不走 embedding）→ 走 RRF
 - preference    偏好事实（**按 keywords 子串命中**，不再向量检索）    → 命中才带，不走 RRF
-- core_story    核心记忆（persona/world/core_story_vectors.json）    → 命中才带，不走 RRF
+- core_story    核心记忆（persona/injection/05_core_stories/core_story_vectors.json）    → 命中才带，不走 RRF
 
 **判据怎么选**（2026-09-26 定，别再搞混）：说法千变万化、要从 N 条里挑 → 向量 + LLM 判（corpus）；
 类别少、任务其实是"给这句话归类" → 分类（behavior）；类别名能被用户直接说出来 → 子串命中（preference/terms）。
@@ -20,9 +20,8 @@ import re
 from dataclasses import dataclass, field
 
 from .constants import (
-    PROJECT_ROOT,
     CORE_STORY_VECTOR_FILE,
-    PREFERENCES_FILE, CORPUS_KEYWORDS_FILE,
+    PREFERENCES_FILE, CORPUS_KEYWORDS_FILE, BEHAVIOR_KEYWORDS_FILE,
     RAG_THRESHOLD, CORPUS_TOP_N, CORPUS_CANDIDATE_N, CORPUS_LEXICAL_EXTRA_N,
     CORPUS_KEYWORD_FLOOR, CORPUS_STRONG_KEYWORD,
     PREFERENCE_TOP_N,
@@ -110,7 +109,7 @@ def _corpus_keyword_overlap(query: str, statement: str) -> float:
 # ⚠️ 不是"直通注入"了——2026-09-29 起判定全交 LLM，钩子只负责"递过去看"。
 # 为什么需要：实测 322 条里有一大批**没有任何召回入口**——用户不可能说出一句话恰好把它们
 # 勾出来，于是永远不会被注入。语义检索解决不了这个：那是"像不像"，这里缺的是"**提没提到**"。
-# 数据：persona/world/corpus_keywords.json（键是 statement_final 的序号，由 build_corpus_keywords.py 生成）。
+# 数据：persona/injection/11_corpus/corpus_keywords.json（键是 statement_final 的序号，由 build_corpus_keywords.py 生成）。
 _corpus_keywords_cache = None
 
 
@@ -228,8 +227,7 @@ def retrieve_corpus_candidates(user_query: str, query_vector,
 
 # 行为判别词 → 强制命中行为（语义检索对"敷衍/鸽/迟到"这类口语有~0.55天花板且易错配，
 # 对齐 LEGENDARY 的思路：固定判别词 → 固定反应）。
-# 数据化：从 persona/behavior/behavior_keywords.json 加载，填 JSON 不用改代码。
-_BEHAVIOR_KEYWORDS_FILE = PROJECT_ROOT / "persona" / "behavior" / "behavior_keywords.json"
+# 数据化：从 persona/injection/10_behaviors/behavior_keywords.json 加载，填 JSON 不用改代码。
 _behavior_keywords_cache = None
 
 
@@ -238,11 +236,11 @@ def load_behavior_keywords() -> dict:
     global _behavior_keywords_cache
     if _behavior_keywords_cache is not None:
         return _behavior_keywords_cache
-    if not _BEHAVIOR_KEYWORDS_FILE.exists():
+    if not BEHAVIOR_KEYWORDS_FILE.exists():
         _behavior_keywords_cache = {}
         return _behavior_keywords_cache
     try:
-        data = json.loads(_BEHAVIOR_KEYWORDS_FILE.read_text(encoding="utf-8"))
+        data = json.loads(BEHAVIOR_KEYWORDS_FILE.read_text(encoding="utf-8"))
         _behavior_keywords_cache = {k: v for k, v in data.items() if not k.startswith("_")}
     except (json.JSONDecodeError, OSError):
         _behavior_keywords_cache = {}
@@ -295,7 +293,7 @@ _preferences_cache = None
 
 
 def load_preferences() -> list:
-    """读 persona/world/preferences.json（源文件，缓存）。"""
+    """读 persona/injection/04_preferences/preferences.json（源文件，缓存）。"""
     global _preferences_cache
     if _preferences_cache is not None:
         return _preferences_cache
@@ -353,7 +351,7 @@ _core_story_vectors = None
 
 
 def load_core_story_vectors() -> list:
-    """读 persona/world/core_story_vectors.json（缓存）。"""
+    """读 persona/injection/05_core_stories/core_story_vectors.json（缓存）。"""
     global _core_story_vectors
     if _core_story_vectors is not None:
         return _core_story_vectors

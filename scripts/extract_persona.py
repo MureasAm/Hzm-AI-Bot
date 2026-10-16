@@ -23,7 +23,7 @@
     python scripts/extract_persona.py -i converted_0807.json converted_0726.json ...
              [--out outputs/persona_extract/behaviors_candidates.json]
 
-输出候选 → 人工审批 → 并入 persona/behavior/behaviors.json → precompute triggers
+输出候选 → 人工审批 → 并入 persona/injection/10_behaviors/behaviors.json → precompute triggers
 """
 import json
 import sys
@@ -42,7 +42,7 @@ BASE_URL = "https://api.deepseek.com/v1"
 THINKING_DISABLED = {"extra_body": {"thinking": {"type": "disabled"}}}
 BATCH_SIZE = 50
 
-# 现有 behaviors 的稳定场景（对齐 persona/behavior/behaviors.json 的 name 归类）
+# 现有 behaviors 的稳定场景（对齐 persona/injection/10_behaviors/behaviors.json 的 name 归类）
 # ⚠️ 2026-10-04 同步重写后的 behaviors（原来含已删的"冷场/被调戏"、缺新拆的条目，
 #    会导致提取结果归错类甚至被 merge 悄悄丢掉）
 SCENE_GROUPS = {
@@ -280,7 +280,7 @@ async def run(input_paths, out_file=None):
     print(f"   场景分布: {dict(scenes)}")
     for b in merged:
         print(f"   [{b.get('scene','')}] {b['name']} | trigger={b['trigger'][:30]} | {len(b.get('samples',[]))} 示范")
-    print("\n💡 下一步：人工审批后并入 persona/behavior/behaviors.json；behaviors 不走向量，不需要 precompute")
+    print("\n💡 下一步：人工审批后并入 persona/injection/10_behaviors/behaviors.json；behaviors 不走向量，不需要 precompute")
 
 
 async def main():

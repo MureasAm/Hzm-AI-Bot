@@ -3,17 +3,13 @@
 从 core.py 拆出。这些是"先判断这条消息是啥、要不要走固定回复"的入口逻辑，
 与"组装消息 + 生成"分离——core 专注消息组装。
 
-梗库数据化：LEGENDARY_REPLIES / LEGENDARY_CONFIRMS 从 persona/world/legendary.json 加载，
+梗库数据化：LEGENDARY_REPLIES / LEGENDARY_CONFIRMS 从 persona/decision/legendary.json 加载，
 使用者填 JSON 即可，不用改代码。改后重启生效。
 """
 import json
 import re
-from pathlib import Path
-
-from .constants import THINKING_DISABLED, PROJECT_ROOT
+from .constants import THINKING_DISABLED, LEGENDARY_FILE
 from .config import log_cache_usage, _get_clients, _get_model_name, extract_chat_content
-
-LEGENDARY_FILE = PROJECT_ROOT / "persona" / "world" / "legendary.json"
 
 _legendary_cache = None
 

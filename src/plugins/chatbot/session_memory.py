@@ -22,6 +22,7 @@ from pathlib import Path
 from datetime import datetime
 
 from .memory import archive_legacy_file
+from . import injection as inj
 from .constants import PROJECT_ROOT, THINKING_DISABLED
 from .config import log_cache_usage, _get_model_name, extract_chat_content
 # 时长措辞（"3天"/"2小时"）与长期/短期记忆共用一份，别各写一套（memory re-export 自根模块）
@@ -43,11 +44,19 @@ MAX_EVENTS_PER_SESSION = 6
 SESSION_STALE_SECONDS = 3 * 3600
 # 情绪（mood）与话题同寿命：一起在 3 小时后消散（2026-10-10，用户定）。
 MOOD_STALE_SECONDS = SESSION_STALE_SECONDS
-# ⚠️「上次聊过」提示的阈值**单独**一条，别复用话题消散那条（2026-10-10）：
-#    话题 3h 就消散（会话记忆不再注入），但**提示**如果也按 3h，隔几小时回来就念一句
-#    "上次聊过…"，大半会话开头都带它，太吵。所以提示保持 **12 小时**——
-#    只有真的隔了半天的旧事才降级成【上次聊过】提示。
-PREV_SESSION_NOTE_SECONDS = 12 * 3600
+# 「上次聊过」提示的阈值（2026-10-16 改：**和话题消散那条对齐**）。
+# ⚠️ 原来它单独一条、而且是 **12 小时**，理由是"按 3h 提示太吵"。但那留出一个
+#    **3~12 小时的盲区**：话题 3h 就消散了、提示又还没到 → **这一场对谁都不存在**。
+#    实测线上 245 个真实会话里 **54 个正落在盲区**；而且方向是反的——
+#    8 小时前聊的什么都不说，13 小时前反而说"上次聊过"。越近越相关，行为却相反。
+#
+#    现在对齐：**一场满 3 小时就算过去了，同时降级成【上次聊过】**，两块无缝。
+#    不会因此"太吵"：这条提示只会在**隔了这么久之后回来的第一句**上出现一次
+#    （`previous_session_note` 在 `probe_session` 之前调用，probe 一跑就把
+#      last_active 刷成现在，下一句 gap≈0 就不注了）。
+# ⚠️ 这两个常量**必须相等**——不相等就又漏出盲区。测试里有一条专门盯着
+#    （`test_no_gap_between_the_two_blocks`）。
+PREV_SESSION_NOTE_SECONDS = SESSION_STALE_SECONDS
 # 「上次聊过」最多带几条当时的事件（整场搬进来会挤上下文，只要够唤起记忆就行）
 PREV_SESSION_EVENTS_MAX = 2
 
@@ -187,10 +196,12 @@ def get_session(user_id: str) -> dict:
 
 
 def previous_session_note(user_id: str) -> str:
-    """隔得够久（> `PREV_SESSION_NOTE_SECONDS`，12h）时，给一条带时间的「上次聊过」提示；否则空串。
+    """隔得够久（> `PREV_SESSION_NOTE_SECONDS`，**与话题消散同为 3h**）时，给一条带时间的
+    「上次聊过」提示；否则空串。
 
-    ⚠️ 阈值**不是**话题消散那条（3h）：话题 3h 就不注入了，但提示要 12h 才发——
-    否则隔几小时回来就念一句"上次聊过"，太吵。
+    ⚠️ 这个阈值**必须和 `SESSION_STALE_SECONDS` 相等**（2026-10-16 改）。
+    原来它单独是 12h，中间 3~12h 就成了盲区：第 8 块已经不注、第 9 块还没到，
+    实测线上 54 个会话落在那儿。现在对齐——**一场满 3 小时就算过去了，同时降级成「上次聊过」**。
 
     ⚠️ **必须在 probe_session 之前调用**：probe 会把这条记录的 last_active
     改写成"现在"，之后再问就永远得到"没过期"。
@@ -214,11 +225,7 @@ def previous_session_note(user_id: str) -> str:
         body.append(f"聊到「{topic}」")
     if events:
         body.append("当时：" + "；".join(events))
-    return (
-        f"【上次聊过】{when}你们" + "，".join(body) + "。"
-        f"（隔了这么久，**这不是现在正在聊的话题**：想提可以自然提一句「上次…」，"
-        f"但别当成刚发生的事往下接，也别拿它当当前语境的上下文。）"
-    )
+    return inj.T("prev_session", when=when, body="，".join(body))
 
 
 def set_mood(user_id: str, mood: str, *, now: datetime | None = None) -> None:
@@ -262,7 +269,7 @@ def mood_note(user_id: str) -> str:
             g = humanize_gap(secs)
             if g:
                 gap = f"（{g}前说的）"
-    return f"【用户此刻的情绪】{mood}{gap}；本轮语气先照顾这个情绪，必要时暂停互怼。"
+    return inj.T("mood", mood=mood, gap=gap)
 
 
 # ==================== 提示词 ====================
@@ -281,7 +288,11 @@ SESSION_PROBE_PROMPT = """你是会话话题追踪器。用户在聊天中刚发
   "expanded_query": "如果这条消息很短（≤4字）**或是指代性的**（必须结合前面聊的话题才能理解，如'能读给我听听吗''那个呢''然后呢'——单看这句不知道指什么），补全成既能检索到相关记忆、又能帮模型理解的一句话（如'用户让灰泽满念她写的小说乌色月'）；其他情况则 null"
 }}
 要求：
-- topic 要能体现**对话调性**（在干嘛、什么氛围），不是只复述内容
+- topic 要能体现**对话调性**（在干嘛、什么氛围），不是只复述用户那句话。
+  ✅「用户和灰泽满互相斗嘴骂人」「用户要求灰泽满说晚安，灰泽满傲娇反驳，氛围轻松打闹」
+     ——写得出"**这一场在干嘛**"。
+  ❌「用户惊讶发现有语言功能」「用户向灰泽满分享买了生日礼物」
+     ——这是把**他那句话又说了一遍**，没有"在干嘛"。（2026-10-16 量过：全库约 7% 是这种。）
 - **topic 只概括双方实际说的话，不要添加对话里没有的设定或推断**：用户没提"时差/异地/对方在哪/身份"，就别写"时差/异地"——用户只说时间是几点，就写"聊时间/几点/作息"；拿不准就平实地概括内容，宁可朴素不要加戏（曾踩坑：用户说"现在是墨尔本时间凌晨六点"，被脑补成"调侃时差"并注入带偏回复）
 - topic_changed 判定标准（**新主题优先**）：只要用户这条消息是在**问/聊一个新的具体主题**（如"你最近有在用香水吗""你会不会游泳"），即使语气还延续之前的氛围，也视为转话题 → topic_changed=true，topic 换成这个新主题。只有当消息是**同一主题下的继续**（如上一轮聊香水、这轮"那你喜欢哪个牌子"）才 topic_changed=false 沿用。
 - new_event 只记有意义的互动（示好/情绪/承诺/分享），寒暄问候不记
@@ -298,6 +309,9 @@ SESSION_PROBE_PROMPT = """你是会话话题追踪器。用户在聊天中刚发
   · 🤔 = 疑惑
   补全句应表达"用户发了【表情含义】"这个意思（如"用户发了个无语的表情"），用于检索记忆理解用户情绪，不要加引号。
 - 非表情的短消息（如"咋这样""真的吗"）**或指代性消息**（如"能读给我听听吗""那个呢"——单看不知道指什么）才结合语境补全成完整句；普通长消息（自带话题）返回 null。
+  · 补全**只写「这句话在当前语境下是什么意思」**，别编对话里没出现的细节。
+    ❌「用户问灰泽满关于小说乌色月**中那个内容的细节**」——"那个内容"是凭空加的；
+      补成「用户追问小说乌色月的事」就够（2026-10-16 探针上出现的）。
 【下面是要判的那一轮】
 
 【上一轮已知话题】{prev_topic}（为空表示新会话）
@@ -336,7 +350,40 @@ async def _llm(client, prompt: str, max_tokens: int = 200, temperature: float = 
 
 # ==================== 更新会话（每轮对话后调用） ====================
 
-async def probe_session(user_id: str, user_msg: str, history_text: str, client) -> str:
+# 「同一件事换了个说法」的去重阈值（二字重合度）。
+# 实测（2026-10-16）：用户 1620265686 的事件表里躺着**三条要说晚安语音**——
+#   「用户让灰泽满发晚安语音」／「用户再次要求发晚安语音」／「用户再次要求灰泽满发晚安语音」
+# 原来的判据是 `new_event not in events`（**字符串完全相等**），换个说法就进得去。
+# 事件本来就是"一句话描述"，模型每轮措辞都会飘 —— 精确比对几乎等于没去重，
+# 而这 6 个格子是全库共用的，三条重复等于一半被浪费。
+_EVENT_DUP_RATIO = 0.5
+
+
+def _bigrams(text: str) -> set:
+    s = re.sub(r"[^一-鿿A-Za-z0-9]", "", text or "")
+    if len(s) < 2:
+        return {s} if s else set()
+    return {s[i:i + 2] for i in range(len(s) - 1)}
+
+
+def _is_duplicate_event(new_event: str, events: list) -> bool:
+    """新事件和已有事件说的是同一件事吗（二字重合度超阈值就算）。
+
+    拿真实数据定过阈值：三条"要晚安语音"两两重合 0.50 / 0.80（**判重**），
+    而「用户骂灰泽满傻逼」和「用户对灰泽满笑骂了一句你滚吧」只有 0.43（**不判重**）。
+    """
+    g_new = _bigrams(new_event)
+    if not g_new:
+        return False
+    for e in events:
+        g = _bigrams(str(e))
+        if g and len(g_new & g) / max(1, min(len(g_new), len(g))) >= _EVENT_DUP_RATIO:
+            return True
+    return False
+
+
+async def probe_session(user_id: str, user_msg: str, history_text: str, client,
+                        debug: bool = False):
     """对话前同步探测会话：判断话题延续/转换、累计事件、扩充短 query。
 
     一次 LLM 调用同时完成三件事（避免对话后异步更新导致的话题滞后一轮）：
@@ -346,10 +393,13 @@ async def probe_session(user_id: str, user_msg: str, history_text: str, client) 
 
     返回：短消息的扩充句（长消息原样返回）。
     注意：这是**对话前**调用，所以第 N 轮注入的就是第 N 轮自己的话题。
+
+    `debug=True` 时返回 `(扩充句, 模型原始 JSON)` —— 给 `scripts/session_probe.py` 看
+    `topic_changed` / `mood` 这些**没被存下来**的判断，生产路径不受影响。
     """
     msg = (user_msg or "").strip()
     if not msg:
-        return msg
+        return (msg, {}) if debug else msg
     prev = get_session(user_id)
     prev_topic = prev.get("topic", "")
     prompt = SESSION_PROBE_PROMPT.format(
@@ -360,11 +410,11 @@ async def probe_session(user_id: str, user_msg: str, history_text: str, client) 
     content = await _llm(client, prompt, max_tokens=250, temperature=0.2)
     expanded = msg
     if not content:
-        return expanded
+        return (expanded, {}) if debug else expanded
     try:
         parsed = json.loads(content)
     except json.JSONDecodeError:
-        return expanded
+        return (expanded, {}) if debug else expanded
 
     topic = str(parsed.get("topic", "")).strip()
     if topic.lower() in ("null", "none"):
@@ -381,9 +431,8 @@ async def probe_session(user_id: str, user_msg: str, history_text: str, client) 
 
     # 转话题：清空旧事件，起新话题
     events = [] if changed else list(prev.get("events", []))
-    if new_event and new_event != "null":
-        if new_event not in events:
-            events.append(new_event)
+    if new_event and new_event != "null" and not _is_duplicate_event(new_event, events):
+        events.append(new_event)
     events = events[-MAX_EVENTS_PER_SESSION:]
 
     with _lock:
@@ -422,7 +471,7 @@ async def probe_session(user_id: str, user_msg: str, history_text: str, client) 
         ex = ex.strip()
         if 0 < len(ex) <= 80 and ex != msg:
             expanded = ex
-    return expanded
+    return (expanded, parsed) if debug else expanded
 
 
 # ==================== 表情消息判定 ====================

@@ -1,0 +1,11 @@
+{
+  "_readme": "第 4 块·偏好（她「一贯如此」的事）。\n【什么时候注】按 keywords 子串命中才注（**不走向量**，2026-09-26 改的判据）。\n【改什么】改同目录 preferences.json；改完**不用重算向量**。\n【注入优先级】比直播记忆/聊天记录高——冲突时以本条为准。\n\n【改数据前先对一眼】这件事属于哪一类：\n  她「发生过」→ 11_corpus/statement_final.json ｜ 她「一贯如此」→ 04_preferences/preferences.json\n  「某情境下的反应」→ 10_behaviors/behaviors.json ｜ 「一个词的意思」→ 07_terms/terms.json\n  她「哪天播」→ 02_schedule/schedule.json ｜ 「固定该怎么答」→ persona/decision/legendary.json\n  ⚠️ 同一件事只在一个文件维护（历史上三处打架过）",
+  "id": "preferences",
+  "order": 4,
+  "title": "偏好（一贯如此）",
+  "when": "按 keywords 命中时",
+  "source": "preferences.json",
+  "strings": {
+    "main": "【灰泽满的偏好】{items}（这是她稳定真实的偏好，若与直播记忆/聊天记录冲突，以本条为准）"
+  }
+}

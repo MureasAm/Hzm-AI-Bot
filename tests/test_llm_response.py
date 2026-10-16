@@ -111,7 +111,7 @@ class TestModelFallbackChain:
         for spec in specs:
             model, result, error = spec[0], spec[1], spec[2]
             calls = spec[3] if len(spec) > 3 else None
-            layers.append((self._client(result, error, calls), model, model))
+            layers.append((TestModelFallbackChain._client(result, error, calls), model, model))
         return _ChainCompletions(layers, cooldown=cooldown)
 
     async def test_primary_ok_stops_at_first_layer(self):
@@ -176,8 +176,8 @@ class TestModelFallbackChain:
         monkeypatch.setattr(config, "_CHAIN_RETRY_SEC", 600.0)
         first = []
         chain = _ChainCompletions([
-            (self._client(None, RuntimeError("500"), first), "m1", "m1"),
-            (self._client("二层的", calls=None), "m2", "m2"),
+            (TestModelFallbackChain._client(None, RuntimeError("500"), first), "m1", "m1"),
+            (TestModelFallbackChain._client("二层的", calls=None), "m2", "m2"),
         ])
         await chain.create(model="m1", messages=[])
         n = len(first)
@@ -194,8 +194,8 @@ class TestModelFallbackChain:
         """
         monkeypatch.setattr(config, "_CHAIN_RETRY_SEC", 600.0)
         chain = _ChainCompletions([
-            (self._client(None, RuntimeError("500")), "m1", "m1"),
-            (self._client("二层的"), "m2", "m2"),
+            (TestModelFallbackChain._client(None, RuntimeError("500")), "m1", "m1"),
+            (TestModelFallbackChain._client("二层的"), "m2", "m2"),
         ])
         await chain.create(model="m1", messages=[])
         left = chain._down_until[0] - time.monotonic()
@@ -211,8 +211,8 @@ class TestModelFallbackChain:
         """
         monkeypatch.setattr(config, "_CHAIN_RETRY_SEC", 600.0)
         monkeypatch.setattr(config, "_CHAIN_FLAKY_SEC", 60.0)
-        chain = _ChainCompletions([(self._client(SimpleNamespace(choices=None)), "m1", "m1"),
-                                   (self._client("二层的"), "m2", "m2")])
+        chain = _ChainCompletions([(TestModelFallbackChain._client(SimpleNamespace(choices=None)), "m1", "m1"),
+                                   (TestModelFallbackChain._client("二层的"), "m2", "m2")])
         await chain.create(model="m1", messages=[])
         left = chain._down_until[0] - time.monotonic()
         assert 0 < left <= 61, f"软失败该用短窗口，实际 {left:.0f}s"
@@ -231,8 +231,8 @@ class TestModelFallbackChain:
     async def test_retry_sec_makes_it_come_back(self, monkeypatch):
         """设了 `LLM_CHAIN_RETRY_SEC` 就变成"过一阵回头探一次"。"""
         monkeypatch.setattr(config, "_CHAIN_RETRY_SEC", 900.0)
-        chain = _ChainCompletions([(self._client("主的"), "m1", "m1"),
-                                   (self._client("二层的"), "m2", "m2")])
+        chain = _ChainCompletions([(TestModelFallbackChain._client("主的"), "m1", "m1"),
+                                   (TestModelFallbackChain._client("二层的"), "m2", "m2")])
         chain._down_until[0] = time.monotonic() - 1        # 已经过了回头间隔
         assert _text(await chain.create(model="m1", messages=[])) == "主的"
 
@@ -277,16 +277,16 @@ class TestModelFallbackChain:
         """
         monkeypatch.setattr(config, "_CHAIN_RETRY_SEC", 600.0)
         monkeypatch.setattr(config, "_CHAIN_FLAKY_SEC", 60.0)
-        chain = _ChainCompletions([(self._client(None, self._rate_limited()), "m1", "m1"),
-                                   (self._client("二层的"), "m2", "m2")])
+        chain = _ChainCompletions([(TestModelFallbackChain._client(None, self._rate_limited()), "m1", "m1"),
+                                   (TestModelFallbackChain._client("二层的"), "m2", "m2")])
         await chain.create(model="m1", messages=[])
         left = chain._down_until[0] - time.monotonic()
         assert 0 < left <= 61, f"429 该用短窗口，实际 {left:.0f}s"
 
     async def test_rate_limit_is_logged_as_throttling(self, capsys):
         """"限流"和"报错"在日志上要分得开——不然会被当成线路挂了。"""
-        chain = _ChainCompletions([(self._client(None, self._rate_limited()), "m1", "m1"),
-                                   (self._client("二层的"), "m2", "m2")])
+        chain = _ChainCompletions([(TestModelFallbackChain._client(None, self._rate_limited()), "m1", "m1"),
+                                   (TestModelFallbackChain._client("二层的"), "m2", "m2")])
         await chain.create(model="m1", messages=[])
         assert "限流（慢一点，不是坏了）" in capsys.readouterr().out
 
@@ -301,8 +301,8 @@ class TestModelFallbackChain:
         """
         calls = []
         chain = _ChainCompletions([
-            (self._client(None, RuntimeError("主层挂")), "m1", "m1", None),
-            (self._client("二层的", calls=calls), "m2", "m2",
+            (TestModelFallbackChain._client(None, RuntimeError("主层挂")), "m1", "m1", None),
+            (TestModelFallbackChain._client("二层的", calls=calls), "m2", "m2",
              {"thinking": {"type": "enabled", "budget_tokens": 0}}),
         ])
         await chain.create(model="m1", messages=[], extra_body={"thinking": {"type": "disabled"}})
@@ -311,7 +311,7 @@ class TestModelFallbackChain:
     async def test_layers_without_override_keep_the_callers_params(self):
         """没有覆盖的层**不许动**调用方的参数——覆盖是"某一层特例"，不是全局换写法。"""
         calls = []
-        chain = _ChainCompletions([(self._client("主的", calls=calls), None, "主", None)], cooldown=600)
+        chain = _ChainCompletions([(TestModelFallbackChain._client("主的", calls=calls), None, "主", None)], cooldown=600)
         await chain.create(model="m1", messages=[], extra_body={"thinking": {"type": "disabled"}})
         assert calls[0]["extra_body"] == {"thinking": {"type": "disabled"}}
 
@@ -328,7 +328,7 @@ class TestModelFallbackChain:
         上游收到 `model=null` 就报 400，而那条错误会被当成"主模型挂了"、白白降级。
         """
         first = []
-        chain = _ChainCompletions([(self._client("主的", calls=first), None, "主层")], cooldown=60)
+        chain = _ChainCompletions([(TestModelFallbackChain._client("主的", calls=first), None, "主层")], cooldown=60)
         await chain.create(model="真模型名", messages=[])
         assert first[0]["model"] == "真模型名"
 
@@ -428,3 +428,54 @@ class TestServedByIsVisible:
         config.log_cache_usage(resp, "主回复")
         rec = json.loads((tmp_path / "u.jsonl").read_text(encoding="utf-8").strip())
         assert rec["layer"] == "m1（某站）"
+
+
+class TestTransientFailures:
+    """**"抖一下"和"真挂了"要分开**（2026-10-15 用户反馈两件事后加的）。
+
+    用户原话：① "link 的 gemini 调用失败之后十多分钟都是下一层，是不是太长了"；
+    ② "我这其中转站没收到调用失败的日志，但代码后台显示 APIConnectionError"。
+    ——两条指向同一个毛病：**分类太粗**。
+    """
+
+    @staticmethod
+    def _conn_err():
+        import httpx
+        from openai import APIConnectionError
+        return APIConnectionError(request=httpx.Request("POST", "https://example.invalid/v1"))
+
+    async def test_connection_error_uses_the_short_window(self, monkeypatch):
+        """**连不上 = 网络层的事，请求可能根本没到站**——不能因此把渠道锁十分钟。
+
+        `APIConnectionError` 说明的是"我们和它之间没接上"，**对那条渠道好不好一无所知**；
+        而中转站那边也不会有记录（用户实测：中转站没日志、代码里有报错——**两边对得上**）。
+        """
+        monkeypatch.setattr(config, "_CHAIN_RETRY_SEC", 180.0)
+        monkeypatch.setattr(config, "_CHAIN_FLAKY_SEC", 60.0)
+        chain = _ChainCompletions([(TestModelFallbackChain._client(None, self._conn_err()), "m1", "m1"),
+                                   (TestModelFallbackChain._client("二层的"), "m2", "m2")])
+        await chain.create(model="m1", messages=[])
+        left = chain._down_until[0] - time.monotonic()
+        assert 0 < left <= 61, f"连不上该用短窗口，实际 {left:.0f}s"
+
+    async def test_connection_error_is_logged_as_network(self, capsys):
+        """日志要写出"这是网络层"，不然会被当成渠道坏了。"""
+        chain = _ChainCompletions([(TestModelFallbackChain._client(None, self._conn_err()), "m1", "m1"),
+                                   (TestModelFallbackChain._client("二层的"), "m2", "m2")])
+        await chain.create(model="m1", messages=[])
+        out = capsys.readouterr().out
+        assert "连不上（网络层，不是它坏了）" in out
+
+    async def test_server_error_still_uses_the_long_window(self, monkeypatch):
+        """真 5xx 还是用长窗口——那种确实说明上游有问题。"""
+        monkeypatch.setattr(config, "_CHAIN_RETRY_SEC", 180.0)
+        monkeypatch.setattr(config, "_CHAIN_FLAKY_SEC", 60.0)
+        chain = _ChainCompletions([(TestModelFallbackChain._client(None, RuntimeError("500")), "m1", "m1"),
+                                   (TestModelFallbackChain._client("二层的"), "m2", "m2")])
+        await chain.create(model="m1", messages=[])
+        left = chain._down_until[0] - time.monotonic()
+        assert 60 < left <= 181, f"5xx 该用长窗口，实际 {left:.0f}s"
+
+    def test_default_retry_window_is_three_minutes(self):
+        """默认 180 秒（原来是 600）——探一次的代价才 ~1s，锁十分钟纯属浪费。"""
+        assert config._CHAIN_RETRY_SEC == 180.0
