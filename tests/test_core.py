@@ -752,8 +752,8 @@ class TestCorpusTimePrefix:
         """行为指令是"现在该怎么做"，不是过去的事——不能带这个前缀。"""
         from src.plugins.chatbot.retrieval import RetrievalItem
         monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
-        items = [RetrievalItem(source="behavior", item_id="被夸时嘴硬否认", score=1.0,
-                               text="【被夸时嘴硬否认】\n回应模式：压低评价。")]
+        items = [RetrievalItem(source="behavior", item_id="被夸时把夸奖调小", score=1.0,
+                               text="【被夸时把夸奖调小】\n回应模式：压低评价。")]
         msgs = core.build_message_list("你好厉害", items, "", [])
         joined = "\n".join(m["content"] for m in msgs)
         assert "【当前情境下的行为指令】" in joined
@@ -895,7 +895,7 @@ class TestClassifyBehavior:
 
     def _behaviors(self):
         return [
-            {"name": "被夸时嘴硬否认", "trigger": "收到夸奖时", "response": "否认"},
+            {"name": "被夸时把夸奖调小", "trigger": "收到夸奖时", "response": "否认"},
             {"name": "被质疑时心虚辩解", "trigger": "被质问时", "response": "辩解"},
         ]
 
@@ -913,9 +913,9 @@ class TestClassifyBehavior:
         return type("C", (), {"chat": type("Chat", (), {"completions": _FakeCompletions()})()})
 
     async def test_returns_valid_behavior_name(self):
-        out = await routing.classify_behavior(self._fake('{"behavior": "被夸时嘴硬否认"}'),
+        out = await routing.classify_behavior(self._fake('{"behavior": "被夸时把夸奖调小"}'),
                                               "你唱歌好好听", "", self._behaviors())
-        assert out == "被夸时嘴硬否认"
+        assert out == "被夸时把夸奖调小"
 
     async def test_null_returns_empty(self):
         out = await routing.classify_behavior(self._fake('{"behavior": null}'),

@@ -47,7 +47,7 @@ class TestMergeBehaviors:
         existing = {
             "_readme": "x",
             "behaviors": [{
-                "name": "被夸时嘴硬否认",
+                "name": "被夸时把夸奖调小",
                 "trigger": "被夸时",
                 "response": "先否认",
                 "samples": [{"user": "夸夸", "reply": "没有啦"}],
@@ -55,7 +55,7 @@ class TestMergeBehaviors:
             }],
         }
         incoming = [{
-            "name": "被夸时嘴硬否认",
+            "name": "被夸时把夸奖调小",
             "trigger": "",
             "response": "",
             "samples": [

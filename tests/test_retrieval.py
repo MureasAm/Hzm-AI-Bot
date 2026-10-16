@@ -235,11 +235,11 @@ class TestSelectBehaviorItem:
     def test_llm_intent_wins(self):
         behaviors = [
             {"name": "被质疑时心虚辩解", "trigger": "质疑", "response": "先否认"},
-            {"name": "被夸时嘴硬否认", "trigger": "夸奖", "response": "否认"},
+            {"name": "被夸时把夸奖调小", "trigger": "夸奖", "response": "否认"},
         ]
-        item = select_behavior_item("你唱歌好好听", "被夸时嘴硬否认", behaviors)
+        item = select_behavior_item("你唱歌好好听", "被夸时把夸奖调小", behaviors)
         assert item is not None
-        assert item.item_id == "被夸时嘴硬否认"
+        assert item.item_id == "被夸时把夸奖调小"
         assert "否认" in item.text
 
     def test_keyword_fallback_when_llm_null(self):

@@ -291,7 +291,7 @@ async def _convert_to_chat(cleaned_paths, stage: Path):
 
 def _scene_to_name(scene: str) -> str:
     mapping = {
-        "被夸": "被夸时嘴硬否认",
+        "被夸": "被夸时把夸奖调小",
         "被质疑": "被质疑时心虚辩解",
         "被戳穿": "被质疑时心虚辩解",
         "被越界": "被越界时冷静推开",

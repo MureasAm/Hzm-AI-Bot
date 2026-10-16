@@ -174,7 +174,7 @@ class TestExpectOf:
 
     @pytest.mark.parametrize("route,spec", [
         ("preference", "routine"), ("phrase", "brag_deny"),
-        ("behavior", "被夸时嘴硬否认"),
+        ("behavior", "被夸时把夸奖调小"),
     ])
     def test_id稳定的路走should(self, route, spec):
         assert PC._expect_of(f"{route}:{spec}") == (route, {"should": [spec]})
