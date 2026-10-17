@@ -1,7 +1,7 @@
 """读秒窗口（方案B）：把同一用户几秒内的多条消息攒批，静默后统一回复。
 
 架构（参考 Koishi 三模块）：
-- 采集：__init__ 的处理器把每条消息 (text, image_source) 交给 enqueue()
+- 采集：__init__ 的处理器把每条消息 (text, image_sources) 交给 enqueue()
 - 会话：enqueue 重置去抖定时器；用户停手超过随机读秒窗口（5~10s）才触发一次回复
 - 回复：_flush 在回复前统一"读图 + 归纳"（作为读整批的一部分），再交给 handle_chat，
         复用分批发送（A）；发送中途用户插话 → 取消未发送的分段，优先回新消息
@@ -19,7 +19,7 @@ from nonebot.adapters.onebot.v11 import Message, MessageSegment
 from .core import (
     handle_chat, summarize_batch, _get_clients,
 )
-from .config import set_llm_route
+from .config import set_llm_route, get_vision_client
 from .memory import get_user_history, append_user_history
 from .group_gate import should_reply_in_group
 from .chatlog import log_turn
@@ -45,7 +45,7 @@ class _UserWindow:
 
     def __init__(self, target_id: str):
         self.target_id = target_id
-        self.pending: list[tuple[str, str, str, str]] = []   # (sender_id, text, image_url, image_file)
+        self.pending: list[tuple[str, str, list[tuple[str, str]]]] = []   # (sender_id, text, [(image_url, image_file), ...])
         self.task: asyncio.Task | None = None      # 当前"窗口等待/发送"任务
         self.generation = 0                        # 每次 enqueue 自增
         self.bot = None
@@ -78,7 +78,7 @@ async def _eager_download(source: str) -> None:
 
 
 def _combine_text(msgs) -> str:
-    """合并本批文本（图片源不参与文本合并）。首元素为文本，兼容 (text, url, file) 与 (text, desc)。"""
+    """合并本批文本（图片源不参与文本合并）。首元素为文本，兼容 (text, ...) 任意尾巴。"""
     return "\n".join(t for t, *_ in msgs if t.strip()).strip()
 
 
@@ -113,7 +113,7 @@ async def _describe_image_src(bot, image_url: str, image_file: str) -> str:
     """
     if not image_url and not image_file:
         return ""
-    _, zhipu_client = _get_clients()
+    vision_client = get_vision_client()
     # 1) URL 路径：优先 eager 缓存，否则现场下载
     if image_url:
         data = _image_bytes_cache.get(image_url)
@@ -125,7 +125,7 @@ async def _describe_image_src(bot, image_url: str, image_file: str) -> str:
                 print(f"⚠️ URL 下载失败（尝试本地缓存兜底）: {e}")
                 data = None
         if data:
-            desc = await describe_image_bytes(zhipu_client, data)
+            desc = await describe_image_bytes(vision_client, data)
             if desc:
                 return desc
     # 2) file 兜底：NapCat 本地缓存文件（绕开 CDN rkey）
@@ -136,27 +136,28 @@ async def _describe_image_src(bot, image_url: str, image_file: str) -> str:
             if local and Path(local).exists():
                 print(f"[视觉] 读本地缓存: {local}")
                 data = Path(local).read_bytes()
-                return await describe_image_bytes(zhipu_client, data)
+                return await describe_image_bytes(vision_client, data)
             u2 = (info or {}).get("url") or ""
             if u2 and u2 != image_url:
                 print(f"[视觉] file→url 兜底: {u2[:100]}")
                 data = await _read_image_bytes(u2)
-                return await describe_image_bytes(zhipu_client, data)
+                return await describe_image_bytes(vision_client, data)
         except Exception as e:
             print(f"⚠️ 图片 file 兜底失败: {e}")
     return ""
 
 
-def enqueue(target_id: str, sender_id: str, text: str, image_url: str, image_file: str,
-            bot, is_private: bool) -> None:
+def enqueue(target_id: str, sender_id: str, text: str,
+            image_sources: list[tuple[str, str]], bot, is_private: bool) -> None:
     """采集一条消息进缓冲，重置读秒窗口。
 
     窗口按 target_id（私聊=user_id，群聊=group_id）开——群成员发言攒同一个窗口。
     群内闲聊也攒批：群现场注入 + 轻量群记忆帮她分辨在场和该接谁的话。
     sender_id 记录发言者，群聊组装时带发送者标签。
-    图片：url 优先（rkey 新鲜时急切缓存），file 留给 CDN 失败时读本地兜底。
+    图片：**一条消息可以带多张**（文字+多图一起发是 QQ 的常见形态），
+    每张的 url 优先（rkey 新鲜时急切缓存），file 留给 CDN 失败时读本地兜底。
     """
-    if not text.strip() and not image_url and not image_file:
+    if not text.strip() and not image_sources:
         return
     win = _windows.setdefault(target_id, _UserWindow(target_id))
     win.generation += 1
@@ -164,11 +165,12 @@ def enqueue(target_id: str, sender_id: str, text: str, image_url: str, image_fil
     win.bot = bot
     win.is_private = is_private
     # 私聊/群聊统一：整窗口攒批、读秒后一起回（群=回整场群聊）
-    win.pending.append((sender_id, text, image_url, image_file))
+    win.pending.append((sender_id, text, list(image_sources)))
     if len(win.pending) > 30:
         del win.pending[:len(win.pending) - 30]
-    if image_url:
-        asyncio.create_task(_eager_download(image_url))
+    for url, _ in image_sources:
+        if url:
+            asyncio.create_task(_eager_download(url))
     if win.task:
         win.task.cancel()
     win.task = asyncio.create_task(_process(win, gen))
@@ -200,20 +202,26 @@ async def _flush(win: _UserWindow) -> None:
     msgs, win.pending = win.pending, []
     my_gen = win.generation   # 起跑时的代际；后面用它判断"我是否已被新消息取代"
 
-    # 读图：本批所有图片统一在回复前解析（不是收到就秒解析，避免节奏割裂）
-    async def _parse(u: str, f: str) -> str:
+    # 读图：本批所有消息里的**所有**图片统一在回复前解析（不是收到就秒解析，避免节奏割裂）
+    async def _parse(src: tuple[str, str]) -> str:
+        u, f = src
         if not u and not f:
             return ""
         desc = await _describe_image_src(win.bot, u, f)
         return desc or "灰泽满收到一张图片，但暂时没看清里面的内容"  # 兜底保证可回
 
-    descs = await asyncio.gather(*[_parse(u, f) for _, _, u, f in msgs])
-    parsed = [(s, t, d) for (s, t, _, _), d in zip(msgs, descs)]  # (sender, text, desc)
+    jobs = [(i, src) for i, (_, _, srcs) in enumerate(msgs) for src in srcs]
+    results = await asyncio.gather(*[_parse(src) for _, src in jobs])
+    descs = [[] for _ in msgs]
+    for (i, _), d in zip(jobs, results):
+        if d:
+            descs[i].append(d)
+    parsed = [(s, t, ds) for (s, t, _), ds in zip(msgs, descs)]  # (sender, text, [该消息的图片描述...])
 
     # 组装：私聊=纯文本；群聊=每条带发送者名字，bot 知道谁在说话
     id_to_name = {}
     if win.is_private:
-        combined = _combine_text([(t, d) for _, t, d in parsed])
+        combined = _combine_text([(t, ds) for _, t, ds in parsed])
     else:
         lines = []
         for s, t, _ in parsed:
@@ -224,11 +232,13 @@ async def _flush(win: _UserWindow) -> None:
         combined = "\n".join(lines).strip()
         if id_to_name:
             group_memory.upsert_members(win.target_id, id_to_name)
-    vision_desc = "；".join(d for _, _, d in parsed if d)
-    print(f"[读秒] {'群' if not win.is_private else '私聊'}={win.target_id} 攒批 {len(msgs)} 条 → 回复")
+    vision_desc = "；".join(d for _, _, ds in parsed for d in ds)
+    img_count = sum(len(ds) for _, _, ds in parsed)
+    print(f"[读秒] {'群' if not win.is_private else '私聊'}={win.target_id} "
+          f"攒批 {len(msgs)} 条 → 回复" + (f"（含 {img_count} 张图）" if img_count else ""))
 
     # 归纳：整批（含图片描述）一起给模型做理解提示
-    batch_summary = await summarize_batch([(t, d) for _, t, d in parsed])
+    batch_summary = await summarize_batch([(t, "；".join(ds)) for _, t, ds in parsed])
     # 群近况写入群记忆（有冷却，防碎碎念刷爆；只记有信息量的归纳）
     if not win.is_private and batch_summary:
         g = group_memory.get_group(win.target_id)

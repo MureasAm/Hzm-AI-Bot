@@ -390,9 +390,9 @@ def _run_bili_login(args):
 # ==================== 子命令：vision-test ====================
 
 def _add_vision_test(sub):
-    p = sub.add_parser("vision-test", help="验证 glm-4.6v 视觉描述（本地图片或 URL）")
+    p = sub.add_parser("vision-test", help="验证视觉模型描述（默认 gemini，可 --model glm-4.6v）")
     p.add_argument("-u", "--image", required=True, help="本地图片路径或 http(s) 图链")
-    p.add_argument("--model", default=None, help="视觉模型（默认读 .env 或 glm-4.6v）")
+    p.add_argument("--model", default=None, help="视觉模型（默认读 .env / VISION_MODEL）")
     p.set_defaults(func=_run_vision_test)
 
 

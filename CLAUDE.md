@@ -35,7 +35,7 @@ NoneBot2 + OneBot v11(NapCat) 的"灰泽满"人格聊天机器人。核心是**�
 
 ## 别碰 / 危险
 - `generate-persona` 会覆盖人工人格产物，**还会重建已删除的 `core/traits.json` / `core/styles.json`** → 已加 `--danger`，别乱跑。
-- `generate-vectors` 别省略 `-i`（缺省指向 statement_final；内置 RAW_CORPUS 是过期副本会覆盖线上420条）。
+- `generate-vectors` 别省略 `-i`（缺省指向 statement_final；内置 RAW_CORPUS 是过期副本会覆盖线上414条）。
 - `outputs/`、`data/`、`.env.prod` 不入库；`data/weibo_cookies.json` 是敏感会话。
 - 语音参考音频必须"无尾静音"（否则合成退化成"几个字+长空尾"）。
 
@@ -49,7 +49,7 @@ NoneBot2 + OneBot v11(NapCat) 的"灰泽满"人格聊天机器人。核心是**�
 - 长期记忆：`memory_v2.py`（**类型化条目，2026-10-10 起正位**：真实聊天重建 + 运行时写入/注入；
   临时关掉设 `MEMORY_V2_SHADOW=0` / `MEMORY_V2_INJECT=0`）。**v1 已于 2026-10-12 整个删除**
   ——根 `memory_manager.py` 和 `user_memory/long_term*` 都没了，名字/城市/事实全从 V2 取。
-- 离线工具：`scripts/run_tool.py <工具>`；**68 个脚本各干什么见 `docs/操作手册.md`**
+- 离线工具：`scripts/run_tool.py <工具>`；**71 个脚本各干什么见 `docs/操作手册.md`**
 
 ## 文档指针（按需懒读，别开头全灌）
 **`docs/` = 7 份正文 + 一个历史存档区**。

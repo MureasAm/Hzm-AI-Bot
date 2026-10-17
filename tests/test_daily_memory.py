@@ -99,9 +99,9 @@ def test_render_uses_absolute_time_never_relative_words():
     """条目存的是**绝对时刻**，渲染才换算——存相对词会随注入时刻漂移。"""
     now = datetime(2026, 10, 17, 20, 0)
     assert dm.render_entry({"t": "2026-10-17T09:00:00", "text": "早上吃了包子"}, now) \
-        == "今天早上9点：早上吃了包子"
+        == "今天早上9点：用户早上吃了包子"
     assert dm.render_entry({"t": "2026-10-16T16:00:00", "text": "下午的课取消了"}, now) \
-        == "昨天下午4点：下午的课取消了"
+        == "昨天下午4点：用户下午的课取消了"
 
 
 def test_day_label_is_natural_day_not_boundary():
@@ -118,6 +118,16 @@ def test_too_few_entries_means_no_injection(store):
     assert store.context("u1", now=now) == ""
     store.add("u1", ["下午去上了课"], now=now)
     assert store.context("u1", now=now) != ""
+
+
+def test_context_entries_carry_user_subject(store):
+    """每条必须带主语「用户」（2026-10-18 验收：不带主语时模型会认成她自己的事）。"""
+    now = datetime(2026, 10, 17, 16, 0)
+    store.add("u1", ["中午吃了炸鸡"], now=now.replace(hour=12))
+    store.add("u1", ["下午去上了体育课"], now=now.replace(hour=15))
+    ctx = store.context("u1", now=now)
+    assert "用户中午吃了炸鸡" in ctx
+    assert "用户下午去上了体育课" in ctx
 
 
 def test_context_is_char_bounded(store):

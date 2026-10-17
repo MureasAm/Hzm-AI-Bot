@@ -8,7 +8,7 @@
 - persona.py    人格加载与语义行为匹配（trigger 向量缓存）
 - memory.py     短期记忆（带锁）+ 长期记忆封装
 - rag.py        直播记忆检索（余弦相似度）
-- vision.py     视觉理解（glm-4.6v）
+- vision.py     视觉理解（默认 gemini，跟主模型同一条线路）
 - core.py       消息处理主循环
 - chat_window.py  读秒窗口（方案B：消息攒批，回复前统一读图+归纳）
 - bili_bridge.py  B站直播/动态监听 + 私聊广播（启动时注册后台任务）
@@ -129,18 +129,26 @@ async def _auto_accept_friend(bot: Bot, event: RequestEvent):
         print(f"[好友申请] ⚠️ 自动通过失败 user={event.user_id}: {e}")
 
 
-def _extract_image_source(msg) -> tuple[str, str]:
-    """取消息第一张图的 (url, file)。两者都返回：url 优先下载，file 留作 CDN 失败时读本地缓存兜底。
+# 一条消息最多收几张图：QQ 客户端自己的上限就是 9 张，超出的是异常消息
+MAX_IMAGES_PER_MESSAGE = 9
+
+
+def _extract_image_sources(msg) -> list[tuple[str, str]]:
+    """取消息里**所有**图片的 (url, file) 列表。
+
+    ⚠️ 必须返回全部：QQ 的"文字+多张图一起发"是**一条消息多个 image 段**。
+    原来只 `return` 第一张，其余图片连源都没进攒批缓冲，对方发三张她只看得到一张。
 
     只取源不解析——真正的视觉解析推迟到回复前（chat_window._flush），
     这样"读图"是读整批的一部分，而不是消息一到就秒解析。
     """
+    out = []
     for seg in msg:
         if seg.type == "image":
-            url = seg.data.get("url") or ""
-            file_ = seg.data.get("file") or ""
-            return url, file_
-    return "", ""
+            out.append((seg.data.get("url") or "", seg.data.get("file") or ""))
+            if len(out) >= MAX_IMAGES_PER_MESSAGE:
+                break
+    return out
 
 
 def _extract_at_self(msg, event, is_group: bool = True) -> bool:
@@ -518,7 +526,7 @@ async def _extract_forward_text(event, bot) -> str:
 async def _handle_chat(bot: Bot, event: Event):
     msg = event.get_message()
     user_msg = msg.extract_plain_text().strip()
-    image_url, image_file = _extract_image_source(msg)
+    image_sources = _extract_image_sources(msg)
     face_text = _extract_face_text(msg)
 
     # 引用回复：把"引用了哪条"放到消息最前——它是这条消息的语境，不是新内容。
@@ -552,7 +560,7 @@ async def _handle_chat(bot: Bot, event: Event):
     # 3 分钟后才问"能不能给灰泽满调成这样"。那条先发的**没进任何一批**，
     # 所以她永远不知道"这样"指什么，只能回一句"调成哪样啊"。
     # 现在给个占位提示：她至少知道"对方发了个我解析不出来的东西"，可以反问。
-    if not user_msg and not image_url and not image_file:
+    if not user_msg and not image_sources:
         unknown = [seg.type for seg in msg
                    if seg.type not in ("text", "at", "reply", "image", "face")]
         if unknown:
@@ -560,17 +568,17 @@ async def _handle_chat(bot: Bot, event: Event):
             print(f"[收到消息] ⚠️ 只含未识别的段 {unknown} → 注入占位提示（否则这条会静默消失）")
             user_msg = f"[对方发来{what}，但内容没能解析出来——看不懂就问他发了什么]"
 
-    if not user_msg and not image_url and not image_file:
+    if not user_msg and not image_sources:
         return  # 真正空消息（无文字无图片无表情），不回复
 
     user_id = event.get_user_id()
     target_id = str(user_id if is_private else getattr(event, "group_id", ""))
     print(f"[收到消息] user={user_id}, msg={user_msg[:40]!r}, "
-          f"img={'有' if (image_url or image_file) else '无'}, "
+          f"img={len(image_sources)}张, "
           f"引用={'有' if quote_text else '无'}, "
           f"转发={'有' if forward_text else '无'}, "
           f"@={'有' if at_self else '无'}")
 
     # 读秒窗口（方案B）：攒批 + 静默后统一回复（含读图/归纳/分批发送）
     # target_id=会话标识（私聊=user_id，群聊=group_id），群聊按群攒批实现多人对话
-    chat_window.enqueue(target_id, user_id, user_msg, image_url, image_file, bot, is_private)
+    chat_window.enqueue(target_id, user_id, user_msg, image_sources, bot, is_private)

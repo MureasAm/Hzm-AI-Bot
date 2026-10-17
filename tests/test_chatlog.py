@@ -49,6 +49,34 @@ class TestToggle:
         assert not _tmp_log.exists()
 
 
+class TestCorpusHits:
+    """corpus 真实注入留痕（2026-10-18）：记录最终进提示词的 item_id。"""
+
+    def _items(self):
+        from types import SimpleNamespace
+        return [SimpleNamespace(item_id="3", text="她搬家那天没吃饭"),
+                SimpleNamespace(item_id="9", text="她熬夜改稿到三点")]
+
+    def test_records_injected_ids_and_query(self, _tmp_log):
+        chatlog.log_corpus_hits("你最近忙不忙", self._items())
+        p = _tmp_log.parent / "corpus_hits.jsonl"
+        rec = [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines()]
+        assert rec[0]["query"] == "你最近忙不忙"
+        assert [x["id"] for x in rec[0]["items"]] == ["3", "9"]
+        assert isinstance(rec[0]["t"], float)
+
+    def test_disabled_writes_nothing(self, monkeypatch, _tmp_log):
+        monkeypatch.setenv("CHATLOG", "0")
+        chatlog.log_corpus_hits("q", self._items())
+        assert not (_tmp_log.parent / "corpus_hits.jsonl").exists()
+
+    def test_block_hits_record_names(self, _tmp_log):
+        chatlog.log_block_hits(["history", "now", "mood"])
+        p = _tmp_log.parent / "block_hits.jsonl"
+        rec = [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines()]
+        assert rec[0]["blocks"] == ["history", "now", "mood"]
+
+
 class TestRecord:
     def test_records_private_turn(self, _tmp_log):
         log_turn("u1", False, "在吗", "在呢")

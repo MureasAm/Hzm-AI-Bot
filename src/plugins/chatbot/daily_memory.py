@@ -95,7 +95,11 @@ def _day_label(when: datetime, now: datetime) -> str:
 
 
 def render_entry(entry: dict, now: datetime) -> str:
-    """一条记录 → 「今天早上9点：中午吃了炸鸡」。时刻是**他说的那一刻**。
+    """一条记录 → 「今天早上9点：用户早上吃了包子」。时刻是**用户说的那一刻**。
+
+    ⚠️ **主语必须写"用户"**（2026-10-18 验收发现）：只写「今天中午12点：中午吃了炸鸡」
+    时，模型会把事件认成灰泽满自己的（实测回出"灰泽满今天中午才吃完兰州拉面"）。
+    块头写"用户/他"不够——事件自己不带主语，模型就按人设默认成她自己。
 
     ⚠️ 下午/晚上/深夜用**12 小时制**：说"下午4点"，不说"下午16点"；
     "晚上10点"，不说"晚上22点"。这跟用户给的两个例子一致。
@@ -106,7 +110,7 @@ def render_entry(entry: dict, now: datetime) -> str:
         return ""
     part = _day_part(when.hour)
     hour = when.hour - 12 if part in ("下午", "晚上", "深夜") else when.hour
-    return f"{_day_label(when, now)}{part}{hour}点：{entry.get('text', '')}"
+    return f"{_day_label(when, now)}{part}{hour}点：用户{entry.get('text', '')}"
 
 
 def _looks_like_event(text: str) -> bool:

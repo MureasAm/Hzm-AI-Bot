@@ -146,6 +146,14 @@ class TestReadImageHeaders:
         assert "Referer" not in captured["headers"]
 
 
+class TestVisionModelParams:
+    """额外参数按模型家族给：glm 要关思考（默认推理能拖到 9s+），gemini 不认这个字段。"""
+
+    def test_glm_disables_thinking_gemini_adds_nothing(self):
+        assert vision._extra_params("glm-4.6v") == {"extra_body": {"thinking": {"type": "disabled"}}}
+        assert vision._extra_params("gemini-3.1-flash-lite") == {}
+
+
 class TestDescribeImage:
     async def test_data_uri_passthrough(self):
         client = _FakeClient("一只猫猫")

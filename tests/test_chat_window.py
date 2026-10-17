@@ -8,7 +8,7 @@ from src.plugins.chatbot import chat_window as cw
 
 class TestCombineText:
     def test_joins_texts_ignores_image_src(self):
-        assert cw._combine_text([("在吗", "", ""), ("天气咋样", "", ""), ("", "http://img", "")]) == "在吗\n天气咋样"
+        assert cw._combine_text([("在吗", []), ("天气咋样", []), ("", [("http://img", "")])]) == "在吗\n天气咋样"
 
     def test_empty(self):
         assert cw._combine_text([]) == ""
@@ -17,7 +17,7 @@ class TestCombineText:
 class TestFlush:
     async def test_flush_combines_and_splits(self, monkeypatch):
         win = cw._UserWindow("u1")
-        win.pending = [("u1", "在吗", "", ""), ("u1", "天气咋样", "", "")]
+        win.pending = [("u1", "在吗", []), ("u1", "天气咋样", [])]
         captured = {}
 
         async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False):
@@ -54,7 +54,7 @@ class TestFlush:
 
     async def test_flush_reads_image_at_reply_time(self, monkeypatch):
         win = cw._UserWindow("u2")
-        win.pending = [("u2", "", "http://img1", "img1.image")]
+        win.pending = [("u2", "", [("http://img1", "img1.image")])]
         captured = {}
 
         async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False):
@@ -84,9 +84,47 @@ class TestFlush:
         assert captured["vision"] == "一碗加煎蛋的面"
         assert sent == ["这碗面好香"]
 
+    async def test_flush_reads_all_images_of_one_message(self, monkeypatch):
+        """一条消息带多张图：每张都要解析，且归纳层也拿到完整描述。"""
+        win = cw._UserWindow("u10")
+        win.pending = [("u10", "你看", [("http://a", "fa"), ("http://b", "fb")])]
+        captured = {}
+
+        async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False):
+            captured["vision"] = vision_desc
+            return "好"
+
+        async def fake_summarize(msgs):
+            captured["summary_msgs"] = msgs
+            return ""
+
+        async def fake_describe(bot, url, file):
+            return {"http://a": "一张猫", "http://b": "一张狗"}[url]
+
+        async def fake_send(win_, content):
+            pass
+
+        async def fake_send_voice(*args, **kwargs):
+            return False
+
+        async def fake_pick(client, reply, avoid_groups=None, **kwargs):
+            return None
+
+        monkeypatch.setattr(cw, "handle_chat", fake_handle)
+        monkeypatch.setattr(cw, "summarize_batch", fake_summarize)
+        monkeypatch.setattr(cw, "_describe_image_src", fake_describe)
+        monkeypatch.setattr(cw, "_send", fake_send)
+        monkeypatch.setattr(cw, "send_voice", fake_send_voice)
+        monkeypatch.setattr(cw, "pick_sticker", fake_pick)
+        monkeypatch.setattr(cw, "_sticker_state", {})
+
+        await cw._flush(win)
+        assert captured["vision"] == "一张猫；一张狗"
+        assert captured["summary_msgs"] == [("你看", "一张猫；一张狗")]
+
     async def test_flush_vision_fallback_keeps_reply(self, monkeypatch):
         win = cw._UserWindow("u3")
-        win.pending = [("u3", "", "http://img1", "")]
+        win.pending = [("u3", "", [("http://img1", "")])]
         captured = {}
 
         async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False):
@@ -121,7 +159,7 @@ class TestVoiceFlush:
 
     async def _run_flush(self, monkeypatch, reply_text, voice_ok=True):
         win = cw._UserWindow("u4")
-        win.pending = [("u4", "在吗", "", "")]
+        win.pending = [("u4", "在吗", [])]
         voice_calls = []
 
         async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False):
@@ -201,7 +239,7 @@ class TestVoiceSurvivesInterrupt:
 
     async def _setup(self, monkeypatch, supersede_during_handle=False):
         win = cw._UserWindow("u9")
-        win.pending = [("u9", "在吗", "", "")]
+        win.pending = [("u9", "在吗", [])]
         sent, voice_done = [], []
 
         async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False):
@@ -258,12 +296,12 @@ class TestEnqueue:
     async def test_enqueue_accumulates_and_new_task(self):
         cw._windows.clear()
         bot = object()
-        cw.enqueue("u1", "u1", "a", "", "", bot, True)
+        cw.enqueue("u1", "u1", "a", [], bot, True)
         w = cw._windows["u1"]
         t1 = w.task
         gen1 = w.generation
-        cw.enqueue("u1", "u1", "b", "", "", bot, True)
-        assert w.pending == [("u1", "a", "", ""), ("u1", "b", "", "")]   # 攒批
+        cw.enqueue("u1", "u1", "b", [], bot, True)
+        assert w.pending == [("u1", "a", []), ("u1", "b", [])]   # 攒批
         assert w.task is not t1                       # 插话 → 新任务
         assert w.generation == gen1 + 1               # 代际递增
         # 清理：取消并让循环处理；不 await，避免"未启动即取消"的任务抛 CancelledError
@@ -275,5 +313,5 @@ class TestEnqueue:
     def test_enqueue_ignores_empty(self):
         cw._windows.clear()
         bot = object()
-        cw.enqueue("u1", "u1", "", "", "", bot, True)
+        cw.enqueue("u1", "u1", "", [], bot, True)
         assert "u1" not in cw._windows  # 空消息不入缓冲

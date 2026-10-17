@@ -127,6 +127,52 @@ def iter_records():
                 continue
 
 
+def log_corpus_hits(query: str, items) -> None:
+    """记录**真正进提示词**的 corpus 条目（分析用，data/ 不入库）。
+
+    为什么加（2026-10-18）：以前只有 `[corpus判定] 候选N→保留M` 的**条数**，
+    没有 item id——于是"这条库到底被用过几次"只能靠离线回放估。
+    落点在 `build_message_list` 真正渲染 corpus 块的地方，所以记的是
+    **最终注入**，不是"进了候选"或"判官保留了"。
+
+    失败静默：分析用的东西，绝不能影响聊天。
+    """
+    if not chatlog_enabled():
+        return
+    try:
+        LOG_DIR.parent.mkdir(parents=True, exist_ok=True)
+        rec = {
+            "t": time.time(),
+            "query": (query or "").strip()[:200],
+            "items": [
+                {"id": str(getattr(it, "item_id", "")),
+                 "text": (getattr(it, "text", "") or "")[:80]}
+                for it in (items or [])
+            ],
+        }
+        with open(LOG_DIR.parent / "corpus_hits.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def log_block_hits(blocks) -> None:
+    """记录这一轮实际注入了哪些运行时块（12–19），分析开火率用。
+
+    跟 `log_corpus_hits` 同一个落点/纪律：只有真实聊天路径会调用（core 里 gate），
+    失败静默。一条记录很小，每轮一行。
+    """
+    if not chatlog_enabled() or not blocks:
+        return
+    try:
+        LOG_DIR.parent.mkdir(parents=True, exist_ok=True)
+        rec = {"t": time.time(), "blocks": list(blocks)}
+        with open(LOG_DIR.parent / "block_hits.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
 def log_turn(target_id: str, is_group: bool, user_text: str, reply: str) -> None:
     """追加一轮。**只在消息真的发出去之后调用。**
 

@@ -43,6 +43,15 @@ PREFERENCE_BUDGET_CHARS = 360
 COMMITMENT_BUDGET_CHARS = 220
 # 时效性近况（fact）的期限档位 → 天数；"none" 不过期（长期事实/明确无期限）。
 _VALID_FOR_DAYS = {"3d": 3, "14d": 14, "90d": 90}
+# 承诺的默认寿命（2026-10-18 用户定：加 TTL）。
+# 为什么必须过期：承诺没有"完成"信号，旧代码里 active 永久有效——实测 27 条里
+# 10 条已超过 7 天、16 条是"明天/今晚/一会儿"这种一次性措辞，会在几周后被当成
+# "还没兑现的约定"注入。分三档：一次性 / 长期态度 / 普通承诺。
+COMMITMENT_TTL_DAYS = 14
+COMMITMENT_ONE_TIME_TTL_HOURS = 48
+COMMITMENT_STANDING_TTL_DAYS = 90
+_ONE_TIME_COMMITMENT_RE = re.compile(r"今天|今晚|一会儿|待会|等下|明天")
+_STANDING_COMMITMENT_RE = re.compile(r"以后|天天|每天|每次|一直|长期")
 # 这些 key 的事实**不管聊没聊到都带上**——名字/地点/时区/身份是"不矛盾的底线"。
 # 换掉了原来那个对不上模型产出的旧名单（preferred_name/name/city）：
 # 模型实际会产 location / timezone / identity 这些，旧名单等于没生效。
@@ -463,6 +472,29 @@ def _fact_expires_at(item: dict, now: datetime) -> str | None:
     return (now + timedelta(days=days)).isoformat()
 
 
+def _commitment_ttl_hours(value: str) -> int:
+    """承诺的 TTL：一次性措辞 48h；长期态度 90 天；其余 14 天。"""
+    if _ONE_TIME_COMMITMENT_RE.search(value or ""):
+        return COMMITMENT_ONE_TIME_TTL_HOURS
+    if _STANDING_COMMITMENT_RE.search(value or ""):
+        return COMMITMENT_STANDING_TTL_DAYS * 24
+    return COMMITMENT_TTL_DAYS * 24
+
+
+def _commitment_expires_at(item: dict, now: datetime) -> str | None:
+    """承诺的过期时刻（2026-10-18 加 TTL）。
+
+    显式 `valid_for` 优先；否则按价值措辞分档。旧数据没有这个字段时，
+    `_active_memories` 会用 `created_at + TTL` 兜底（见下）。
+    """
+    if item.get("kind") != "commitment":
+        return None
+    days = _VALID_FOR_DAYS.get(str(item.get("valid_for") or ""))
+    if days:
+        return (now + timedelta(days=days)).isoformat()
+    return (now + timedelta(hours=_commitment_ttl_hours(str(item.get("value") or "")))).isoformat()
+
+
 def _ngrams(text: str) -> set[str]:
     normalized = re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]", "", text or "").lower()
     if len(normalized) < 2:
@@ -732,7 +764,7 @@ class ShadowMemoryStore:
                         "last_observed_at": now.isoformat(),
                         "source": item["source"],
                     }
-                    expires_at = _fact_expires_at(item, now)
+                    expires_at = _fact_expires_at(item, now) or _commitment_expires_at(item, now)
                     if expires_at:
                         existing["expires_at"] = expires_at
                     memories.append(existing)
@@ -760,9 +792,9 @@ class ShadowMemoryStore:
                     existing["confidence"] = max(float(existing.get("confidence", 0)), item["confidence"])
                     existing["temporal_scope"] = item["temporal_scope"]
                     existing["valid_for"] = item["valid_for"]
-                    expires_at = _fact_expires_at(item, now)
+                    expires_at = _fact_expires_at(item, now) or _commitment_expires_at(item, now)
                     if expires_at:
-                        existing["expires_at"] = expires_at   # 近况被再次提到 → 续期
+                        existing["expires_at"] = expires_at   # 近况/承诺被再次提到 → 续期
                     if item["explicit"]:
                         existing["explicit"] = True
                         existing["status"] = "active" if item["kind"] == "commitment" else "confirmed"
@@ -777,6 +809,7 @@ class ShadowMemoryStore:
                 # 后来的"高考车祸"顶掉（实测真丢过 3 条）。
                 if item["explicit"] and (
                     item["kind"] == "interaction_preference"
+                    or item["kind"] == "commitment"   # 同一承诺 key 只留最新一条（旧值顶替）
                     or (item["kind"] == "fact" and (
                         item["temporal_scope"] == "current"
                         or item["key"] in _SINGLE_VALUED_FACT_KEYS
@@ -832,6 +865,13 @@ class ShadowMemoryStore:
             if memory.get("status") not in {"confirmed", "active"}:
                 continue
             expires = _iso(memory.get("expires_at"))
+            if expires is None and memory.get("kind") == "commitment":
+                # 旧数据没有 expires_at（2026-10-18 前写入）→ 按 created_at + TTL 兜底，
+                # 不让历史里的"明天…"永久 active。
+                created = _iso(memory.get("created_at"))
+                if created is not None:
+                    expires = created + timedelta(
+                        hours=_commitment_ttl_hours(str(memory.get("value") or "")))
             if expires is not None and expires <= now:
                 continue
             active.append(memory)
@@ -874,6 +914,8 @@ class ShadowMemoryStore:
         commitments = [m for m in active if m.get("kind") == "commitment" and _relevance(query, m) > 0]
         if not commitments:
             return []
+        # 命中多条时先注最相关的；旧实现按存储顺序取前 2 条，会把最旧的那条塞进去。
+        commitments.sort(key=lambda m: -_relevance(query, m))
         rendered = "；".join(str(m.get("value")) for m in commitments[:2])
         return [inj.T("commitment", rendered=rendered)]
 

@@ -545,23 +545,23 @@ class TestConsistencyRuleWording:
         b = self._block(monkeypatch)
         assert "借口要与之前保持一致" not in b, "这句会把它锁死在第一次的说法上"
 
-    def test_her_own_lines_are_not_injected(self, monkeypatch):
-        """⚠️ 她说过的话**不再回灌**（2026-10-14 用户决定去自反馈）。
+    def test_her_own_lines_are_injected(self, monkeypatch):
+        """2026-10-18 用户定：短期记忆恢复完整上下文——用户 + 她自己最近 5 轮。
 
-        实测（`docs/历史/交接文档.md`「开头重复」节）：上一轮以"灰泽满"开头时，
-        这一轮也以它开头的概率 51.7%（不是时只有 17.4%）——回灌的作用是让说法黏住。
-        **记忆照记**（起手闸与 L3 还要用），只是不注入。
+        2026-10-14 曾过滤掉她自己的话（去自反馈）；用户明确说那不是他要的"正反馈"。
+        现在两边都注，`contradiction` 那条仍只约束事实、不约束说法。
         """
         b = self._block(monkeypatch)
-        assert "灰泽满：在忙" not in b
-        assert "用户：你又鸽了" in b      # 用户侧照旧
+        assert "灰泽满：在忙" in b
+        assert "用户：你又鸽了" in b
 
-    def test_only_bot_history_injects_nothing(self, monkeypatch):
-        """整段都是她说的话时（如刚推完动态还没人回），干脆不注入这一块。"""
+    def test_only_bot_history_still_injects(self, monkeypatch):
+        """整段都是她说的话时（如刚推完动态还没人回），现在也要注完整上下文。"""
         monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
         monkeypatch.setattr(core, "load_schedule", lambda: {})
         msgs = core.build_message_list("在吗", [], ["[3小时前] 灰泽满：睡了"])
-        assert not [m for m in msgs if m["content"].startswith("【最近对话记录】")]
+        block = [m["content"] for m in msgs if m["content"].startswith("【最近对话记录】")]
+        assert block and "灰泽满：睡了" in block[0]
 
     def test_timed_prefix_does_not_hide_her_lines(self, monkeypatch):
         """带 `[3小时前] ` 前缀的行同样是"她说的"，别被前缀骗过去。"""
@@ -758,6 +758,46 @@ class TestCorpusTimePrefix:
         joined = "\n".join(m["content"] for m in msgs)
         assert "【当前情境下的行为指令】" in joined
         assert "【这是过去发生过的事】" not in joined
+
+
+    def test_hit_log_records_only_items_that_enter_prompt(self, monkeypatch):
+        """留痕点必须在**渲染之后**、只记真正进提示词的 corpus 条目。
+
+        2026-10-18：这条日志是"库利用率"的唯一真值来源——记候选或记判官保留都不对，
+        因为 RRF/字符预算还可能再截掉一部分。
+        """
+        from types import SimpleNamespace
+        from src.plugins.chatbot.retrieval import RetrievalItem
+        monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
+        recorded = {}
+        monkeypatch.setattr(core, "get_llm_route", lambda: "私")
+        monkeypatch.setattr(core, "log_corpus_hits",
+                            lambda q, items: recorded.update(
+                                query=q, ids=[it.item_id for it in items]))
+        monkeypatch.setattr(core, "log_block_hits",
+                            lambda blocks: recorded.update(blocks=list(blocks)))
+        items = [
+            RetrievalItem(source="corpus", item_id="42", score=0.9, text="她以前被问过身高。"),
+            RetrievalItem(source="corpus", item_id="43", score=0.8, text=""),  # 空文本不渲染
+            SimpleNamespace(source="behavior", item_id="被夸", score=1.0, text="【被夸】压低评价。"),
+        ]
+        core.build_message_list("你多高啊", items, [])
+        assert recorded == {}, "离线/实验路径默认不写命中日志"
+        core.build_message_list(
+            "你多高啊", items, ["用户：在吗"],
+            commitment_context="【相关未完成约定】测试",
+            same_request={"count": 2, "what": "要语音"},
+            batch_summary="测试摘要", query_hint="测试扩充",
+            emotion_context="【用户此刻的情绪】测试",
+            daily_context="今天中午吃了炸鸡",
+            log_hits=True,
+        )
+        assert recorded["query"] == "你多高啊"
+        assert recorded["ids"] == ["42"]
+        assert set(recorded["blocks"]) == {
+            "commitment", "history", "same_request", "batch",
+            "query_hint", "now", "mood", "daily",
+        }
 
 
 class TestRetrievePreferences:

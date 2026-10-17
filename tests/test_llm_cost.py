@@ -234,7 +234,7 @@ class TestWiring:
         win = cw._UserWindow("123456" if is_group else "u1")
         win.is_private = not is_group
         win.bot = object()
-        win.pending = [("u1", "在吗", "", ""), ("u1", "在不在", "", "")]
+        win.pending = [("u1", "在吗", []), ("u1", "在不在", [])]
         await cw._flush(win)
         return _read(tmp_path / "llm_usage.jsonl")
 

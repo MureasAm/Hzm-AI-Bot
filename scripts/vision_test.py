@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""vision-test：验证 glm-4.6v 视觉描述（本地图片文件或 http URL）。
+"""vision-test：验证视觉模型描述（本地图片文件或 http URL）。
+
+默认视觉模型跟主模型同一条线路（gemini）；传 --model glm-4.6v 可验证智谱。
 
 用法：
     python scripts/vision_test.py -u 本地图片路径或http图链
@@ -29,27 +31,24 @@ def _load_env(name: str):
 
 
 async def main(source: str, model: str) -> None:
-    from openai import AsyncOpenAI
+    import nonebot
 
-    from src.plugins.chatbot.constants import ZHIPU_BASE_URL, VISION_MODEL
+    nonebot.init()   # config/vision 都是插件包内模块，导入前必须先初始化驱动
+    from src.plugins.chatbot.config import get_vision_client, get_vision_model
     from src.plugins.chatbot.vision import describe_image
 
-    api_key = _load_env("ZHIPU_API_KEY")
-    if not api_key:
-        print("❌ .env.prod 未找到 ZHIPU_API_KEY")
-        return
-
-    model = model or VISION_MODEL
-    print(f"视觉模型: {model}")
-    client = AsyncOpenAI(api_key=api_key, base_url=ZHIPU_BASE_URL)
+    model = model or get_vision_model()
+    client = get_vision_client()
+    print(f"视觉模型: {model} @ {client.base_url}")
     desc = await describe_image(client, source, model=model)
     print(f"视觉描述: {desc if desc else '（空——看上方是否有⚠️警告）'}")
 
 
 if __name__ == "__main__":
     ensure_utf8_stdout()
-    parser = argparse.ArgumentParser(description="验证 glm-4.6v 视觉描述")
+    parser = argparse.ArgumentParser(description="验证视觉模型描述")
     parser.add_argument("-u", "--image", required=True, help="本地图片路径或 http(s) 图链")
-    parser.add_argument("--model", default=None, help=f"视觉模型（默认 {_load_env('VISION_MODEL') or 'glm-4.6v'}）")
+    parser.add_argument("--model", default=None,
+                        help=f"视觉模型（默认 {_load_env('VISION_MODEL') or 'gemini-3.1-flash-lite'}）")
     args = parser.parse_args()
     asyncio.run(main(args.image, args.model))

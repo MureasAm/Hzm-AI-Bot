@@ -1,11 +1,11 @@
 {
-  "_readme": "第 12 块·未完成约定（Memory V2 的中段）。\n【什么时候注】有相关约定时。位置**紧挨记忆区**：别忘、要兑现。",
-  "id": "commitment",
-  "order": 12,
-  "title": "未完成约定",
-  "when": "有相关约定时",
-  "source": "运行时（memory_v2）",
-  "strings": {
-    "main": "【相关未完成约定】{rendered}"
-  }
+ "_readme": "第 12 块·未完成约定（Memory V2 的中段）。\n【什么时候注】有相关约定时。位置**紧挨记忆区**：别忘、要兑现。\n【时效】承诺带 TTL（一次性措辞 48h / 长期态度 90 天 / 普通承诺 14 天）；过期不再注入，旧数据按 created_at + TTL 兜底。同一 key 只留最新一条。",
+ "id": "commitment",
+ "order": 12,
+ "title": "未完成约定",
+ "when": "有相关约定时",
+ "source": "运行时（memory_v2）",
+ "strings": {
+  "main": "【相关未完成约定】{rendered}"
+ }
 }

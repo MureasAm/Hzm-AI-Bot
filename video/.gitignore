@@ -10,3 +10,23 @@ out/
 #    同一类"新子目录漏网"的坑，见根 .gitignore 里 user_memory 那条的注释。
 public/audio/*
 !public/audio/README.md
+
+# 2026-10-18：EP02/EP03 是独立视频产线内容，与 bot 源码无关，不入库。
+# 已跟踪的 EP01 文件保持原样；这里只收住新增内容。
+EP02_*
+EP03_*
+data/ep02/
+data/ep03/
+narration/ep02.csv
+narration/ep03.csv
+public/subtitles/ep02.srt
+public/subtitles/ep03.srt
+render-props-ep02*.json
+render-props-ep03*.json
+scripts/check-ep02-acceptance.mjs
+scripts/check-ep03-acceptance.mjs
+scripts/build-music-bed.py
+scripts/narration_sources/
+src/episodes/ep02/
+src/episodes/ep03/
+public/fonts/

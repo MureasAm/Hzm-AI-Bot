@@ -198,10 +198,15 @@ WEATHER_BASE_URL = "https://devapi.qweather.com"  # 和风 API Host 根；每项
 WEATHER_CACHE_SECONDS = 3600      # 天气进程内缓存 1 小时，省免费额度
 WEATHER_GEO_CACHE_SECONDS = 86400  # 城市名→LocationID 解析缓存 1 天
 # 方向2 视觉
-VISION_MODEL = "glm-4.6v"         # 视觉理解模型（智谱 OpenAI 兼容；用户有免费 token）
+# 视觉理解模型：默认跟**主模型同一条线路**（linkapi 的 gemini），描述风格与主模型一致。
+# 想换回智谱只需在 .env.prod 写 `VISION_MODEL=glm-4.6v`（client 会按模型名自动选 key/base）。
+VISION_MODEL = "gemini-3.1-flash-lite"
 VISION_MAX_TOKENS = 512           # 视觉描述输出上限
-# 视觉调用关掉思考模式：glm-4.6v 默认会先推理（可拖到 9s+），关掉后秒出，消除"图片迟到"感
-VISION_THINKING_DISABLED = {"extra_body": {"thinking": {"type": "disabled"}}}
+# 各视觉模型的额外参数：glm-4.6v 默认会先推理（可拖到 9s+），必须关掉；
+# gemini 不认这个字段，别传（传了可能 400）。
+VISION_EXTRA_PARAMS = {
+    "glm-4.6v": {"extra_body": {"thinking": {"type": "disabled"}}},
+}
 # 方向3 B站联动
 PUSH_INTERVAL = 180               # B站轮询间隔（秒）。别低于 120：带 SESSDATA 的会话调太频繁会被 B站风控顶掉（曾 45s→2-3天失效）
 BILI_STATE_FILE = PROJECT_ROOT / "data" / "bili_state.json"   # 开播/动态去重状态持久化

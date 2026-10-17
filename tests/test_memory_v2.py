@@ -362,6 +362,52 @@ def test_assistant_commitment_uses_assistant_provenance(store, clock):
     assert accepted[0]["source"]["excerpt"] == "行，下次给你唱一段"
 
 
+@pytest.mark.parametrize(("value", "hours"), [
+    ("明天给用户发语音", 48),                     # 一次性措辞
+    ("以后少说用户两句", 90 * 24),                 # 长期态度
+    ("晚上陪用户学习", 14 * 24),                   # 默认承诺
+])
+def test_commitment_gets_ttl_by_wording(store, clock, value, hours):
+    """2026-10-18：承诺必须有 TTL——旧数据里"明天…"会永久 active 被反复注入。"""
+    accepted = store.ingest(
+        "u1",
+        [{"kind": "commitment", "key": "promise", "value": value,
+          "actor": "assistant", "explicit": True, "confidence": 0.95}],
+        source=_source(now=clock, reply=value),
+        now=clock,
+    )
+    assert accepted[0]["expires_at"] == (clock + timedelta(hours=hours)).isoformat()
+
+
+def test_expired_commitment_is_not_injected(store, clock):
+    store.ingest(
+        "u1",
+        [{"kind": "commitment", "key": "promise", "value": "明天给用户发语音",
+          "actor": "assistant", "explicit": True, "confidence": 0.95}],
+        source=_source(now=clock, reply="明天给用户发语音"),
+        now=clock,
+    )
+    assert "发语音" in store.build_commitment_context("u1", "明天能发语音吗", now=clock)
+    assert store.build_commitment_context(
+        "u1", "明天能发语音吗", now=clock + timedelta(days=3)) == ""
+
+
+def test_same_key_commitment_supersedes_old_value(store, clock):
+    """同一承诺 key 只留最新一条（旧实现会累积 3 条"明天发语音"）。"""
+    for i, value in enumerate(("明天给用户发语音", "明天给用户发语音，说到做到")):
+        store.ingest(
+            "u1",
+            [{"kind": "commitment", "key": "send_voice_tomorrow", "value": value,
+              "actor": "assistant", "explicit": True, "confidence": 0.95}],
+            source=_source(now=clock + timedelta(minutes=i), reply=value),
+            now=clock + timedelta(minutes=i),
+        )
+    active = [m for m in store.snapshot("u1")["memories"]
+              if m["kind"] == "commitment" and m["status"] == "active"]
+    assert len(active) == 1
+    assert active[0]["value"] == "明天给用户发语音，说到做到"
+
+
 @pytest.mark.parametrize(
     ("key", "value"),
     [

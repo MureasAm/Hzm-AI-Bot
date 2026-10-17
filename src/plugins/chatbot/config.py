@@ -367,6 +367,11 @@ def set_llm_route(route: str) -> None:
     _ROUTE.set(route)
 
 
+def get_llm_route() -> str:
+    """当前链路通道（私/群/主动；离线脚本未设置时为空串）。"""
+    return _ROUTE.get()
+
+
 def usage_log_enabled() -> bool:
     """环境变量 LLM_USAGE=0 可关掉记账（缺省开，和 CHATLOG 一个约定）。"""
     return os.environ.get("LLM_USAGE", "1") != "0"
@@ -466,6 +471,38 @@ def get_weather_key() -> str:
 
 def get_vision_model() -> str:
     return get_config("vision_model", VISION_MODEL)
+
+
+_vision_client_cache = None
+
+
+def get_vision_client():
+    """视觉模型客户端——**不走主对话的降级链**。
+
+    为什么单建（2026-10-18 换 gemini 视觉时定）：主 client 的链末尾是 deepseek 官方，
+    它**不接受 image_url 内容块**——主线路一抖，图片请求会落到不支持的模型上，
+    整次视觉调用白给。视觉要的是一条确定的线路，所以按模型家族直接选 key/base：
+    - `glm-*` → 智谱（老配置不用改）
+    - 其它（gemini…）→ 主模型线路（linkapi / OPENAI_API_BASE）
+    想单独指定就配 `VISION_API_KEY` / `VISION_API_BASE`，优先级最高。
+    """
+    global _vision_client_cache
+    if _vision_client_cache is not None:
+        return _vision_client_cache
+    model = get_vision_model()
+    key = get_config("vision_api_key")
+    base = get_config("vision_api_base")
+    if not key:
+        if model.startswith("glm"):
+            key = get_config("zhipu_api_key")
+            base = base or ZHIPU_BASE_URL
+        else:
+            key = get_config("openai_api_key")
+            base = base or get_config("openai_api_base", DEEPSEEK_BASE_URL)
+    if not key:
+        raise ValueError("❌ 未检测到视觉模型 API key（VISION_API_KEY / OPENAI_API_KEY）")
+    _vision_client_cache = _mk_client(key, base)
+    return _vision_client_cache
 
 
 def get_bili_uid() -> str:

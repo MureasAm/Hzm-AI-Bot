@@ -1,4 +1,8 @@
-"""视觉理解：用智谱 glm-4.6v 描述图片，供对话注入与动态配图描述复用。
+"""视觉理解：把图片转成一段文字描述，供对话注入与动态配图描述复用。
+
+默认视觉模型跟主模型同一条线路（gemini）；配 `VISION_MODEL=glm-4.6v` 可切回智谱。
+无论哪家，**输出都是文字描述**——主模型从来看不到图片像素，所以"换视觉模型"
+改变的是描述的准确度/风格，不改变主模型的看图能力。
 
 输入可以是：
 - http(s) URL（QQ 图链可能 http / 会过期，必须下载后转 base64 再发）
@@ -15,7 +19,7 @@ import httpx
 from PIL import Image
 
 from .config import get_vision_model, extract_chat_content
-from .constants import VISION_MAX_TOKENS, VISION_THINKING_DISABLED
+from .constants import VISION_MAX_TOKENS, VISION_EXTRA_PARAMS
 
 VISION_PROMPT = (
     "简要描述这张图的内容和氛围：是表情包/截图/照片/文档就说清最直观的要点，"
@@ -98,7 +102,7 @@ async def _read_image_bytes(source: str) -> bytes:
 
 
 def _normalize_image(data: bytes) -> bytes:
-    """用 Pillow 把任意格式统一转成 JPEG，避开 glm-4.6v 不支持的 WEBP 等格式。
+    """用 Pillow 把任意格式统一转成 JPEG，避开视觉模型不支持的 WEBP 等格式。
 
     透明（RGBA/LA/P）贴图先铺白底再转 RGB，避免透明像素变黑。
     """
@@ -134,11 +138,16 @@ def _detect_image_mime(data: bytes) -> str:
 
 
 def _to_data_uri(data: bytes, mime: str = "image/jpeg") -> str:
-    """图片字节 → data: URI（glm 视觉走 OpenAI 兼容 image_url），带正确 MIME。"""
+    """图片字节 → data: URI（视觉模型走 OpenAI 兼容 image_url），带正确 MIME。"""
     return f"data:{mime};base64," + base64.b64encode(data).decode("ascii")
 
 
-async def describe_image_bytes(zhipu_client, data: bytes, model: str = None) -> str:
+def _extra_params(model: str) -> dict:
+    """按视觉模型给额外参数（glm 要关思考，gemini 不认识这个字段）。"""
+    return VISION_EXTRA_PARAMS.get(model, {})
+
+
+async def describe_image_bytes(client, data: bytes, model: str = None) -> str:
     """描述已下载的图片字节（供 chat_window 的"收到即缓存"路径复用，避免重复下载）。"""
     model = model or get_vision_model()
     if not data or len(data) > MAX_IMAGE_BYTES:
@@ -152,7 +161,7 @@ async def describe_image_bytes(zhipu_client, data: bytes, model: str = None) -> 
         return ""
     data_uri = _to_data_uri(data, "image/jpeg")
     try:
-        resp = await zhipu_client.chat.completions.create(
+        resp = await client.chat.completions.create(
             model=model,
             messages=[{
                 "role": "user",
@@ -162,7 +171,7 @@ async def describe_image_bytes(zhipu_client, data: bytes, model: str = None) -> 
                 ],
             }],
             max_tokens=VISION_MAX_TOKENS,
-            **VISION_THINKING_DISABLED,
+            **_extra_params(model),
         )
         return extract_chat_content(resp)
     except Exception as e:
@@ -170,13 +179,14 @@ async def describe_image_bytes(zhipu_client, data: bytes, model: str = None) -> 
         return ""
 
 
-async def describe_image(zhipu_client, source: str, model: str = None) -> str:
-    """描述图片。zhipu_client 由调用方传入（core._get_clients 里的 zhipu client）。"""
+async def describe_image(client, source: str, model: str = None) -> str:
+    """描述图片。client 由调用方传入（运行时用 config.get_vision_client()）。"""
     if source.startswith("data:"):
         data_uri = source
+        model = model or get_vision_model()
         try:
-            resp = await zhipu_client.chat.completions.create(
-                model=model or get_vision_model(),
+            resp = await client.chat.completions.create(
+                model=model,
                 messages=[{
                     "role": "user",
                     "content": [
@@ -185,7 +195,7 @@ async def describe_image(zhipu_client, source: str, model: str = None) -> str:
                     ],
                 }],
                 max_tokens=VISION_MAX_TOKENS,
-                **VISION_THINKING_DISABLED,
+                **_extra_params(model),
             )
             return extract_chat_content(resp)
         except Exception as e:
@@ -198,4 +208,4 @@ async def describe_image(zhipu_client, source: str, model: str = None) -> str:
     except Exception as e:
         print(f"⚠️ 图片下载失败: {e}")
         return ""
-    return await describe_image_bytes(zhipu_client, data, model)
+    return await describe_image_bytes(client, data, model)

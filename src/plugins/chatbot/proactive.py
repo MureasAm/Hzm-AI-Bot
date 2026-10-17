@@ -34,7 +34,7 @@ from pathlib import Path
 from .constants import THINKING_DISABLED
 from .config import (
     log_cache_usage, _get_clients, _get_model_name, extract_chat_content,
-    parse_json_block, set_llm_route,
+    parse_json_block, set_llm_route, get_vision_client,
 )
 from .core import gather_retrieval, build_message_list
 from .vision import describe_image_bytes
@@ -216,7 +216,7 @@ async def content_is_clear(deepseek_client, text: str) -> bool:
         return True
 
 
-async def _describe_first_image(zhipu_client, image_paths) -> str:
+async def _describe_first_image(vision_client, image_paths) -> str:
     """第一张配图的视觉描述，给"⬇️/这个/图片里那个"当**指代目标**；失败返回空串。
 
     **只描述、不判断**：这里不管内容对不对，只把图里有什么说清楚——
@@ -229,7 +229,7 @@ async def _describe_first_image(zhipu_client, image_paths) -> str:
         return ""
     try:
         data = Path(image_paths[0]).read_bytes()
-        return await describe_image_bytes(zhipu_client, data)
+        return await describe_image_bytes(vision_client, data)
     except Exception as e:
         print(f"⚠️ 主动发言：配图描述失败（照常生成）: {e}")
         return ""
@@ -255,7 +255,7 @@ async def compose_proactive(content: str, source: str = "B站",
         # 配图描述与"够不够"判断**并行**跑：两者互不依赖，串行等于白等多一次调用。
         # 且**只在她指了配图时**才读（"到这个⬇️里面"），否则那条描述是纯噪声。
         want_image = bool(image_paths) and bool(_REFERS_TO_IMAGE_RE.search(text))
-        desc_task = (asyncio.create_task(_describe_first_image(zhipu_client, image_paths))
+        desc_task = (asyncio.create_task(_describe_first_image(get_vision_client(), image_paths))
                      if want_image else None)
         try:
             # 第一道闸：内容自己说不说得清。说不清 → 不发这一句（原文通知照发，信息不丢）。

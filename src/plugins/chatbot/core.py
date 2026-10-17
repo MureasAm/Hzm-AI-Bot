@@ -20,7 +20,7 @@ from .persona import (
 )
 from .memory import (
     get_user_history, get_user_history_timed, append_user_history,
-    get_last_turn_gap_seconds, humanize_gap, is_bot_line,
+    get_last_turn_gap_seconds, humanize_gap,
 )
 from .rag import embed_query
 from .retrieval import (
@@ -28,6 +28,8 @@ from .retrieval import (
     retrieve_preferences, retrieve_core_stories, fuse_and_truncate, select_behavior_item,
 )
 from .corpus_judge import judge_corpus
+from .chatlog import log_corpus_hits, log_block_hits
+from .config import get_llm_route
 from .constants import SPLIT_DELAY_MIN_MS, SPLIT_DELAY_MAX_MS  # noqa: F401 — test_core 校验分段延迟上下限时读它
 from . import context_probe
 from . import group_memory
@@ -352,7 +354,8 @@ def build_message_list(user_msg: str, fused_items: list,
                        group_context: str = "", history_gap_note: str = "",
                        prev_session_note: str = "", same_request: dict = None,
                        profile_context: str = "", commitment_context: str = "",
-                       emotion_context: str = "", daily_context: str = "") -> list:
+                       emotion_context: str = "", daily_context: str = "",
+                       log_hits: bool = False) -> list:
     """按优先级组装发送给模型的消息列表。
 
     fused_items 为融合后的 RetrievalItem 列表（corpus + behavior），按源分组注入。
@@ -365,9 +368,13 @@ def build_message_list(user_msg: str, fused_items: list,
     query_hint 为短消息的语境扩充（可选）：模型理解短消息用，正文仍是原 msg。
     profile_context / commitment_context / emotion_context 为 Memory V2 的三段注入
     （见 docs/记忆v2设计.md §三）：相处方式靠前、未完成约定中段、当下情绪紧挨用户消息。
+    log_hits=True 时把**真正进提示词**的 corpus 条目记进 `data/corpus_hits.jsonl`，
+    并把 12–19 的实际开火块名记进 `data/block_hits.jsonl`
+    （只有真实聊天路径传 True；离线实验保持 False，免得污染统计）。
     """
     messages = []
     messages.append({"role": "system", "content": SYSTEM_PROMPT})
+    hit_blocks: list[str] = []   # 12–19 本轮回实际注入了哪些块（真实聊天才落盘）
 
     # 周表（地面真值）：被问"明天来吗/这周/几点播"以它为准。
     # 记忆里带"明天/下周"的话是过去某场直播当时的说法，可能早过期，不能当现在的安排。
@@ -451,10 +458,16 @@ def build_message_list(user_msg: str, fused_items: list,
         context = "\n".join(inj.T("corpus", "item", text=it.text) for it in corpus if it.text)
         if context:
             messages.append({"role": "system", "content": inj.T("corpus", items=context)})
+            # 命中留痕：只记**真正进了提示词**的条目（分析库利用率用，失败静默）。
+            # log_hits 由真实聊天路径打开；再加通道闸——回归/AB/回放等离线脚本
+            # 直接调 handle_chat 时 `_ROUTE` 是空的，不能混进线上统计。
+            if log_hits and get_llm_route() in ("私", "群"):
+                log_corpus_hits(user_msg, [it for it in corpus if it.text])
 
     # Memory V2【中段】未完成约定：别忘、要兑现（system 中段，紧挨记忆区）。
     if commitment_context:
         messages.append({"role": "system", "content": commitment_context})
+        hit_blocks.append("commitment")
 
     # ⚠️ 这里原来注「长期记忆」（第 13 块 `memory`）。2026-10-17 整段删掉：
     #    它的内容来自 v1 的长期记忆卡（根 `memory_manager.py` → `user_memory/long_term/*`），
@@ -463,34 +476,23 @@ def build_message_list(user_msg: str, fused_items: list,
     #    和 12（未完成约定）承担，接上反而是同一批事实一轮出现两次。
     #    参数已一并移除（含 20 处调用点）。
 
-    # 短期记忆注入
-    # ⚠️ **她自己说过的话不再回灌进上下文**（2026-10-14，用户决定；实测见
-    #    `docs/历史/交接文档.md`「开头重复」节）：这块原来把"用户：… / 灰泽满：…"整段
-    #    对话原样回给模型 = **把她自己刚说的话当样本再喂一遍**（自反馈）。
-    #    实测：全库 27% 的回复以"灰泽满"开头，而**上一轮以它开头时这一轮也以它开头的概率
-    #    是 51.7%**（上一轮不是时只有 17.4%）——回灌的真实作用是**让说法黏住、加剧公式化**；
-    #    "像不像她"来自骨架与素材层，不靠它。
-    #    ⚠️ 只删**注入**这一层：记忆照记（`memory.append_user_history` 两边都写），
-    #    因为 ① 三道起手闸要拿她最近说过的话做比对 ② L3 判"连续第几轮在要同一件事"
-    #    要看她前面答没答应。**要回退就把下面那行过滤去掉。**
-    #    ⚠️ 代价（记在 `下一步.md`）：她**看不见自己上轮的原话**了，"别自相矛盾"只剩
-    #    摘要层的事实可依（【会话记忆】/连续索要/长期记忆）——这几层本来就在，所以事实不丢，
-    #    丢的是措辞。
+    # 短期记忆注入：**用户 + 她自己**最近 5 轮的完整上下文（2026-10-18 用户定）。
+    # 2026-10-14 曾把她自己的话从注入里过滤掉（去自反馈：实测"灰泽满"起手黏性
+    # 51.7% vs 17.4%）；用户 2026-10-18 明确要求恢复完整上下文——她需要看到
+    # 自己上一轮说了什么，才能接得住、不前后打架。记忆里两边本来就都记着。
     if user_history:
         if isinstance(user_history, list):
-            past = [ln for ln in user_history if not is_bot_line(ln)]
-            if past:
-                context = "\n".join(past)
+            context = "\n".join(ln for ln in user_history if ln)
+            if context:
                 # ⚠️ 时间戳**不再**在这里加一行汇总（2026-10-05 改）——
                 #   旧做法是把「距上一轮多久」当一行汇总拼在整块开头，结果 gap=10秒 和 gap=3小时
                 #   注入出来的历史**长得一模一样**，她分不出"刚说完"和"三小时前说的"。
                 #   现在改成：**每条消息自己带 [多久前]**（由 memory.get_user_history_timed 渲染），
                 #   只给事实、不给"该怎么理解"的说明，判断交给模型。
                 #   history_gap_note 参数保留（调用方还在传），但不再拼进历史块。
-                # （原先这里还有一条【防复读】"别把上轮那句原样搬出来"——她自己的话已经不注入了，
-                #   那条没有对象了，2026-10-14 一并删掉；防复读现在是三道确定性闸在管。）
                 text = inj.T("history", context=context) + inj.T("history", "contradiction")
                 messages.append({"role": "system", "content": text})
+                hit_blocks.append("history")
         else:
             messages.append({"role": "system",
                              "content": inj.T("history", "fallback", history=user_history)})
@@ -506,6 +508,7 @@ def build_message_list(user_msg: str, fused_items: list,
         messages.append({"role": "system", "content": inj.T(
             "same_request", count=same_request["count"], what=what,
             prev=same_request["count"] - 1)})
+        hit_blocks.append("same_request")
 
 
     # 感知源②：图片消息——把视觉描述并入用户消息，避免空消息让模型以为"对方没说话"
@@ -516,6 +519,7 @@ def build_message_list(user_msg: str, fused_items: list,
     # 感知源③：批量归纳（用户连发多条时，作为理解整批的提示层，原文仍完整保留）
     if batch_summary:
         messages.append({"role": "system", "content": inj.T("batch", summary=batch_summary)})
+        hit_blocks.append("batch")
 
     # 短消息语境提示：用户消息 ≤4 字时，把扩充后的完整语义作为提示给模型
     # （正文仍是原 msg，这里帮模型理解"咋这样"这种短句的真实含义）
@@ -530,6 +534,7 @@ def build_message_list(user_msg: str, fused_items: list,
             messages.append({"role": "system", "content": inj.T("query_hint", "emoji", hint=query_hint)})
         else:
             messages.append({"role": "system", "content": inj.T("query_hint", "short", hint=query_hint)})
+        hit_blocks.append("query_hint")
 
     # 感知源①：当前时间/农历/天气（始终注入，占预算极少；天气按该用户所在城市）。
     # **放在最后**：它是唯一"每分钟必变"的块，而 DeepSeek 的缓存按**前缀**匹配——
@@ -538,17 +543,24 @@ def build_message_list(user_msg: str, fused_items: list,
     now_context = context_probe.get_now_context(city=weather_city)
     if now_context:
         messages.append({"role": "system", "content": now_context})
+        hit_blocks.append("now")
 
     # Memory V2【最后】当下情绪：紧挨用户消息（跟【当前时间】一样放尾部），只影响这一轮语气。
     # （文案在 persona/injection/19_mood/block.json；session_memory.mood_note 渲染。）
     if emotion_context:
         messages.append({"role": "system", "content": emotion_context})
+        hit_blocks.append("mood")
 
     # 【他今天的日常】（第 20 块）：**每轮都注**，放最尾——跟【当前时间】同理，
     # 它是"每分钟都可能变"的动态段，放中间会把后面的块一起拖成缓存 miss。
     # 条目 <2 条时 daily_memory 自己会返回空串（宁可不提）。
     if daily_context:
         messages.append({"role": "system", "content": inj.T("daily", context=daily_context)})
+        hit_blocks.append("daily")
+
+    # 12–19 块级开火留痕（真实聊天路径才写；离线实验/回归不污染）
+    if log_hits and get_llm_route() in ("私", "群"):
+        log_block_hits(hit_blocks)
 
     messages.append({"role": "user", "content": final_user})
     return messages
@@ -948,6 +960,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         same_request=ctx.get("same_request"),
         profile_context=profile_context, commitment_context=commitment_context,
         emotion_context=emotion_context, daily_context=daily_context,
+        log_hits=True,
     )
 
     # --- 🤖 调用大模型 ---
