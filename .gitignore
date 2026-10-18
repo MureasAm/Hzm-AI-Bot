@@ -245,3 +245,6 @@ assets/handoff/
 # 表情包决策流水（2026-10-15 起）：一行一轮，含会话 ID。
 # 是统计用的本机运行产物，不入库（同 data/llm_usage.jsonl 的处置）。
 data/sticker_log.jsonl
+
+# Remotion 说明视频（本地独立工程，与 bot 源码无关；2026-10-19 从仓库移出）
+video/

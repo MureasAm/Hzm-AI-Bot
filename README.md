@@ -145,13 +145,7 @@ pip install -e .              # 依赖声明在 pyproject.toml（仓库里没有
 
 ## 注入链路说明视频
 
-`video/` 是独立的 Remotion 工程，把"一条消息怎么被判、被查、被拼成最终 messages"做成 16:9 / 30fps / 约 92 秒的 8 场景样片：
-
-```bash
-cd video && npm install --registry=https://registry.npmmirror.com && npm run render:voice
-```
-
-成片、旁白时间轴和 TTS 接入方式见 [`video/README.md`](video/README.md)。
+`video/`（Remotion 说明视频）是**本地独立工程，不在本仓库**；它和 bot 源码没有依赖关系。
 
 ## 项目结构
 
@@ -166,7 +160,7 @@ docs/                        # 全部说明文档（下面是正文，另有 历
 ├── 评测与实验.md            #   量过什么、结论是什么、哪些结论已作废
 ├── 记忆v2设计.md            #   长期记忆记什么、怎么影响对话
 └── 提示词参考.md            #   业界做法 + 本项目适用/不适用哪些
-video/                       # Remotion 注入链路说明视频
+video/                       # （本地独立工程，不在本仓库）
 src/plugins/chatbot/         # 运行时核心（28 个 .py）
 ├── core.py / chat_window.py #   主循环 / 读秒攒批窗口（含插话取消、分批发送）
 ├── retrieval.py / routing.py / corpus_judge.py / group_gate.py
