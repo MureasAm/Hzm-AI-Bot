@@ -18,6 +18,7 @@ corpus/behavior 两路走加权 RRF 融合（score = w/(k+rank)），再条数�
 import json
 import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 
 from .constants import (
     CORE_STORY_VECTOR_FILE,
@@ -29,7 +30,7 @@ from .constants import (
     RRF_K, SOURCE_WEIGHTS, RETRIEVAL_TOPK,
     RETRIEVAL_BUDGET_CHARS, MAX_RETRIEVAL_ITEM_CHARS,
 )
-from .rag import cosine_similarity, load_vector_db
+from .rag import cosine_similarity, cosine_scores, load_vector_db
 from .persona import _format_behavior_rule
 
 
@@ -96,13 +97,22 @@ def _gate_bigrams(text: str) -> set:
     return out
 
 
-def _corpus_keyword_overlap(query: str, statement: str) -> float:
-    """query 的区分性 bigram 被 statement 覆盖的比例（0~1）。"""
-    qb = _gate_bigrams(query)
+@lru_cache(maxsize=4096)
+def _statement_bigrams(statement: str) -> frozenset:
+    """语料条目的 bigram 是定值：每轮对 400 多条重算一遍是白算，按文本缓存。"""
+    return frozenset(_gate_bigrams(statement))
+
+
+def _bigram_overlap(qb: set, statement: str) -> float:
+    """已算好的 query bigram `qb` 被 statement 覆盖的比例（0~1）。"""
     if not qb:
         return 0.0
-    tb = _gate_bigrams(statement)
-    return len(qb & tb) / len(qb)
+    return len(qb & _statement_bigrams(statement)) / len(qb)
+
+
+def _corpus_keyword_overlap(query: str, statement: str) -> float:
+    """query 的区分性 bigram 被 statement 覆盖的比例（0~1）。"""
+    return _bigram_overlap(_gate_bigrams(query), statement)
 
 
 # corpus 的「钩子」：用户提到这些具体词时，**把该条递进候选池**（确定性命中，不靠语义相似）
@@ -169,8 +179,7 @@ def retrieve_corpus(user_query: str, query_vector,
     if not db or not user_query or not query_vector:
         return []
     scored = []
-    for i, it in enumerate(db):
-        sim = cosine_similarity(query_vector, it["vector"])
+    for i, (it, sim) in enumerate(zip(db, cosine_scores(query_vector, db))):
         if not _corpus_gate_pass(user_query, it["text"], sim):
             continue
         scored.append(RetrievalItem(source="corpus", item_id=str(i), score=sim, text=it["text"]))
@@ -193,10 +202,8 @@ def retrieve_corpus_candidates(user_query: str, query_vector,
     db = load_vector_db()
     if not db or not user_query or not query_vector:
         return []
-    scored = [RetrievalItem(source="corpus", item_id=str(i),
-                            score=cosine_similarity(query_vector, it["vector"]),
-                            text=it["text"])
-              for i, it in enumerate(db)]
+    scored = [RetrievalItem(source="corpus", item_id=str(i), score=sim, text=it["text"])
+              for i, (it, sim) in enumerate(zip(db, cosine_scores(query_vector, db)))]
     scored.sort(key=lambda x: x.score, reverse=True)
     top = scored[:top_n]
     # **钩子命中的也塞进候选**——它们语义分低（正是"没有入口"那批），
@@ -210,13 +217,14 @@ def retrieve_corpus_candidates(user_query: str, query_vector,
     #    实测若沿用 _corpus_gate_pass，co9 的候选只有 7 条且不含 #42 → 照样红。
     keywords_map = load_corpus_keywords()
     got = {it.item_id for it in top}
+    query_bigrams = _gate_bigrams(user_query)   # 循环里不变，只算一次
     lexical = []
     for it in scored:
         if it.item_id in got:
             continue
         kws = keywords_map.get(it.item_id)
         hooked = bool(kws and any(k in user_query for k in kws))
-        ov = _corpus_keyword_overlap(user_query, it.text)
+        ov = _bigram_overlap(query_bigrams, it.text)
         if hooked or ov >= CORPUS_KEYWORD_FLOOR:
             lexical.append((2.0 if hooked else ov, it))   # 钩子命中优先于"只是撞了几个词"
     lexical.sort(key=lambda x: -x[0])

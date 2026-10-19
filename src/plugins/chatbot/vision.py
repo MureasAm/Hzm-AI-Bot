@@ -11,6 +11,7 @@
 
 任一步失败返回空串，调用方静默跳过，绝不阻塞主流程。
 """
+import asyncio
 import base64
 import io
 import re
@@ -171,7 +172,9 @@ async def describe_image_bytes(client, data: bytes, model: str = None) -> str:
         return ""
     mime = _detect_image_mime(data)
     try:
-        data = _normalize_image(data)  # 统一转 JPEG，避开模型不支持的 WEBP 等
+        # 统一转 JPEG，避开模型不支持的 WEBP 等。解码+重编码是纯 CPU（大图近百毫秒），
+        # 放线程里跑，别卡住事件循环（一批多图是 gather 并发进来的）。
+        data = await asyncio.to_thread(_normalize_image, data)
     except Exception as e:
         print(f"⚠️ 图片解码/转码失败（忽略）: {e}")
         return ""

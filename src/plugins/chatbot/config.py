@@ -86,6 +86,10 @@ def _mk_client(api_key, base_url):
 # 为什么需要（2026-10-15）：链变成三个端点之后，光看模型名分不出是哪个站——
 # 而两个站可能挂着**同名不同价**的模型（比如 3.8-flash 两家都有）。日志和账本都得带上它。
 _SERVED_BY = contextvars.ContextVar("llm_served_by", default="")
+# 这次调用花了多久：(id(resp), 毫秒)。链路**总耗时**（含降级前失败那几层）——用户等的就是这个。
+# 为什么要（2026-10-19）：账本只有 token 没有耗时，"一轮回复的时间花在哪一环"量不出来。
+# 绑 id(resp) 是为了只记到**这次**响应上，不会串到别的调用（如不走链的视觉客户端）。
+_LATENCY = contextvars.ContextVar("llm_latency", default=(0, 0))
 
 
 class _ChainCompletions:
@@ -135,6 +139,7 @@ class _ChainCompletions:
 
     async def create(self, **kwargs):
         last_err = None
+        t0 = time.monotonic()
         for i, (client, model, label, extra) in self._pick():
             # ⚠️ `model is None` = **别动调用方传进来的模型名**（第 1 层就是这么标的）。
             # 踩坑（2026-10-14 当场撞到）：写成 `{**kwargs, "model": model}` 会把调用方的
@@ -177,6 +182,7 @@ class _ChainCompletions:
                 continue
             self._down_until.pop(i, None)          # 它活着，清掉冷却
             _SERVED_BY.set(label)                  # 记下"这轮是谁答的"（日志/账本都要用）
+            _LATENCY.set((id(resp), round((time.monotonic() - t0) * 1000)))
             if i != self._last_i:
                 # 降级和**回升**都报一句——不然"回到 gemini 了"在日志里看不出来
                 print(f"[模型] {'降级到' if i > self._last_i else '回到'}第 {i + 1} 层：{label}")
@@ -410,6 +416,9 @@ def _record_usage(tag: str, resp) -> None:
             "miss": int(getattr(u, "prompt_cache_miss_tokens", 0) or 0),
             "output": int(getattr(u, "completion_tokens", 0) or 0),
         }
+        resp_id, ms = _LATENCY.get()
+        if resp_id == id(resp):
+            rec["ms"] = ms                     # 走降级链的调用才有；没有就不写，老账本照样能读
         USAGE_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
         with open(USAGE_LOG_FILE, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")

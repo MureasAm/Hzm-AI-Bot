@@ -17,6 +17,7 @@ from pathlib import Path
 
 from nonebot.adapters.onebot.v11 import Message, MessageSegment
 
+from .bg import spawn
 from .core import (
     handle_chat, summarize_batch, _get_clients,
 )
@@ -200,7 +201,7 @@ def enqueue(target_id: str, sender_id: str, text: str,
         del win.pending[:len(win.pending) - 30]
     for url, _ in image_sources:
         if url:
-            asyncio.create_task(_eager_download(url))
+            spawn(_eager_download(url))
     if win.task:
         win.task.cancel()
     win.task = asyncio.create_task(_process(win, gen))

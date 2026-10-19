@@ -19,6 +19,7 @@ import httpx
 from nonebot import get_bot, get_driver
 from nonebot.adapters.onebot.v11 import Message, MessageSegment
 
+from .bg import spawn
 from .constants import WEIBO_STATE_FILE
 from .memory import append_bot_message
 from .proactive import compose_proactive
@@ -392,6 +393,6 @@ try:
         if not get_weibo_uid():
             print("⚠️ WEIBO_UID 未配置，跳过微博监听")
             return
-        asyncio.create_task(_monitor_loop())
+        spawn(_monitor_loop())
 except ValueError:
     pass
