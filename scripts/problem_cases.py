@@ -477,17 +477,20 @@ def _echo_problem(p: Problem, got, l3) -> None:
 
 
 async def _clients():
-    """构造与线上同款的两个客户端 + 行为表。"""
-    from openai import AsyncOpenAI
-    from src.plugins.chatbot.constants import ZHIPU_BASE_URL, DEEPSEEK_BASE_URL
+    """构造与线上同款的两个客户端 + 行为表。
+
+    ⚠️ 2026-10-20：这里原来自己拼 key（问 `retrieval_eval` 要 `_deepseek_key()`），
+    而那个函数 2026-10-14 随"评估脚本借线上客户端"一起删了 → 一跑就 AttributeError。
+    现在和 `retrieval_eval` 一致，直接用 `config._get_clients()`：
+    主模型那条线路（带降级链）+ 同款 embedding，复现的就是线上跑的东西。
+    """
+    from src.plugins.chatbot.config import _get_clients
     from src.plugins.chatbot.persona import load_persona_rules
-    import retrieval_eval as RE
-    zp, ds = RE._zhipu_key(), RE._deepseek_key()
-    if not zp:
-        print("❌ 未找到 ZHIPU_API_KEY（.env.prod）——查实况需要与线上同款 embedding")
+    try:
+        ds_client, client = _get_clients()
+    except Exception as e:
+        print(f"❌ 初始化客户端失败（检查 .env.prod 的 OPENAI_API_KEY / ZHIPU_API_KEY）: {e}")
         return None, None, None
-    client = AsyncOpenAI(api_key=zp, base_url=ZHIPU_BASE_URL)
-    ds_client = AsyncOpenAI(api_key=ds, base_url=DEEPSEEK_BASE_URL) if ds else None
     behaviors = load_persona_rules()
     return client, ds_client, behaviors
 

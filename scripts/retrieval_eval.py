@@ -177,7 +177,7 @@ def format_snapshot(got: dict, l3: dict, full_text: bool = False) -> list:
     for source, items in got.items():
         if not items:
             lines.append(f"{source:>12}: （空）")
-        elif source in ("preference", "core_story"):
+        elif source in ("preference", "core_story", "associations", "terms"):
             lines.append(f"{source:>12}: " + "、".join(
                 f"{i.get('id','')}({i.get('score',0):.3f})" for i in items[:3]))
         elif source == "corpus":

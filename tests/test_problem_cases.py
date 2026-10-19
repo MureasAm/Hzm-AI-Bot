@@ -428,3 +428,33 @@ class TestJudgeExperimentDerivation:
         got = {c["q"]: c["want"] for c in tasks["corpus"]["cases"]}
         assert got == {"正例": True, "含关键词也算正例": True, "非空也算正例": True, "负例": False}
         assert "不参与" not in got
+
+
+class TestClients:
+    """查实况用的客户端必须借**线上那一对**（主模型链路 + 同款 embedding）。
+
+    2026-10-20 修：这里原来问 `retrieval_eval` 要 `_deepseek_key()`，而那个函数 10-14
+    就随「评估脚本借线上客户端」一起删了 → `run_tool problems` 一跑就 AttributeError。
+    这条用例把「用的就是线上那对」钉住，防止哪天又各自拼一套 key。
+    """
+
+    async def test_uses_bot_unified_clients(self, monkeypatch):
+        from src.plugins.chatbot import config
+
+        chat, embed = object(), object()
+        monkeypatch.setattr(config, "_get_clients", lambda: (chat, embed))
+
+        client, ds_client, behaviors = await PC._clients()
+
+        assert client is embed       # snapshot 的第一个参数是 embedding 客户端
+        assert ds_client is chat     # 第二个是对话客户端
+        assert behaviors             # 行为表照旧从 persona 读
+
+    async def test_returns_none_when_clients_unavailable(self, monkeypatch):
+        from src.plugins.chatbot import config
+
+        def boom():
+            raise ValueError("❌ 未检测到 OPENAI_API_KEY")
+
+        monkeypatch.setattr(config, "_get_clients", boom)
+        assert await PC._clients() == (None, None, None)
