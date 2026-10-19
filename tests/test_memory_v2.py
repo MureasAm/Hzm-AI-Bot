@@ -725,6 +725,25 @@ class TestContextSegments:
         assert "考试很失落" not in context
         assert len(context) <= 700
 
+    def test_used_ids_reports_only_injected_memories(self, store, clock):
+        """条目级注入轨迹要的 id：**注入了才报**，没命中/没注入就不能报。"""
+        self._seed(store, clock)
+        known = {m["id"] for m in store.snapshot("u1")["memories"]}
+
+        ids: list = []
+        profile = store.build_preference_context("u1", "陪我说说话", now=clock, used_ids=ids)
+        assert profile and ids and set(ids) <= known
+
+        commit_ids: list = []
+        assert store.build_commitment_context("u1", "下次能唱吗，唱一段", now=clock,
+                                              used_ids=commit_ids)
+        assert commit_ids and set(commit_ids) <= known
+
+        miss_ids: list = []
+        assert store.build_commitment_context("u1", "今天天气怎么样", now=clock,
+                                              used_ids=miss_ids) == ""
+        assert miss_ids == [], "没注入的不该出现在轨迹里"
+
 
 class TestInjectionFlag:
     def test_injection_enabled_by_default(self, monkeypatch):

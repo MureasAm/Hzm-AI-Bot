@@ -28,7 +28,7 @@ from .retrieval import (
     retrieve_preferences, retrieve_core_stories, fuse_and_truncate, select_behavior_item,
 )
 from .corpus_judge import judge_corpus
-from .chatlog import log_corpus_hits, log_block_hits
+from .chatlog import log_corpus_hits, log_block_hits, log_injection_trace
 from .config import get_llm_route
 from .constants import SPLIT_DELAY_MIN_MS, SPLIT_DELAY_MAX_MS  # noqa: F401 — test_core 校验分段延迟上下限时读它
 from . import context_probe
@@ -207,10 +207,14 @@ def _split_fused(fused_items):
 from .persona import load_terms  # noqa: E402
 
 
-def build_terms_note(user_msg: str, denied_terms: set | None = None) -> str:
+def build_terms_note(user_msg: str, denied_terms: set | None = None,
+                     hit_out: list | None = None) -> str:
     """根据用户消息命中名词库：核心词(always)每次注入 + 命中词(关键词/别名/正则)注入。
 
     返回注入文本【灰泽满的世界】。客观打底 + 带灰泽满态度，让模型既懂词义又有正确的相处态度。
+
+    hit_out：传入 list 时，把**真正命中并注入了词义**的词条 keyword 依次追加进去
+    （条目级注入轨迹用；概念命中的 usage 规则没有词条名，不计）。
 
     命中检查：
     - priority=always：每次注入
@@ -252,6 +256,8 @@ def build_terms_note(user_msg: str, denied_terms: set | None = None) -> str:
             if usage and (key_hit or concept_hit):
                 parts.append(f"用词规则：{usage}")
             notes.append(f"{kw}：{'；'.join(parts)}")
+            if hit_out is not None:
+                hit_out.append(kw)
         elif usage and concept_hit:
             # 概念命中：消息没提关键词，但提到概念词 → 只注入用词规则
             notes.append(f"用词规则：{usage}")
@@ -356,7 +362,7 @@ def build_message_list(user_msg: str, fused_items: list,
                        profile_context: str = "", commitment_context: str = "",
                        emotion_context: str = "", daily_context: str = "",
                        user_transcript: str = "", nickname_hint: str = "",
-                       log_hits: bool = False) -> list:
+                       log_hits: bool = False, trace: dict | None = None) -> list:
     """按优先级组装发送给模型的消息列表。
 
     fused_items 为融合后的 RetrievalItem 列表（corpus + behavior），按源分组注入。
@@ -372,10 +378,25 @@ def build_message_list(user_msg: str, fused_items: list,
     log_hits=True 时把**真正进提示词**的 corpus 条目记进 `data/corpus_hits.jsonl`，
     并把 12–19 的实际开火块名记进 `data/block_hits.jsonl`
     （只有真实聊天路径传 True；离线实验保持 False，免得污染统计）。
+
+    trace：条目级注入轨迹（`docs/数据迭代.md` §2）。传一个 dict 进来，这里把
+    **实际注入了哪些块、哪些条目**填进 `blocks` / `items` / `values`；写盘由
+    `handle_chat` 统一做（离线/实验路径不传就不留痕）。只记 id/名称/值，不记整段提示词。
     """
     messages = []
     messages.append({"role": "system", "content": SYSTEM_PROMPT})
     hit_blocks: list[str] = []   # 12–19 本轮回实际注入了哪些块（真实聊天才落盘）
+
+    # 轨迹：按**实际注入顺序**记块名；items 只收真正渲染进提示词的条目
+    # （RRF/预算截掉的不算，和 log_corpus_hits 的纪律一致）。
+    def _mark(name: str) -> None:
+        if trace is not None:
+            trace.setdefault("blocks", []).append(name)
+
+    def _items(name: str, values: list) -> None:
+        values = [str(v) for v in values if v]
+        if trace is not None and values:
+            trace.setdefault("items", {})[name] = values
 
     # 周表（地面真值）：被问"明天来吗/这周/几点播"以它为准。
     # 记忆里带"明天/下周"的话是过去某场直播当时的说法，可能早过期，不能当现在的安排。
@@ -384,11 +405,13 @@ def build_message_list(user_msg: str, fused_items: list,
     weekly = sched.get("weekly") if sched else None
     if weekly:
         messages.append({"role": "system", "content": inj.T("schedule", weekly=inj.format_weekly(weekly))})
+        _mark("schedule")
 
     # Memory V2【靠前】相处方式：偏好→行为句 + 话题相关事实（个体适配，优先级最高）。
     # 位置靠前是有意的：它是"针对这个人的长期适配"，不该被后面的通用素材盖过。
     if profile_context:
         messages.append({"role": "system", "content": profile_context})
+        _mark("profile")
 
     # 偏好档案（第 5 路语义检索）：聊到相关话题才注入；与语料/记忆冲突时以偏好为准
     if preference_items:
@@ -397,6 +420,8 @@ def build_message_list(user_msg: str, fused_items: list,
         )
         if prefs_text:
             messages.append({"role": "system", "content": inj.T("preferences", items=prefs_text)})
+            _mark("preferences")
+            _items("preferences", [p.get("id") or p.get("category") for p in preference_items])
 
     # 核心记忆（印象最深的结晶）：粉丝常提及的过去故事，命中才注入
     if core_stories:
@@ -405,6 +430,8 @@ def build_message_list(user_msg: str, fused_items: list,
         )
         if story_text:
             messages.append({"role": "system", "content": inj.T("core_stories", items=story_text)})
+            _mark("core_stories")
+            _items("core_stories", [s.get("id") or s.get("category") for s in core_stories])
 
     # 群聊现场（轻量群记忆注入）：在场成员 + 群内近况。群 = 好几个不同的绿冻在场，
     # 回给刚才直接点名搭话的那位，别把不同的人当成同一个"你"。
@@ -412,11 +439,16 @@ def build_message_list(user_msg: str, fused_items: list,
     #    它们只在群聊成立，而私聊时这块压根不注入——留在骨架里就是一条永远在场的群聊规则。
     if group_context:
         messages.append({"role": "system", "content": inj.T("group", context=group_context)})
+        _mark("group")
 
     # 名词库（terms/lorebook）：核心词 always 注入 + 命中用户消息的词注入——让模型懂"绿冻/枪神8/slg"这类词并带对的态度
-    terms_note = build_terms_note(user_msg, denied_terms=denied_terms)
+    _term_hits: list = []
+    terms_note = build_terms_note(user_msg, denied_terms=denied_terms,
+                                  hit_out=_term_hits if trace is not None else None)
     if terms_note:
         messages.append({"role": "system", "content": inj.T("terms", note=terms_note)})
+        _mark("terms")
+        _items("terms", _term_hits)
 
     # 会话级记忆（当前话题 + 本场事件）：让模型接得住会话调性
     if session_context:
@@ -424,12 +456,14 @@ def build_message_list(user_msg: str, fused_items: list,
         #    它可能是几小时前那场、早就自然结束了，所以改成中性的【会话记忆】，
         #    里面只陈述"话题是什么 + 什么时候开始的"，判断交给模型。
         messages.append({"role": "system", "content": inj.T("session", context=session_context)})
+        _mark("session")
 
     # 上一场会话（已过期，带"隔了多久"）：**不能并进上面那块**——
     # 那句写的是"你们这一场对话"，把几天前的东西塞进去她会当成现在。
     # 单独一条、且自己带着时间定性（见 session_memory.previous_session_note）。
     if prev_session_note:
         messages.append({"role": "system", "content": prev_session_note})
+        _mark("prev_session")
 
     # ⚠️ 感知（当前时间/农历/天气）**挪到最末尾**（2026-10-08），见下面 final_user 之前那处。
     #    它是唯一"每分钟必变"的块：原来坐在第 5 位，导致它后面的**每一块**
@@ -448,6 +482,8 @@ def build_message_list(user_msg: str, fused_items: list,
         behavior_text = "\n\n".join(it.text for it in behaviors if it.text)
         if behavior_text:
             messages.append({"role": "system", "content": inj.T("behaviors", text=behavior_text)})
+            _mark("behaviors")
+            _items("behaviors", [it.item_id for it in behaviors if it.text])
 
     # 直播记忆（source=corpus）：只当"背景记忆"，不参与风格示范
     if corpus:
@@ -459,6 +495,8 @@ def build_message_list(user_msg: str, fused_items: list,
         context = "\n".join(inj.T("corpus", "item", text=it.text) for it in corpus if it.text)
         if context:
             messages.append({"role": "system", "content": inj.T("corpus", items=context)})
+            _mark("corpus")
+            _items("corpus", [it.item_id for it in corpus if it.text])
             # 命中留痕：只记**真正进了提示词**的条目（分析库利用率用，失败静默）。
             # log_hits 由真实聊天路径打开；再加通道闸——回归/AB/回放等离线脚本
             # 直接调 handle_chat 时 `_ROUTE` 是空的，不能混进线上统计。
@@ -469,6 +507,7 @@ def build_message_list(user_msg: str, fused_items: list,
     if commitment_context:
         messages.append({"role": "system", "content": commitment_context})
         hit_blocks.append("commitment")
+        _mark("commitment")
 
     # ⚠️ 这里原来注「长期记忆」（第 13 块 `memory`）。2026-10-17 整段删掉：
     #    它的内容来自 v1 的长期记忆卡（根 `memory_manager.py` → `user_memory/long_term/*`），
@@ -494,9 +533,11 @@ def build_message_list(user_msg: str, fused_items: list,
                 text = inj.T("history", context=context) + inj.T("history", "contradiction")
                 messages.append({"role": "system", "content": text})
                 hit_blocks.append("history")
+                _mark("history")
         else:
             messages.append({"role": "system",
                              "content": inj.T("history", "fallback", history=user_history)})
+            _mark("history")
 
     # 连续索要（客观事实，不含指令）：她需要知道"这已经是第几次了"。
     # 为什么必须有（2026-10-04 从真实记录发现）：上下文只带最近 10 条，
@@ -510,6 +551,7 @@ def build_message_list(user_msg: str, fused_items: list,
             "same_request", count=same_request["count"], what=what,
             prev=same_request["count"] - 1)})
         hit_blocks.append("same_request")
+        _mark("same_request")
 
 
     # 感知源②：图片消息——把视觉描述并入用户消息，避免空消息让模型以为"对方没说话"。
@@ -523,6 +565,7 @@ def build_message_list(user_msg: str, fused_items: list,
     if batch_summary:
         messages.append({"role": "system", "content": inj.T("batch", summary=batch_summary)})
         hit_blocks.append("batch")
+        _mark("batch")
 
     # 短消息语境提示：用户消息 ≤4 字时，把扩充后的完整语义作为提示给模型
     # （正文仍是原 msg，这里帮模型理解"咋这样"这种短句的真实含义）
@@ -538,6 +581,7 @@ def build_message_list(user_msg: str, fused_items: list,
         else:
             messages.append({"role": "system", "content": inj.T("query_hint", "short", hint=query_hint)})
         hit_blocks.append("query_hint")
+        _mark("query_hint")
 
     # 感知源①：当前时间/农历/天气（始终注入，占预算极少；天气按该用户所在城市）。
     # **放在最后**：它是唯一"每分钟必变"的块，而 DeepSeek 的缓存按**前缀**匹配——
@@ -547,18 +591,25 @@ def build_message_list(user_msg: str, fused_items: list,
     if now_context:
         messages.append({"role": "system", "content": now_context})
         hit_blocks.append("now")
+        _mark("now")
+        if trace is not None:
+            trace.setdefault("values", {})["now"] = now_context.split("\n", 1)[0][:80]
 
     # Memory V2【最后】当下情绪：紧挨用户消息（跟【当前时间】一样放尾部），只影响这一轮语气。
     # （文案在 persona/injection/19_mood/block.json；session_memory.mood_note 渲染。）
     if emotion_context:
         messages.append({"role": "system", "content": emotion_context})
         hit_blocks.append("mood")
+        _mark("mood")
+        if trace is not None:
+            trace.setdefault("values", {})["mood"] = emotion_context[:80]
 
     # 称呼提示（2026-10-19）：只在用户**这一轮**叫了她的外号时出现。
     # 默认仍自称"灰泽满"；这一条是一次性的情境提示，不是长期偏好。
     if nickname_hint:
         messages.append({"role": "system", "content": nickname_hint})
         hit_blocks.append("nickname")
+        _mark("nickname")
 
     # 【他今天的日常】（第 20 块）：**每轮都注**，放最尾——跟【当前时间】同理，
     # 它是"每分钟都可能变"的动态段，放中间会把后面的块一起拖成缓存 miss。
@@ -566,6 +617,9 @@ def build_message_list(user_msg: str, fused_items: list,
     if daily_context:
         messages.append({"role": "system", "content": inj.T("daily", context=daily_context)})
         hit_blocks.append("daily")
+        _mark("daily")
+        if trace is not None:
+            trace.setdefault("values", {})["daily"] = True
 
     # 12–19 块级开火留痕（真实聊天路径才写；离线实验/回归不污染）
     if log_hits and get_llm_route() in ("私", "群"):
@@ -944,9 +998,12 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     # --- 🧠 Memory V2 注入（可选；与影子提取分开的开关，默认关，见 docs/记忆v2设计.md §上线路径）---
     # 两段分开放：相处方式靠前 / 未完成约定中段。
     profile_context = commitment_context = daily_context = ""
+    memory_ids: list = []   # 本轮实际注入的记忆 id（注入轨迹用；群聊为 空）
     if not is_group and memory_v2.injection_enabled():
-        profile_context = _MEMORY_V2_STORE.build_preference_context(user_id, retrieval_query)
-        commitment_context = _MEMORY_V2_STORE.build_commitment_context(user_id, retrieval_query)
+        profile_context = _MEMORY_V2_STORE.build_preference_context(
+            user_id, retrieval_query, used_ids=memory_ids)
+        commitment_context = _MEMORY_V2_STORE.build_commitment_context(
+            user_id, retrieval_query, used_ids=memory_ids)
         if daily_memory.enabled():
             daily_context = daily_memory.context(user_id)
     # 称呼提示：用户这轮叫了 her_nickname 才注入；不做长期自称偏好。
@@ -964,6 +1021,9 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     query_hint = retrieval_query if (retrieval_query and retrieval_query != query_text) else ""
     # 术语语境确认：confirm:true 的命中做一次便宜 LLM 判断，剔除误触词条（词→意思守卫）
     denied_terms = await confirm_ambiguous_terms(user_msg, deepseek_client)
+    # 条目级注入轨迹：build 时填"实际注入了哪些块/条目"，回复生成后再补称呼是否被用，
+    # 由下面统一落盘（只有 私/群 真实聊天路径写，和 block_hits 同一个闸）。
+    injection_trace: dict = {}
     messages = build_message_list(
         user_msg, fused_items, user_history_timed,
         vision_desc=vision_desc, weather_city=weather_city, batch_summary=batch_summary,
@@ -975,7 +1035,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         profile_context=profile_context, commitment_context=commitment_context,
         emotion_context=emotion_context, daily_context=daily_context,
         user_transcript=user_transcript, nickname_hint=nickname_hint,
-        log_hits=True,
+        log_hits=True, trace=injection_trace,
     )
 
     # --- 🤖 调用大模型 ---
@@ -1087,6 +1147,21 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
             reply = candidate
             if is_fallback_reply(reply) or len(reply) <= LENGTH_GUARD_MAX_CHARS:
                 break
+
+    # --- 🧾 条目级注入轨迹（`docs/数据迭代.md` §2）---
+    # 闸和 block_hits 一致：只有真实聊天（通道 私/群）写，离线回放/实验不污染。
+    if get_llm_route() in ("私", "群"):
+        ids = list(dict.fromkeys(str(i) for i in memory_ids if i))   # 去重保序
+        if ids:
+            injection_trace.setdefault("items", {})["memory"] = ids
+        injection_trace["session"] = str(user_id)
+        injection_trace["route"] = get_llm_route()
+        try:
+            nickname = _MEMORY_V2_STORE.her_nickname(user_id) if nickname_hint else ""
+        except Exception:
+            nickname = ""
+        injection_trace["reply_used_nickname"] = bool(nickname and nickname in reply)
+        log_injection_trace(injection_trace)
 
     # --- 💾 更新短期记忆（带锁）：图片消息把视觉描述记进去，后续才记得聊过什么图 ---
     # 存**清洗后**的版本（clean_reply 平时在 chat_window 里、本函数返回之后才跑）：

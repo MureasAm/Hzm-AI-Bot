@@ -77,6 +77,44 @@ class TestCorpusHits:
         assert rec[0]["blocks"] == ["history", "now", "mood"]
 
 
+class TestInjectionTrace:
+    """条目级注入轨迹（`docs/数据迭代.md` §2）：一轮一行，只记 id/名称/值。"""
+
+    def _path(self, tmp_log):
+        return tmp_log.parent / "injection_trace.jsonl"
+
+    def test_records_blocks_items_and_timestamp(self, _tmp_log):
+        chatlog.log_injection_trace({
+            "session": "u1", "route": "私",
+            "blocks": ["terms", "now"],
+            "items": {"terms": ["绿冻"]},
+            "values": {"now": "【当前时间】"},
+            "reply_used_nickname": False,
+        })
+        rec = json.loads(self._path(_tmp_log).read_text(encoding="utf-8").splitlines()[0])
+        assert rec["session"] == "u1" and rec["route"] == "私"
+        assert rec["blocks"] == ["terms", "now"]
+        assert rec["items"] == {"terms": ["绿冻"]}
+        assert rec["reply_used_nickname"] is False
+        assert isinstance(rec["t"], float)
+
+    def test_keeps_caller_timestamp(self, _tmp_log):
+        chatlog.log_injection_trace({"t": 123.0, "session": "u1"})
+        rec = json.loads(self._path(_tmp_log).read_text(encoding="utf-8").splitlines()[0])
+        assert rec["t"] == 123.0
+
+    def test_disabled_writes_nothing(self, monkeypatch, _tmp_log):
+        monkeypatch.setenv("CHATLOG", "0")
+        chatlog.log_injection_trace({"session": "u1", "blocks": ["now"]})
+        assert not self._path(_tmp_log).exists()
+
+    def test_write_failure_never_raises(self, monkeypatch, tmp_path):
+        bad = tmp_path / "not_a_dir"
+        bad.write_text("我是文件不是目录", encoding="utf-8")
+        monkeypatch.setattr(chatlog, "LOG_DIR", bad / "chat_log")
+        chatlog.log_injection_trace({"session": "u1"})   # 不该抛
+
+
 class TestRecord:
     def test_records_private_turn(self, _tmp_log):
         log_turn("u1", False, "在吗", "在呢")

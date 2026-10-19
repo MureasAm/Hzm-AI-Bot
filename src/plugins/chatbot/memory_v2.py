@@ -926,8 +926,13 @@ class ShadowMemoryStore:
             )
         ][:4]
 
-    def _preference_lines(self, active: list[dict], query: str) -> list[str]:
-        """靠前段：相处方式（行为句）+ 话题相关事实。"""
+    def _preference_lines(self, active: list[dict], query: str,
+                          used_out: list | None = None) -> list[str]:
+        """靠前段：相处方式（行为句）+ 话题相关事实。
+
+        used_out：传入 list 时追加**实际选中注入**的记忆 id（条目级注入轨迹用）。
+        预算截断的边界情况可能多记一条（它的前缀仍在提示词里），只做诊断、不做账。
+        """
         preferences = [m for m in active if m.get("kind") == "interaction_preference"]
         lines: list[str] = []
         if preferences:
@@ -936,6 +941,8 @@ class ShadowMemoryStore:
                 behavior = inj.behavior_sentence(memory.get("key"), memory.get("value"))
                 if behavior:
                     lines.append(behavior)
+                    if used_out is not None and memory.get("id"):
+                        used_out.append(str(memory["id"]))
         facts = self._select_facts(active, query)
         if facts:
             rendered = "；".join(
@@ -943,16 +950,22 @@ class ShadowMemoryStore:
                 for m in facts
             )
             lines.append(inj.T("profile", "fact", rendered=rendered))
+            if used_out is not None:
+                used_out.extend(str(m["id"]) for m in facts if m.get("id"))
         return lines
 
-    def _commitment_lines(self, active: list[dict], query: str) -> list[str]:
-        """中段：未完成约定——别忘、要兑现。"""
+    def _commitment_lines(self, active: list[dict], query: str,
+                          used_out: list | None = None) -> list[str]:
+        """中段：未完成约定——别忘、要兑现。used_out 同 `_preference_lines`。"""
         commitments = [m for m in active if m.get("kind") == "commitment" and _relevance(query, m) > 0]
         if not commitments:
             return []
         # 命中多条时先注最相关的；旧实现按存储顺序取前 2 条，会把最旧的那条塞进去。
         commitments.sort(key=lambda m: -_relevance(query, m))
-        rendered = "；".join(str(m.get("value")) for m in commitments[:2])
+        chosen = commitments[:2]
+        if used_out is not None:
+            used_out.extend(str(m["id"]) for m in chosen if m.get("id"))
+        rendered = "；".join(str(m.get("value")) for m in chosen)
         return [inj.T("commitment", rendered=rendered)]
 
     def _fit(self, lines: list[str], budget: int) -> str:
@@ -980,10 +993,15 @@ class ShadowMemoryStore:
         *,
         now: datetime | None = None,
         session_id: str | None = None,
+        used_ids: list | None = None,
     ) -> str:
-        """靠前注入：相处方式行为句 + 话题相关事实（system，个体适配）。"""
+        """靠前注入：相处方式行为句 + 话题相关事实（system，个体适配）。
+
+        used_ids：传入 list 时追加实际注入的记忆 id（条目级注入轨迹用）。
+        """
         active = self._active_memories(user_id, now=now, session_id=session_id)
-        return self._fit(self._preference_lines(active, query or ""), PREFERENCE_BUDGET_CHARS)
+        return self._fit(self._preference_lines(active, query or "", used_out=used_ids),
+                         PREFERENCE_BUDGET_CHARS)
 
     def her_nickname(self, user_id: str, *, now: datetime | None = None) -> str:
         """用户给她起的外号（没有返回空串）。只用于识别/情境提示，不改变默认自称。"""
@@ -1016,10 +1034,12 @@ class ShadowMemoryStore:
         *,
         now: datetime | None = None,
         session_id: str | None = None,
+        used_ids: list | None = None,
     ) -> str:
-        """中段注入：未完成约定（system，中段——别忘、要兑现）。"""
+        """中段注入：未完成约定（system，中段——别忘、要兑现）。used_ids 同 build_preference_context。"""
         active = self._active_memories(user_id, now=now, session_id=session_id)
-        return self._fit(self._commitment_lines(active, query or ""), COMMITMENT_BUDGET_CHARS)
+        return self._fit(self._commitment_lines(active, query or "", used_out=used_ids),
+                         COMMITMENT_BUDGET_CHARS)
 
     def build_context(
         self,

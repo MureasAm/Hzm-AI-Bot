@@ -852,6 +852,124 @@ class TestCorpusTimePrefix:
         }
 
 
+class TestInjectionTrace:
+    """条目级注入轨迹（`docs/数据迭代.md` §2）：只记**实际进提示词**的块与条目。
+
+    为什么要有：只有块名时，模型诊断只能猜"可能是 behaviors"；条目级才能定位到
+    "哪一条素材/记忆/词条在这一轮里出现过"。候选和判官保留都不算——只记最终渲染进提示词的。
+    """
+
+    def _build(self, monkeypatch, trace=None):
+        from src.plugins.chatbot.retrieval import RetrievalItem
+        monkeypatch.setattr(core.context_probe, "get_now_context",
+                            lambda city="": "【当前时间】测试上午十点\n第二行不记")
+        monkeypatch.setattr(core, "load_schedule", lambda: {})
+        monkeypatch.setattr(core, "load_terms", lambda: [
+            {"keyword": "绿冻", "meaning": "她的粉丝", "priority": "always"},
+            {"keyword": "鸽子", "meaning": "爱放鸽子的人", "aliases": ["咕咕"]},
+        ])
+        items = [
+            RetrievalItem(source="corpus", item_id="42", score=0.9, text="她以前被问过身高。"),
+            RetrievalItem(source="corpus", item_id="43", score=0.8, text=""),  # 空文本不渲染
+            RetrievalItem(source="behavior", item_id="被夸时把夸奖调小", score=1.0,
+                          text="【被夸时把夸奖调小】\n回应模式：压低评价。"),
+        ]
+        kwargs = dict(
+            preference_items=[{"id": "food", "category": "食物", "text": "爱椰子鸡"}],
+            core_stories=[{"id": "good_student_38", "category": "好学生", "text": "她当年…"}],
+            commitment_context="【相关未完成约定】测试",
+            same_request={"count": 2, "what": "要语音"},
+            batch_summary="测试摘要", query_hint="测试扩充",
+            emotion_context="【用户此刻的情绪】测试",
+            daily_context="今天中午吃了炸鸡",
+        )
+        if trace is not None:
+            kwargs["trace"] = trace
+        return core.build_message_list("灰泽满你怎么又咕咕了", items, ["用户：在吗"], **kwargs)
+
+    def test_blocks_follow_actual_injection_order(self, monkeypatch):
+        trace = {}
+        self._build(monkeypatch, trace)
+        assert trace["blocks"] == [
+            "preferences", "core_stories", "terms", "behaviors", "corpus",
+            "commitment", "history", "same_request", "batch", "query_hint",
+            "now", "mood", "daily",
+        ]
+
+    def test_items_only_rendered_entries(self, monkeypatch):
+        trace = {}
+        self._build(monkeypatch, trace)
+        assert trace["items"] == {
+            "preferences": ["food"],
+            "core_stories": ["good_student_38"],
+            "terms": ["绿冻", "鸽子"],          # always + 别名命中
+            "behaviors": ["被夸时把夸奖调小"],
+            "corpus": ["42"],                   # "43" 文本为空、没渲染，不能记
+        }
+
+    def test_values_record_compact_perception(self, monkeypatch):
+        trace = {}
+        self._build(monkeypatch, trace)
+        assert trace["values"]["now"] == "【当前时间】测试上午十点"   # 只取首行
+        assert trace["values"]["mood"] == "【用户此刻的情绪】测试"
+        assert trace["values"]["daily"] is True
+
+    def test_absent_blocks_are_not_marked(self, monkeypatch):
+        trace = {}
+        self._build(monkeypatch, trace)
+        assert "nickname" not in trace["blocks"] and "group" not in trace["blocks"]
+
+    def test_no_trace_arg_is_silent(self, monkeypatch):
+        """离线/实验路径不传 trace 时，构建照旧、不会因为轨迹而报错。"""
+        msgs = self._build(monkeypatch, None)
+        assert msgs and msgs[-1]["role"] == "user"
+
+
+class TestInjectionTraceWrite:
+    """`handle_chat` 只在真实聊天通道（私/群）落盘轨迹——离线回放不能混进周报。"""
+
+    async def _run(self, monkeypatch, route):
+        recorded = []
+
+        async def fake_probe(uid, msg, hist, client):
+            return "用户发了个偷笑的表情"   # 纯情绪 → 跳过检索，最小 harness
+
+        async def fake_reply(messages):
+            return "在呢"
+
+        async def _anoop(*a, **k):
+            return None
+
+        def _noop(*a, **k):
+            return None
+
+        monkeypatch.setenv("MEMORY_V2_INJECT", "0")
+        monkeypatch.setattr(core, "probe_session", fake_probe)
+        monkeypatch.setattr(core, "generate_reply", fake_reply)
+        monkeypatch.setattr(core, "get_user_history", lambda uid: [])
+        monkeypatch.setattr(core, "get_last_turn_gap_seconds", lambda uid: None)
+        monkeypatch.setattr(core, "append_user_history", _noop)
+        monkeypatch.setattr(core, "update_memory_v2_shadow_task", _anoop)
+        monkeypatch.setattr(core, "get_llm_route", lambda: route)
+        monkeypatch.setattr(core, "log_corpus_hits", _noop)
+        monkeypatch.setattr(core, "log_block_hits", _noop)
+        monkeypatch.setattr(core, "log_injection_trace", recorded.append)
+        monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
+        monkeypatch.setattr(core, "load_schedule", lambda: {})
+        await core.handle_chat("u", "可惜🤭")
+        return recorded
+
+    async def test_private_route_records_trace(self, monkeypatch):
+        rec = await self._run(monkeypatch, "私")
+        assert len(rec) == 1
+        assert rec[0]["session"] == "u" and rec[0]["route"] == "私"
+        assert "now" in rec[0]["blocks"]
+        assert rec[0]["reply_used_nickname"] is False
+
+    async def test_offline_route_records_nothing(self, monkeypatch):
+        assert await self._run(monkeypatch, "") == []
+
+
 class TestRetrievePreferences:
     """偏好已从"向量语义检索"改成"keywords 子串命中"（2026-09-26）。
 

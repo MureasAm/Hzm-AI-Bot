@@ -701,6 +701,35 @@ def _run_memory_dedupe(args):
     memory_v2_tool.run_dedupe_single_valued(args)
 
 
+def _add_weekly_review(sub):
+    p = sub.add_parser("weekly-review",
+                       help="只读周报：最近 N 天聊天 + 注入轨迹 → 确定性指标 + 问题轮次 + 候选")
+    p.add_argument("--days", type=float, default=7, help="窗口天数（默认 7）")
+    p.add_argument("--session", default=None, help="只看某个会话（QQ 号/群号）")
+    p.add_argument("--out-dir", default=None, help="输出目录（默认 outputs/review/）")
+    p.add_argument("--date", default=None, help="文件名日期（默认今天）")
+    p.set_defaults(func=_run_weekly_review)
+
+
+def _run_weekly_review(args):
+    import weekly_review
+    result = weekly_review.run(
+        days=args.days, session=args.session,
+        out_dir=args.out_dir, date=args.date,
+    )
+    if not result["turns"]:
+        print("窗口内没有聊天记录（data/chat_log/）。先让 bot 跑一阵再来。")
+        return
+    m = result["metrics"]
+    print(f"窗口 {args.days:g} 天：{m['window_turns']} 轮 / {m['sessions']} 个会话"
+          f"（轨迹覆盖 {m['trace_coverage']:.0%}）")
+    print(f"  听不懂信号 {m['confused_reply_count']}｜用户纠正 {m['correction_count']}"
+          f"｜opener 连续 {m['repeated_opener_count']}｜检索空 {m['empty_retrieval_turns']}")
+    print(f"候选 {len(result['candidates'])} 条 → {result['md']}")
+    print(f"                                    {result['json']}")
+    print("⚠️ 含真实用户发言，只留本机。")
+
+
 # ==================== 主入口 ====================
 
 def build_parser() -> argparse.ArgumentParser:
@@ -714,7 +743,8 @@ def build_parser() -> argparse.ArgumentParser:
                     "  【向量】precompute\n"
                     "  【评测】regression · persona-eval · retrieval-eval · problems\n"
                     "  【工具】bili-check · bili-login · vision-test · mine-theme · llm-cost · proactive-ab\n"
-                    "          memory-audit · memory-replay · memory-rebuild · memory-migrate-moments · memory-dedupe",
+                    "          memory-audit · memory-replay · memory-rebuild · memory-migrate-moments · memory-dedupe\n"
+                    "          weekly-review（只读周报：确定性指标 + 问题轮次 + 候选）",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sub = parser.add_subparsers(dest="command", required=True, title="可用工具")
@@ -746,6 +776,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_llm_cost(sub)
     _add_proactive_ab(sub)
     _add_model_ab(sub)
+    _add_weekly_review(sub)
     return parser
 
 

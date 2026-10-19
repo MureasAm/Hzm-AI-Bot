@@ -173,6 +173,28 @@ def log_block_hits(blocks) -> None:
         pass
 
 
+def log_injection_trace(record: dict) -> None:
+    """记录这一轮**实际进提示词**的块 + 条目（id / 名称 / 值），供周报诊断。
+
+    跟 `log_corpus_hits` / `log_block_hits` 同一个落点和纪律：只有真实聊天路径会写，
+    失败静默。区别是**粒度**——那两份只记块名/条目 id，这里把一轮的块、条目、
+    感知值、称呼提示是否被用落在同一行，事后不用再跨文件拼。
+
+    ⚠️ **只存 id/名称/值，不存整段提示词**（见 `docs/数据迭代.md` §7「隐私」）。
+    用户原话在 `chat_log/` 里，轨迹与它按会话 + 时间对齐。
+    """
+    if not chatlog_enabled() or not record:
+        return
+    try:
+        LOG_DIR.parent.mkdir(parents=True, exist_ok=True)
+        rec = dict(record)
+        rec.setdefault("t", time.time())
+        with open(LOG_DIR.parent / "injection_trace.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
 def log_turn(target_id: str, is_group: bool, user_text: str, reply: str,
              images=None, batch_messages=None) -> None:
     """追加一轮。**只在消息真的发出去之后调用。**
