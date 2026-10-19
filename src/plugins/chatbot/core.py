@@ -10,6 +10,7 @@ import asyncio
 import re
 import time
 
+from .bg import spawn
 from .constants import (
     SYSTEM_PROMPT_FILE, THINKING_DISABLED,
     CHAT_TEMPERATURE, CHAT_FREQUENCY_PENALTY, CHAT_MAX_TOKENS,
@@ -884,8 +885,14 @@ async def _fill_retrieval(result: dict, query_text: str, retrieval_query: str, h
     # 会把'灰泽满你唱歌好听'（夸）和'灰泽满你怎么又迟到'（质问）挤在一起误判）。
     # 同一次调用还判"连续第几轮在要同一件事"（same_request）。
     # 判别词（敷衍/骗/鸽/迟到/黄桃/擦边…）退**兜底**位：L3 判不出来时才用。
+    # L3 和 embedding 互不依赖（L3 只看原话+历史，embedding 只看检索句），**并行发**，
+    # 省一次串行往返；两个函数都自己兜底异常，结果和先后 await 完全一样。
+    embed_text = retrieval_query or query_text
     if is_user_msg:
-        l3 = await classify_l3(deepseek_client, query_text, history_text, behaviors)
+        l3, query_vector = await asyncio.gather(
+            classify_l3(deepseek_client, query_text, history_text, behaviors),
+            embed_query(zhipu_client, embed_text),
+        )
         if l3["behavior"]:
             print(f"[行为] LLM 判定: {l3['behavior']}")
         sr = l3.get("same_request") or {}
@@ -894,8 +901,9 @@ async def _fill_retrieval(result: dict, query_text: str, retrieval_query: str, h
             print(f"[连续索要] 第 {sr['count']} 轮：{sr.get('what') or '（未说明）'}")
         behavior_item = select_behavior_item(query_text, l3["behavior"], behaviors)
         behavior_items = [behavior_item] if behavior_item else []
+    else:
+        query_vector = await embed_query(zhipu_client, embed_text)
 
-    query_vector = await embed_query(zhipu_client, retrieval_query or query_text)
     if is_user_msg:
         # corpus：**全部交 LLM 判**。门/钩子只决定"把哪些条递过去看"，**不再有直通**。
         # 为什么取消直通（2026-09-29）：实测词重叠这把尺子分不开"说的是谁"——
@@ -998,7 +1006,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
             # 梗匹配也记入短期记忆 + 异步长期记忆，避免后续对话"失忆"
             append_user_history(user_id, user_msg, reply)
             if not is_group:  # 群会话不建用户记忆卡
-                asyncio.create_task(update_memory_v2_shadow_task(
+                spawn(update_memory_v2_shadow_task(
                     user_id, user_msg, reply, memory_scope_id,
                 ))
             return reply
@@ -1227,7 +1235,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
 
     # --- 📝 异步更新长期记忆（V2；会话级记忆已在对话前 probe_session 同步更新） ---
     if not is_group:  # 群会话不建用户记忆卡
-        asyncio.create_task(update_memory_v2_shadow_task(
+        spawn(update_memory_v2_shadow_task(
             user_id, record_msg, reply, memory_scope_id,
         ))
 

@@ -296,3 +296,28 @@ class TestUnderCountedRecords:
         """只有白名单里的模型才做这个减法——别的模型（如 grok）实测 prompt 是准的。"""
         rec = {"model": "gemini-3.8-flash", "prompt": 2572, "hit": 0, "miss": 0, "output": 1}
         assert llm_cost._tokens(rec) == (2572, 0, 2572, 1)
+
+
+class TestLatency:
+    """账本带上**这次调用的耗时**（ms）：量"一轮回复的时间花在哪一环"用。"""
+
+    async def test_chain_call_records_ms(self, _tmp_ledger):
+        import asyncio
+
+        resp = SimpleNamespace(usage=_usage(), model="m1",
+                               choices=[SimpleNamespace(message=SimpleNamespace(content="好"))])
+
+        async def create(**kw):
+            await asyncio.sleep(0.02)
+            return resp
+
+        client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+        chain = config._ChainCompletions([(client, None, "m1")])
+        log_cache_usage(await chain.create(model="m1", messages=[]), "主回复")
+        rec = _read(_tmp_ledger)[0]
+        assert rec["ms"] >= 15
+
+    def test_call_outside_chain_has_no_ms(self, _tmp_ledger):
+        config._LATENCY.set((0, 0))
+        log_cache_usage(_resp(_usage()), "视觉")
+        assert "ms" not in _read(_tmp_ledger)[0]

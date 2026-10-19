@@ -1479,3 +1479,54 @@ class TestHandleChatImageOnly:
         assert embed_called == []                       # 图片-only 不做检索
         assert captured["user"].startswith("[图片：")     # 图片并入用户消息
         assert reply == "这碗面看起来好香"
+
+
+class TestL3AndEmbedConcurrent:
+    """L3 和 embedding 互不依赖，必须**并行**发（省一次串行往返）；结果和先后 await 一样。"""
+
+    async def test_l3_and_embed_overlap(self, monkeypatch):
+        started, both = [], asyncio.Event()
+
+        async def _arrive(name):
+            started.append(name)
+            if len(started) == 2:
+                both.set()
+            # 串行的话第一个永远等不到第二个 → 超时报错
+            await asyncio.wait_for(both.wait(), 1.0)
+
+        async def fake_l3(client, query, history, behaviors):
+            await _arrive("l3")
+            return {"behavior": "", "same_request": {"what": "", "count": 1}}
+
+        embedded = []
+
+        async def fake_embed(client, text):
+            await _arrive("embed")
+            embedded.append(text)
+            return [0.1, 0.2]
+
+        async def fake_judge(client, query, candidates):
+            return []
+
+        monkeypatch.setattr(core, "classify_l3", fake_l3)
+        monkeypatch.setattr(core, "embed_query", fake_embed)
+        monkeypatch.setattr(core, "retrieve_corpus_candidates", lambda q, v: [])
+        monkeypatch.setattr(core, "judge_corpus", fake_judge)
+
+        result = {"fused_items": [], "preference_items": [], "core_stories": [], "same_request": None}
+        await core._fill_retrieval(result, "你今天干嘛了", "用户问她今天做了什么", "",
+                                   None, None, [], True)
+        assert sorted(started) == ["embed", "l3"]
+        assert embedded == ["用户问她今天做了什么"], "embedding 用的还是检索句（probe 扩充后的）"
+
+    async def test_non_user_msg_skips_l3(self, monkeypatch):
+        def _fail(*a, **k):
+            raise AssertionError("主动发言不做 L3")
+
+        async def fake_embed(client, text):
+            return [0.1]
+
+        monkeypatch.setattr(core, "classify_l3", _fail)
+        monkeypatch.setattr(core, "embed_query", fake_embed)
+        result = {"fused_items": [], "preference_items": [], "core_stories": [], "same_request": None}
+        await core._fill_retrieval(result, "今天直播好累", "", "", None, None, [], False)

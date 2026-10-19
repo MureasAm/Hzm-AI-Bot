@@ -939,3 +939,24 @@ class TestShadowExtraction:
 
         assert accepted == []
         assert store.snapshot("u1")["memories"] == []
+
+
+_NAME_ITEM = {"kind": "fact", "key": "preferred_name", "value": "小明",
+              "explicit": True, "confidence": 0.98}
+
+
+def test_empty_ingest_does_not_rewrite_existing_user(store, clock):
+    """提取为空的轮次不该把全体用户的状态文件整份重写（只会改一个没人读的 updated_at）。"""
+    store.ingest("u1", [_NAME_ITEM], source=_source(now=clock, user="我叫小明"), now=clock)
+    before = store.state_file.read_bytes()
+    later = clock + timedelta(hours=1)
+    assert store.ingest("u1", [], source=_source(now=later), now=later) == []
+    assert store.state_file.read_bytes() == before
+    assert store.snapshot("u1")["memories"][0]["value"] == "小明"
+
+
+def test_empty_ingest_still_creates_new_user(store, clock):
+    """新用户第一次（哪怕没提取到东西）照旧建档——离线工具按 users 数统计，口径不变。"""
+    store.ingest("u2", [], source=_source(now=clock), now=clock)
+    state = json.loads(store.state_file.read_text(encoding="utf-8"))
+    assert state["users"]["u2"]["memories"] == []

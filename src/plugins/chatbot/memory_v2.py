@@ -744,6 +744,10 @@ class ShadowMemoryStore:
         accepted: list[dict] = []
         with self._lock:
             state = self._load()
+            if not items and user_id in state["users"]:
+                # 这轮什么都没提取到：往下走只会改一个没人读的 updated_at，
+                # 却要把**全体用户**的状态文件整份重写一遍——跳过。新用户第一次照旧建档。
+                return []
             user = state["users"].setdefault(user_id, {"memories": [], "updated_at": now.isoformat()})
             memories = user.setdefault("memories", [])
 

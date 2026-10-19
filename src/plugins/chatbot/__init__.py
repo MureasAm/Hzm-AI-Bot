@@ -24,6 +24,7 @@ from nonebot.adapters.onebot.v11 import (
     Bot, Event, FriendRequestEvent, RequestEvent, NoticeEvent,
 )
 
+from .bg import spawn
 from .constants import AUTO_ACCEPT_FRIEND, PROJECT_ROOT, AT_SELF_MARK
 from .qq_faces import face_name
 from . import bili_bridge  # noqa: F401  导入即注册启动时的后台监听任务
@@ -112,7 +113,7 @@ async def _start_heartbeat() -> None:
     # 等真正的连接/bot_online 事件再翻转，避免重启窗口期误判在线
     if QQ_OFFLINE_FILE.exists():
         _account_online["state"] = False
-    asyncio.create_task(_heartbeat_loop())
+    spawn(_heartbeat_loop())
 
 # 自动通过好友申请：新加的绿冻立即变双向好友，B站推送才能到达（NapCat 无法给单向好友发消息）
 friend_req = on_request(priority=1, block=False)
