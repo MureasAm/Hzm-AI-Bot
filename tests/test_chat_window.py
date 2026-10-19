@@ -40,7 +40,7 @@ class TestFlush:
         win.pending = [("u1", "在吗", []), ("u1", "天气咋样", [])]
         captured = {}
 
-        async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False, user_transcript=""):
+        async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False, user_transcript="", **kwargs):
             captured["text"] = text
             captured["vision"] = vision_desc
             captured["summary"] = batch_summary
@@ -77,7 +77,7 @@ class TestFlush:
         win.pending = [("u2", "", [("http://img1", "img1.image")])]
         captured = {}
 
-        async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False, user_transcript=""):
+        async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False, user_transcript="", **kwargs):
             captured["text"] = text
             captured["vision"] = vision_desc
             captured["summary"] = batch_summary
@@ -110,7 +110,7 @@ class TestFlush:
         win.pending = [("u10", "你看", [("http://a", "fa"), ("http://b", "fb")])]
         captured = {}
 
-        async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False, user_transcript=""):
+        async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False, user_transcript="", **kwargs):
             captured["vision"] = vision_desc
             return "好"
 
@@ -149,7 +149,7 @@ class TestFlush:
         captured = {}
 
         async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False,
-                              user_transcript=""):
+                              user_transcript="", **kwargs):
             captured.update(text=text, vision=vision_desc, transcript=user_transcript)
             return "好"
 
@@ -187,7 +187,7 @@ class TestFlush:
         captured = {}
 
         async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False,
-                              user_transcript=""):
+                              user_transcript="", **kwargs):
             captured.update(vision=vision_desc, transcript=user_transcript)
             return "好"
 
@@ -223,7 +223,7 @@ class TestFlush:
         win.pending = [("u3", "", [("http://img1", "")])]
         captured = {}
 
-        async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False, user_transcript=""):
+        async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False, user_transcript="", **kwargs):
             captured["vision"] = vision_desc
             return "嗯？没看清"
 
@@ -258,7 +258,7 @@ class TestVoiceFlush:
         win.pending = [("u4", "在吗", [])]
         voice_calls = []
 
-        async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False, user_transcript=""):
+        async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False, user_transcript="", **kwargs):
             return reply_text
 
         async def fake_summarize(msgs):
@@ -338,7 +338,7 @@ class TestVoiceSurvivesInterrupt:
         win.pending = [("u9", "在吗", [])]
         sent, voice_done = [], []
 
-        async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False, user_transcript=""):
+        async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False, user_transcript="", **kwargs):
             if supersede_during_handle:
                 win.generation += 1   # 模拟"她还在组织语言时，用户又发了一条"
             return self.SENTENCE
@@ -512,3 +512,121 @@ class TestGroupTranscript:
         await cw._flush(win)
 
         assert "[未点名] 甲：看这个 [图片：一只虫子]" in captured["transcript"].splitlines()
+
+
+class TestBatchCommitOnInterrupt:
+    """被打断的批次不能丢（2026-10-20「跑步呀」事故）。
+
+    旧实现一进 `_flush` 就把 pending 清空；新消息取消回复任务时，那批已经被取走 →
+    既不回复也不进记忆/聊天记录。现在改成“回复生成并记录之后才提交”，
+    被取消就把消息留在队列里，等下一批一起处理。
+    """
+
+    async def test_cancelled_flush_keeps_messages(self, monkeypatch):
+        win = cw._UserWindow("u1")
+        win.pending = [("u1", "跑步呀", [])]
+        started, block = asyncio.Event(), asyncio.Event()
+
+        async def slow_handle(uid, text, **kwargs):
+            started.set()
+            await block.wait()
+            return "在呢"
+
+        async def fake_summarize(msgs):
+            return ""
+
+        monkeypatch.setattr(cw, "handle_chat", slow_handle)
+        monkeypatch.setattr(cw, "summarize_batch", fake_summarize)
+
+        task = asyncio.create_task(cw._flush(win))
+        await started.wait()
+        assert win.pending == [("u1", "跑步呀", [])], "处理中不能提前清队列"
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert win.pending == [("u1", "跑步呀", [])], "取消后必须留在队列里等下一批"
+
+    async def test_next_flush_batches_interrupted_message(self, monkeypatch):
+        win = cw._UserWindow("u1")
+        win.pending = [("u1", "跑步呀", []), ("u1", "你忘了吗", [])]
+        captured = {}
+
+        async def fake_handle(uid, text, **kwargs):
+            captured["text"] = text
+            return "在呢"
+
+        async def fake_summarize(msgs):
+            return ""
+
+        async def fake_pick(client, reply, avoid_groups=None, **kwargs):
+            return None
+
+        async def fake_send(win_, content):
+            pass
+
+        monkeypatch.setattr(cw, "handle_chat", fake_handle)
+        monkeypatch.setattr(cw, "summarize_batch", fake_summarize)
+        monkeypatch.setattr(cw, "_get_clients", lambda: (object(), None))
+        monkeypatch.setattr(cw, "pick_sticker", fake_pick)
+        monkeypatch.setattr(cw, "_sticker_state", {})
+        monkeypatch.setattr(cw, "_send", fake_send)
+
+        await cw._flush(win)
+        assert captured["text"] == "跑步呀\n你忘了吗", "被打断的那句要和下一句一起处理"
+        assert win.pending == [], "处理完要提交，不能留到下轮重答"
+
+    async def test_group_skip_commits_batch(self, monkeypatch):
+        win = cw._UserWindow("g1")
+        win.is_private = False
+        win.pending = [("u1", "嗯", [])]
+
+        async def fake_gate(client, hist, batch):
+            return False
+
+        async def fake_summarize(msgs):
+            return ""
+
+        async def fake_name(bot, gid, uid):
+            return "甲"
+
+        monkeypatch.setattr(cw, "should_reply_in_group", fake_gate)
+        monkeypatch.setattr(cw, "summarize_batch", fake_summarize)
+        monkeypatch.setattr(cw, "_get_sender_name", fake_name)
+        monkeypatch.setattr(cw, "_get_clients", lambda: (object(), None))
+        monkeypatch.setattr(cw.group_memory, "upsert_members", lambda *a, **k: None)
+
+        await cw._flush(win)
+        assert win.pending == [], "判定不接也要提交，不能下一轮再判一遍"
+
+    async def test_meta_silence_commits_without_sending(self, monkeypatch):
+        win = cw._UserWindow("g1")
+        win.is_private = False
+        win.pending = [("u1", "大疲", [])]
+        sent = []
+
+        async def fake_handle(uid, text, **kwargs):
+            return ""   # handle_chat 判定是“没点我/潜水”式元回复后会返回空串
+
+        async def fake_gate(client, hist, batch):
+            return True
+
+        async def fake_name(bot, gid, uid):
+            return "甲"
+
+        async def fake_summarize(msgs):
+            return ""
+
+        async def fake_send(win_, content):
+            sent.append(content)
+
+        monkeypatch.setattr(cw, "handle_chat", fake_handle)
+        monkeypatch.setattr(cw, "should_reply_in_group", fake_gate)
+        monkeypatch.setattr(cw, "summarize_batch", fake_summarize)
+        monkeypatch.setattr(cw, "_get_sender_name", fake_name)
+        monkeypatch.setattr(cw, "_get_clients", lambda: (object(), None))
+        monkeypatch.setattr(cw, "_send", fake_send)
+        monkeypatch.setattr(cw.group_memory, "upsert_members", lambda *a, **k: None)
+
+        await cw._flush(win)
+        assert sent == [], "元回复不能发出去"
+        assert win.pending == [], "这批已经处理完（当作没说），要提交"

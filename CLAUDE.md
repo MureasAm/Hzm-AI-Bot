@@ -19,7 +19,7 @@ NoneBot2 + OneBot v11(NapCat) 的"灰泽满"人格聊天机器人。核心是**�
 
 ## 怎么跑 / 怎么测
 - 启动：NapCat 自己开 → `env\python.exe api_v2.py`(GPT-SoVITS,端口9880) → `python bot.py`（或双击 `启动.bat`）。**改代码/数据后要重启 bot**（有进程内缓存）。
-- 测试：`.venv\Scripts\python.exe -m pytest -q`（**1188 个**，全绿才算完）。
+- 测试：`.venv\Scripts\python.exe -m pytest -q`（**1197 个**，全绿才算完）。
   ⚠️ **数字的权威在 `docs/地图.md` §10**——改了用例数去那里改一次，然后跑
   `.venv/Scripts/python.exe scripts/check_docs.py` 看还有哪几处没跟上（别只改本文件）。
 - 改**检索/判据/素材**后必跑这两个（unit test 测不出"检索该不该命中"）：

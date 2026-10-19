@@ -975,6 +975,73 @@ class TestInjectionTraceWrite:
         assert await self._run(monkeypatch, "") == []
 
 
+class TestMetaSilence:
+    """未点名群聊批次的“元回复”识别（2026-10-20 群 901907410 实测）。"""
+
+    def test_detects_known_meta_replies(self):
+        for t in ("没点灰泽满，灰泽满才不管。",
+                  "没点我，才不管呢",
+                  "（群里没人 @ 灰泽满，保持潜水状态，没有回复。）",
+                  "（不说话，静静看着群里聊天）",
+                  "没人叫我，不插话"):
+            assert reply_style.is_meta_silence(t), t
+
+    def test_normal_group_chat_not_flagged(self):
+        for t in ("灰泽满才不管你钱包空不空呢，有得买就不错啦。",
+                  "群里聊天呢，翁大帅怎么突然关心起这个了。",
+                  "灰泽满没点开也知道是那种视频。",
+                  "大疲？这是哪儿的方言。"):
+            assert not reply_style.is_meta_silence(t), t
+
+
+class TestGroupMetaSilenceNotSent:
+    """未点名的群聊批次：元回复不发、只记用户侧；点名批次不拦。"""
+
+    async def _run(self, monkeypatch, reply_text, addressed):
+        recorded = []
+
+        async def fake_probe(uid, msg, hist, client, debug=False):
+            return ("用户发了个无语的表情", {})   # 纯情绪 → 跳过检索
+
+        async def fake_reply(messages):
+            return reply_text
+
+        def fake_append(uid, user, reply):
+            recorded.append((user, reply))
+
+        async def _anoop(*a, **k):
+            return None
+
+        def _noop(*a, **k):
+            return None
+
+        monkeypatch.setenv("MEMORY_V2_INJECT", "0")
+        monkeypatch.setattr(core, "probe_session", fake_probe)
+        monkeypatch.setattr(core, "generate_reply", fake_reply)
+        monkeypatch.setattr(core, "get_user_history", lambda uid: [])
+        monkeypatch.setattr(core, "get_last_turn_gap_seconds", lambda uid: None)
+        monkeypatch.setattr(core, "append_user_history", fake_append)
+        monkeypatch.setattr(core, "update_memory_v2_shadow_task", _anoop)
+        monkeypatch.setattr(core, "get_llm_route", lambda: "")
+        monkeypatch.setattr(core, "log_corpus_hits", _noop)
+        monkeypatch.setattr(core, "log_block_hits", _noop)
+        monkeypatch.setattr(core.group_memory, "get_group", lambda gid: {})
+        monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
+        monkeypatch.setattr(core, "load_schedule", lambda: {})
+        out = await core.handle_chat("g1", "大疲", is_group=True, group_addressed=addressed)
+        return out, recorded
+
+    async def test_meta_reply_suppressed_when_not_addressed(self, monkeypatch):
+        out, recorded = await self._run(monkeypatch, "没点灰泽满，灰泽满才不管。", addressed=False)
+        assert out == ""
+        assert recorded == [("大疲", "")], "只记用户侧，不记那句元回复"
+
+    async def test_meta_reply_kept_when_addressed(self, monkeypatch):
+        out, recorded = await self._run(monkeypatch, "没点灰泽满，灰泽满才不管。", addressed=True)
+        assert out == "没点灰泽满，灰泽满才不管。"
+        assert recorded == [("大疲", "没点灰泽满，灰泽满才不管。")]
+
+
 class TestSceneBlock:
     """私聊/群聊场景（00_scene）：「现在在哪儿、对面是谁」只按 is_group 二选一。
 
@@ -1000,6 +1067,7 @@ class TestSceneBlock:
         joined = "\n".join(m["content"] for m in msgs if m["role"] == "system")
         assert "现在是群聊" in joined and "现在是一对一私聊" not in joined
         assert msgs[1]["content"].startswith("现在是群聊")
+        assert "偶尔也可以插一句" in joined, "没点名也可能偶尔接一句，文案不能写成“只有点名”"
 
     def test_skeleton_no_longer_asserts_one_on_one(self):
         """骨架里的一对一场景句已搬走——群聊里那句话会把"你"读成同一个人。"""

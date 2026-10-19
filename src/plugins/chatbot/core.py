@@ -43,7 +43,7 @@ from .routing import (
 )
 from .reply_style import (
     clean_reply, is_echo_reply, is_emotion_only_query, uses_time_hook, starts_with_name,
-    uses_hollow_opener, repeated_formula,
+    uses_hollow_opener, repeated_formula, is_meta_silence,
 )
 from .session_memory import (
     probe_session, build_session_context, get_session, is_emoji_msg, previous_session_note,
@@ -932,7 +932,8 @@ async def _fill_retrieval(result: dict, query_text: str, retrieval_query: str, h
 
 async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
                       batch_summary: str = "", is_group: bool = False,
-                      user_transcript: str = "", record_text: str = "") -> str:
+                      user_transcript: str = "", record_text: str = "",
+                      group_addressed: bool = True) -> str:
     """处理一条用户消息，返回机器人回复。vision_desc 为图片描述；batch_summary 为批量归纳。
 
     is_group=True 时按群会话处理：user_id 传群号（会话历史按群记），
@@ -941,6 +942,9 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     user_transcript = **给模型看的**本批完整文本（群聊带 [对灰泽满]/[未点名] 标记）；
     record_text = **记进短期记忆的**版本（群聊是干净的「昵称：文本」）——两者分开，
     免得批次级标记被当成对话历史喂回去。
+
+    group_addressed：这批群里有没有人点名/@ 她（接话门的确定性判定）。为 False 时，
+    如果模型输出的是“没点我/保持潜水”这类**元回复**，视为这批不说话（只记用户侧、不发）。
     """
     deepseek_client, zhipu_client = _get_clients()
 
@@ -1231,6 +1235,12 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         # 用户的这句话也随之不留——但她这轮并没有真的回应过，不记比记错干净。
         print("[记忆] 本轮是兜底回复（生成失败），不写入短期/长期记忆")
         return reply
+    # 未点名的群聊批次：模型如果把内部标记说成了回复（「没点我」「（不说话，潜水）」），
+    # 视为这批她不说话——只记用户侧，不发。点名后的“关我什么事”是正常斗嘴，不拦。
+    if is_group and not group_addressed and is_meta_silence(clean_reply(reply)):
+        print("[群聊] 模型输出的是“没点名/潜水”式元回复 → 这批不发，只记用户侧")
+        append_user_history(user_id, record_msg, "")
+        return ""
     append_user_history(user_id, record_msg, clean_reply(reply))
 
     # --- 📝 异步更新长期记忆（V2；会话级记忆已在对话前 probe_session 同步更新） ---

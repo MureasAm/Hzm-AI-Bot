@@ -230,8 +230,18 @@ async def _flush(win: _UserWindow) -> None:
     # 都算在这条通道上。设在最前面是因为**归纳和接话门在 handle_chat 之前**——
     # 而它们恰恰是群聊多出来的那两次调用，正是要量的东西（见 config._ROUTE）。
     set_llm_route("群" if not win.is_private else "私")
-    msgs, win.pending = win.pending, []
+    # ⚠️ 先取快照，**不要**把 pending 清空。这一批什么时候算“处理完”？
+    #    回复真的生成并记入短期记忆之后才从 pending 里删（_commit_batch）。
+    #    踩坑（2026-10-20，用户 2151983431）：旧代码一进来就 `msgs, win.pending = win.pending, []`，
+    #    而新消息会取消正在进行的 _process；取消时这批已经被取走 → **静默丢失**。
+    #    实况：「跑步呀」已经开始回复，6 秒后「你忘了吗」进来把它取消，
+    #    于是「跑步呀」既没回复、也没进记忆/聊天记录，下一轮只看得到「早」。
+    msgs = list(win.pending)
     my_gen = win.generation   # 起跑时的代际；后面用它判断"我是否已被新消息取代"
+
+    def _commit_batch() -> None:
+        """这一批已经生成并记录完毕，从 pending 删掉；中途被取消就永远走不到这里。"""
+        del win.pending[:len(msgs)]
 
     # 读图：本批所有消息里的**所有**图片统一在回复前解析（不是收到就秒解析，避免节奏割裂）
     async def _parse(src: tuple[str, str]) -> str:
@@ -314,6 +324,7 @@ async def _flush(win: _UserWindow) -> None:
         hist = "\n".join(get_user_history(win.target_id)[-8:])
         if not await should_reply_in_group(deepseek_client, hist, combined):
             append_user_history(win.target_id, combined, "")
+            _commit_batch()   # 这批已经“处理”了（只记不发），不能留给下一轮重判
             print(f"[读秒] 群={win.target_id} 这批不接，只记不发")
             return
 
@@ -324,13 +335,22 @@ async def _flush(win: _UserWindow) -> None:
         record_kwargs["record_text"] = _compose_record_msg(combined, vision_desc)
     reply = await handle_chat(win.target_id, combined, vision_desc=vision_desc,
                               batch_summary=batch_summary, is_group=not win.is_private,
-                              user_transcript=user_transcript, **record_kwargs)
+                              user_transcript=user_transcript,
+                              group_addressed=(True if win.is_private else batch_addressed),
+                              **record_kwargs)
     reply = clean_reply(reply)  # 去括号前缀 + 整条至多 1 个括号
+    if not reply:
+        # 未点名的群聊批次，模型输出的是“没点我/保持潜水”式元回复 → 这批就当没接。
+        # handle_chat 已经只记了用户侧（不记这句元回复），这里不发送、不落聊天记录。
+        _commit_batch()
+        print(f"[读秒] {'群' if not win.is_private else '私聊'}={win.target_id} 这轮选择不说话")
+        return
 
     # 聊天落盘（分析用，gitignore）。放这里而不是发完之后：下面**语音那条路会提前 return**，
     # 放到发送之后会漏掉所有语音回复。这里记的是"她这轮说了什么"（不管最终是语音还是文字）。
     log_turn(win.target_id, not win.is_private, combined, reply,
              images=all_descs, batch_messages=len(msgs))
+    _commit_batch()   # 回复已生成并记录；从这里开始即使被取消也不能重答这一批
 
     # 语音优先：成句回复(≥30字、无内心戏括号/链接)朗读成语音条——像真人"话多就录给你听"。
     # 成功就不刷文字分段（互斥不双发）；未启用/合成失败时 send_voice 返回 False，

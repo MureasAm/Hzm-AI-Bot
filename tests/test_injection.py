@@ -215,3 +215,14 @@ def test_old_folders_are_gone():
     assert not (persona / "world").exists(), "persona/world/ 该整个删掉（数据进了 injection/，legendary 进了 decision/）"
     assert not (persona / "media").exists(), "persona/media/ 该整个删掉（stickers 进了 decision/）"
     assert {d.name for d in persona.iterdir() if d.is_dir()} == {"core", "injection", "decision"}
+
+def test_group_block_allows_occasional_chime_in():
+    """群聊文案不能写成“只有点名才是在跟她说话”（2026-10-20）。
+
+    接话门允许她对没点名的情绪批次偶尔插一句；文案若写“只有点名才算跟她说话”，
+    模型被允许发言时会回「没点我，才不管」或「（不说话，潜水）」。
+    """
+    t = inj.T("group", context="在场成员：甲")
+    assert "偶尔可以插一句" in t
+    assert "内部判断标记" in t
+    assert "只有点名或 @ 灰泽满时才是在跟她说话" not in t
