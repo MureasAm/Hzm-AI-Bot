@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
+from src.plugins.chatbot import memory_v2
 from src.plugins.chatbot.memory_v2 import (
     ShadowMemoryStore,
     build_extraction_prompt,
@@ -960,3 +961,74 @@ def test_empty_ingest_still_creates_new_user(store, clock):
     store.ingest("u2", [], source=_source(now=clock), now=clock)
     state = json.loads(store.state_file.read_text(encoding="utf-8"))
     assert state["users"]["u2"]["memories"] == []
+
+
+class TestFactRelevanceHygiene:
+    """扩写句的泛词不能给无关事实蹭分（2026-10-20，用户 2151983431）。"""
+
+    MORNING = {"kind": "fact", "key": "morning_running",
+               "value": "每天早上要去跑早操（校园跑），学校要求的"}
+    TIME_DIFF = {"kind": "fact", "key": "time_diff",
+                 "value": "与灰泽满时差约3小时（用户当地21点多时）"}
+    GAOKAO = {"kind": "fact", "key": "gaokao_regret", "value": "从高考完一直怪自己没考好"}
+
+    def test_expanded_query_matches_routine_only(self):
+        q = "用户说自己去跑步了"
+        assert memory_v2._fact_relevance(q, self.MORNING) > 0
+        assert memory_v2._fact_relevance(q, self.TIME_DIFF) == 0, "“用户”不能算相关"
+        assert memory_v2._fact_relevance(q, self.GAOKAO) == 0, "“自己”不能算相关"
+
+    def test_long_query_does_not_use_single_char_fallback(self):
+        assert memory_v2._fact_relevance("用户说自己去跑步了", self.TIME_DIFF) == 0
+
+    def test_short_query_still_uses_char_fallback(self):
+        m = {"key": "morning_running", "value": "每天早上要跑步"}
+        assert memory_v2._fact_relevance("早安", m) > 0
+
+    def test_unrelated_short_query_stays_zero(self):
+        assert memory_v2._fact_relevance("在吗", self.MORNING) == 0
+
+
+class TestTimePeriodFacts:
+    """当前时段的固定安排（2026-10-20）：和查询无关也要进 profile 块。"""
+
+    def _seed(self, store, clock):
+        store.ingest("u1", [
+            {"kind": "fact", "key": "morning_running",
+             "value": "每天早上要去跑早操（校园跑），学校要求的",
+             "temporal_scope": "timeless", "explicit": True, "confidence": 0.95},
+            {"kind": "fact", "key": "evening_study_hall",
+             "value": "晚上七点要上晚自习",
+             "temporal_scope": "current", "explicit": True, "confidence": 0.95},
+            {"kind": "fact", "key": "old_morning_routine",
+             "value": "以前每天早上要跑步",
+             "temporal_scope": "past", "explicit": True, "confidence": 0.9},
+        ], source=_source(now=clock), now=clock)
+
+    def test_morning_injects_morning_routine_only(self, store, clock):
+        self._seed(store, clock)
+        ctx = store.build_preference_context("u1", "你忘了吗",
+                                             now=clock.replace(hour=6, minute=30))
+        assert "每天早上要去跑早操" in ctx
+        assert "晚自习" not in ctx
+        assert "以前每天早上要跑步" not in ctx, "过去事实不算当前时段"
+
+    def test_evening_injects_study_hall(self, store, clock):
+        self._seed(store, clock)
+        ctx = store.build_preference_context("u1", "你忘了吗", now=clock)   # 20:00
+        assert "晚自习" in ctx
+        assert "跑早操" not in ctx
+
+    def test_query_selected_fact_not_duplicated(self, store, clock):
+        self._seed(store, clock)
+        ctx = store.build_preference_context("u1", "跑步", now=clock.replace(hour=6, minute=30))
+        assert ctx.count("每天早上要去跑早操") == 1
+
+    def test_time_fact_id_goes_into_used_ids(self, store, clock):
+        self._seed(store, clock)
+        ids: list = []
+        store.build_preference_context("u1", "你忘了吗",
+                                       now=clock.replace(hour=6, minute=30), used_ids=ids)
+        mem = next(m for m in store.snapshot("u1")["memories"]
+                   if m["key"] == "morning_running")
+        assert mem["id"] in ids

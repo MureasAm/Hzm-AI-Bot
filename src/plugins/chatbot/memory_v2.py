@@ -532,37 +532,81 @@ def _relevance(query: str, record: dict) -> float:
 _FUNC_CHARS = set("的了呢吧吗啊嗯哈是不没都我你他她它们这个有和就在吗呀哦噢")
 
 
+# 扩写句里常见的**泛词**：它们跟任何一条“用户/自己/今天…”的事实都能蹭上一个二字组，
+# 把真正相关的挤到第 5 名、被「每轮只取 4 条」截掉（2026-10-20 实测用户 2151983431：
+# 「用户说自己去跑步了」让时差、高考各拿 0.125，跑步那条也是 0.125 → 排第 5 被丢）。
+# 只在 fact 相关度里剔除，不动 commitment 的严格匹配。
+_GENERIC_QUERY_TERMS = (
+    "用户", "自己", "对方", "灰泽满", "hzm", "今天", "现在", "什么",
+    "这个", "那个", "事情", "之前", "说过",
+)
+
+
+def _strip_generic_terms(text: str) -> str:
+    s = text or ""
+    for w in _GENERIC_QUERY_TERMS:
+        s = s.replace(w, "|")
+    return s
+
+
 def _fact_relevance(query: str, record: dict) -> float:
     """fact 的相关度——在 `_relevance` 上补一档**单字兜底**。
 
     为什么必须补（2026-10-17，用户报的）：查 `_relevance` 只看二字组重合，而**招呼/表情
     这类短消息几乎没有二字组能对上任何事实**——实测用户 2151983431 的事实里明明有
     `morning_running：早上要跑步`，但他发「早安」时 query 的二字组是 {早安}，跟
-    {早上, 上要, 要跑, 跑步} 交集为空 → **0 分 → 这条事实根本不会被注入**，
-    于是她连着几天都在问"你起这么早干嘛去"。他发「在跑早操」同理。
+    {早上, 上要, 要跑, 跑步} 交集为空 → **0 分 → 这条事实根本不会被注入**。
 
-    改法：二字组能对上就按原分；**对不上时退回单字重合，但只给 0.35 的权重**——
-    够越过 `> 0` 的门槛被带进来，又排在所有真正二字组命中的事实后面，
-    不会把正经相关的事实挤掉。
+    2026-10-20 又发现了两种失效：
+      · 扩写句里的“用户/自己”让无关事实各蹭到 0.125，和真正相关的并列 → 被 4 条上限截掉；
+      · 单字兜底对**长扩写句**也生效，长句靠“用/户”蹭分。
+    改法：算二字组前先剔掉泛词（`_strip_generic_terms`）；单字兜底**只对 ≤4 字短查询**生效。
+    实测：「用户说自己去跑步了」→ 跑步 0.25、其余 0；「早安/早上好/跑操」仍命中；
+    「在吗/今天午饭吃的啥」仍为 0。
 
     ⚠️ 只用于 fact。**commitment 仍走严格的 `_relevance`**：把"早上要跑步"捞出来是补上下文，
     把一条不相干的约定捞出来会让她凭空提一嘴没做完的事。
     """
-    score = _relevance(query, record)
+    q = _strip_generic_terms(query)
+    score = _relevance(q, record)
     if score > 0:
         return score
+    # 单字兜底只为**短消息**设计（「早安」这类）；长扩写句不许靠单字蹭分。
+    if len(re.sub(r"[^一-鿿A-Za-z0-9]", "", query or "")) > 4:
+        return 0.0
     strip = lambda s: set(re.sub(r"[^一-鿿A-Za-z0-9]", "", s or "")) - _FUNC_CHARS  # noqa: E731
-    q_chars = strip(query)
+    q_chars = strip(q)
     m_chars = strip(f"{record.get('key', '')}{record.get('value', '')}")
     if not q_chars or not m_chars:
         return 0.0
     ratio = len(q_chars & m_chars) / max(1, len(q_chars))
-    # ⚠️ 门槛 0.25：长句里蹭到一个字不算相关，否则短句没捞回来、长句反而被塞进一堆弱相关事实。
-    #    实测："早安" → {早} 1/2 = 0.50 ✅ ｜ "今天早上起来了吗" → {早} 1/4 = 0.25 ✅ ｜
-    #    "今天午饭吃的啥" → 只剩虚字"天"在 memory 里出现，1/6 ❌
     if ratio < 0.25:
         return 0.0
     return 0.35 * ratio
+
+
+# 当前时段 → 事实施加词。为什么需要（2026-10-20）：「你忘了吗」这种提醒句跟任何事实都
+# 对不上字面，但主模型只要手里有“这个时段他固定要做什么”，就能自然接住。
+_TIME_PERIOD_WORDS = {
+    "morning": ("早上", "早晨", "上午", "晨跑", "早操", "早起", "早饭", "morning"),
+    "noon": ("中午", "午饭", "午休", "noon"),
+    "afternoon": ("下午", "傍晚", "afternoon"),
+    "evening": ("晚上", "晚饭", "晚自习", "傍晚", "evening"),
+    "night": ("半夜", "凌晨", "睡前", "熬夜", "晚安", "night"),
+}
+
+
+def _period_words(now: datetime | None) -> tuple:
+    h = (now or datetime.now()).hour
+    if 5 <= h < 11:
+        return _TIME_PERIOD_WORDS["morning"]
+    if 11 <= h < 14:
+        return _TIME_PERIOD_WORDS["noon"]
+    if 14 <= h < 18:
+        return _TIME_PERIOD_WORDS["afternoon"]
+    if 18 <= h < 23:
+        return _TIME_PERIOD_WORDS["evening"]
+    return _TIME_PERIOD_WORDS["night"]
 
 
 def _name_fact_rejection(key: str, value: str, source: dict) -> str:
@@ -931,8 +975,9 @@ class ShadowMemoryStore:
         ][:4]
 
     def _preference_lines(self, active: list[dict], query: str,
-                          used_out: list | None = None) -> list[str]:
-        """靠前段：相处方式（行为句）+ 话题相关事实。
+                          used_out: list | None = None,
+                          now: datetime | None = None) -> list[str]:
+        """靠前段：相处方式（行为句）+ 话题相关事实 + **当前时段的固定安排**。
 
         used_out：传入 list 时追加**实际选中注入**的记忆 id（条目级注入轨迹用）。
         预算截断的边界情况可能多记一条（它的前缀仍在提示词里），只做诊断、不做账。
@@ -948,6 +993,7 @@ class ShadowMemoryStore:
                     if used_out is not None and memory.get("id"):
                         used_out.append(str(memory["id"]))
         facts = self._select_facts(active, query)
+        selected_ids = set()
         if facts:
             rendered = "；".join(
                 f"{'过去事实/' if m.get('temporal_scope') == 'past' else ''}{m.get('key')}：{m.get('value')}"
@@ -956,7 +1002,30 @@ class ShadowMemoryStore:
             lines.append(inj.T("profile", "fact", rendered=rendered))
             if used_out is not None:
                 used_out.extend(str(m["id"]) for m in facts if m.get("id"))
+            selected_ids = {str(m.get("id")) for m in facts if m.get("id")}
+        # 当前时段的固定安排：和查询相关度无关。「你忘了吗」这类提醒句靠它接得住。
+        # 已经按查询注入过的不重复（同一件事一轮只说一次）。
+        time_facts = [m for m in self._time_facts(active, now=now)
+                      if str(m.get("id")) not in selected_ids]
+        if time_facts:
+            rendered = "；".join(f"{m.get('key')}：{m.get('value')}" for m in time_facts)
+            lines.append(inj.T("profile", "time_fact", rendered=rendered))
+            if used_out is not None:
+                used_out.extend(str(m["id"]) for m in time_facts if m.get("id"))
         return lines
+
+    def _time_facts(self, active: list[dict], *, now: datetime | None = None,
+                    limit: int = 2) -> list[dict]:
+        """当前时段对得上的固定事实（最多 2 条）。过去事实不算。"""
+        words = _period_words(now)
+        out = []
+        for memory in active:
+            if memory.get("kind") != "fact" or memory.get("temporal_scope") == "past":
+                continue
+            text = f"{memory.get('key', '')}{memory.get('value', '')}".lower()
+            if any(w.lower() in text for w in words):
+                out.append(memory)
+        return out[:limit]
 
     def _commitment_lines(self, active: list[dict], query: str,
                           used_out: list | None = None) -> list[str]:
@@ -1004,7 +1073,7 @@ class ShadowMemoryStore:
         used_ids：传入 list 时追加实际注入的记忆 id（条目级注入轨迹用）。
         """
         active = self._active_memories(user_id, now=now, session_id=session_id)
-        return self._fit(self._preference_lines(active, query or "", used_out=used_ids),
+        return self._fit(self._preference_lines(active, query or "", used_out=used_ids, now=now),
                          PREFERENCE_BUDGET_CHARS)
 
     def her_nickname(self, user_id: str, *, now: datetime | None = None) -> str:
@@ -1060,7 +1129,7 @@ class ShadowMemoryStore:
         active = self._active_memories(user_id, now=now, session_id=session_id)
         question = query or ""
         lines = (
-            self._preference_lines(active, question)
+            self._preference_lines(active, question, now=now)
             + self._commitment_lines(active, question)
         )
         return self._fit(lines, self.context_budget_chars)

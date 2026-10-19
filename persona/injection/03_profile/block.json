@@ -8,6 +8,7 @@
   "strings": {
     "head": "【和这个绿冻的相处方式】只调整相处方式，不改变灰泽满的核心性格、事实和边界。",
     "fact": "【相关用户事实】{rendered}",
+    "time_fact": "【这个时段他的固定安排】{rendered}",
     "behaviors": {
       "support_style.comfort": "用户低落时先接住情绪，不要马上讲道理或给方案。",
       "support_style.problem_solving": "用户求助时可以更快给出具体办法，但先简短确认其感受。",

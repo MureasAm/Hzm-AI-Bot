@@ -170,6 +170,35 @@ class TestProbeSession:
     async def test_empty_msg_returns_early(self):
         assert await sm.probe_session("u1", "  ", "历史", None) == ""
 
+    async def test_prompt_includes_time_events_and_anchor_rules(self, monkeypatch):
+        """探测要看到“现在几点 + 本场已知的事”，扩写规则要锚定最近一句。
+
+        2026-10-20：原来探测只拿最近 8 条历史 + 上一轮话题，既不知道几点、也看不到本场事件，
+        「你忘了吗」只能扩成“某件事”。现在把时间/事件补进去，并明确要求保留原词、不猜内容。
+        """
+        now = datetime(2026, 10, 20, 6, 23)
+        sm._write_json(sm._file_for("u1"), {
+            "topic": "早上出门",
+            "events": ["用户每天早上要跑操"],
+            "last_active": datetime.now().isoformat(),
+            "topic_since": datetime.now().isoformat(),
+        })
+        captured = {}
+
+        async def fake_llm(client, prompt, max_tokens=250, temperature=0.2):
+            captured["prompt"] = prompt
+            return json.dumps({"topic": "早上出门", "topic_changed": False,
+                               "new_event": None, "expanded_query": None}, ensure_ascii=False)
+
+        monkeypatch.setattr(sm, "_llm", fake_llm)
+        await sm.probe_session("u1", "你忘了吗", "历史", object(), now=now)
+
+        p = captured["prompt"]
+        assert "用户每天早上要跑操" in p
+        assert "2026-10-20" in p and "06:23" in p and "（早上）" in p
+        assert "本场已知的事" in p
+        assert "保留用户原词" in p and "言语行为" in p
+
     async def test_entities_normalized_in_debug_meta(self, monkeypatch):
         """probe 顺带识别专名（作品/作者/地点/动物），供【关联背景】沿边走。
 

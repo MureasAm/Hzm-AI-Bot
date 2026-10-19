@@ -312,15 +312,23 @@ SESSION_PROBE_PROMPT = """你是会话话题追踪器。用户在聊天中刚发
   · 🤔 = 疑惑
   补全句应表达"用户发了【表情含义】"这个意思（如"用户发了个无语的表情"），用于检索记忆理解用户情绪，不要加引号。
 - 非表情的短消息（如"咋这样""真的吗"）**或指代性消息**（如"能读给我听听吗""那个呢"——单看不知道指什么）才结合语境补全成完整句；普通长消息（自带话题）返回 null。
+- **扩写要保留这句话的言语行为**：提醒 / 质问 / 纠正 / 撒娇 / 试探，不要改写成中性陈述。
+  例：用户说「开会呀，你忘了吗？」→「用户在提醒灰泽满：自己今天要开会（之前说过的安排），问她是不是忘了」
+- 扩写**优先保留用户原词**（「跑步」就写跑步，不换成“正在跑步”之类的近义词），并带上上下文里的具体信息（谁、什么时候、什么事）；上下文确实没说的不要编。
+- 若用户在提醒/追问一件之前提过的事：先看【现在】和【本场已知的事】，能对上就写出来（「用户在提醒灰泽满：<那件事>，问她是不是忘了」）；对不上就写「某件之前说过的事」，**不要猜具体内容**。
+- 用户只是在提醒/重复之前说过的事 → new_event 为 null（别记成“用户分享了…”）。
   · 补全**只写「这句话在当前语境下是什么意思」**，别编对话里没出现的细节。
     ❌「用户问灰泽满关于小说乌色月**中那个内容的细节**」——"那个内容"是凭空加的；
       补成「用户追问小说乌色月的事」就够（2026-10-16 探针上出现的）。
 【下面是要判的那一轮】
 
+【现在】{now}
 【上一轮已知话题】{prev_topic}（为空表示新会话）
 
 【最近对话】
 {history}
+
+【本场已知的事】{events}
 
 【用户刚发的消息】{user_msg}
 
@@ -385,8 +393,32 @@ def _is_duplicate_event(new_event: str, events: list) -> bool:
     return False
 
 
+_WEEKDAYS = "一二三四五六日"
+
+
+def _now_label(now: datetime | None = None) -> str:
+    """「现在」给探测看：日期 + 星期 + 几点 + 时段（早上/晚上…）。
+
+    为什么要给探测看时间（2026-10-20）：「你忘了吗」这种提醒句，只有配上“现在是早上 +
+    他早上固定要做什么”才能被理解；探测原来完全不知道现在几点。
+    """
+    now = now or datetime.now()
+    h = now.hour
+    if 5 <= h < 11:
+        period = "早上"
+    elif 11 <= h < 14:
+        period = "中午"
+    elif 14 <= h < 18:
+        period = "下午"
+    elif 18 <= h < 23:
+        period = "晚上"
+    else:
+        period = "深夜"
+    return f"{now.strftime('%Y-%m-%d')} 周{_WEEKDAYS[now.weekday()]} {now.strftime('%H:%M')}（{period}）"
+
+
 async def probe_session(user_id: str, user_msg: str, history_text: str, client,
-                        debug: bool = False):
+                        debug: bool = False, now: datetime | None = None):
     """对话前同步探测会话：判断话题延续/转换、累计事件、扩充短 query。
 
     一次 LLM 调用同时完成三件事（避免对话后异步更新导致的话题滞后一轮）：
@@ -405,10 +437,15 @@ async def probe_session(user_id: str, user_msg: str, history_text: str, client,
         return (msg, {}) if debug else msg
     prev = get_session(user_id)
     prev_topic = prev.get("topic", "")
+    events = "；".join(
+        str(e).strip() for e in (prev.get("events") or []) if str(e).strip()
+    ) or "（无）"
     prompt = SESSION_PROBE_PROMPT.format(
         prev_topic=prev_topic or "（新会话）",
         history=history_text or "（无）",
         user_msg=msg,
+        events=events,
+        now=_now_label(now),
     )
     content = await _llm(client, prompt, max_tokens=320, temperature=0.2)
     expanded = msg

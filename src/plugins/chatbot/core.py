@@ -955,7 +955,9 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     #    两个消费者都用它：① 注入层（【最近对话记录】）② L3 判 same_request
     #    ——L3 必须知道那几轮之间隔了多久，否则隔 8 小时的一句会被算成"连着"。
     user_history_timed = get_user_history_timed(user_id)
-    history_text = "\n".join(user_history_timed[-8:]) if user_history_timed else ""
+    # 探测和 L3 都看**完整**短期记忆（10 条 / 5 轮）；原来只给 8 条，
+    # 短句/提醒要指代的上一句可能刚好落在被裁掉的那两条里（2026-10-20）。
+    history_text = "\n".join(user_history_timed) if user_history_timed else ""
     # 距上一轮多久（此刻还没 append 本轮，最后一条就是上一轮）。同一场对话内为空串
     _gap_sec = get_last_turn_gap_seconds(user_id)
     history_gap_note = humanize_gap(_gap_sec) if _gap_sec is not None else ""
