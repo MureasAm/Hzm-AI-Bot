@@ -173,8 +173,12 @@ def log_block_hits(blocks) -> None:
         pass
 
 
-def log_turn(target_id: str, is_group: bool, user_text: str, reply: str) -> None:
+def log_turn(target_id: str, is_group: bool, user_text: str, reply: str,
+             images=None, batch_messages=None) -> None:
     """追加一轮。**只在消息真的发出去之后调用。**
+
+    `images`：本批所有图片的视觉描述（含被抑制的表情包，供事后诊断）；
+    `batch_messages`：本批由几条原始消息攒成。
 
     失败静默——分析用的记录，绝不能因为它写不进去而影响聊天。
     """
@@ -192,6 +196,10 @@ def log_turn(target_id: str, is_group: bool, user_text: str, reply: str) -> None
             "user": (user_text or "").strip(),
             "reply": (reply or "").strip(),
         }
+        if images is not None:
+            rec["images"] = list(images)
+        if batch_messages is not None:
+            rec["batch_messages"] = int(batch_messages)
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     except Exception as e:

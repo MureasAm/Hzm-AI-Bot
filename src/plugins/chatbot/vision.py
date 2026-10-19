@@ -13,6 +13,7 @@
 """
 import base64
 import io
+import re
 from pathlib import Path
 
 import httpx
@@ -22,8 +23,9 @@ from .config import get_vision_model, extract_chat_content
 from .constants import VISION_MAX_TOKENS, VISION_EXTRA_PARAMS
 
 VISION_PROMPT = (
-    "简要描述这张图的内容和氛围：是表情包/截图/照片/文档就说清最直观的要点，"
-    "包括人物动作表情、画面文字、场景氛围。60字以内，适合聊天时接梗。"
+    "先判断图片类型，第一行只输出一个标签：[表情包] / [截图] / [照片] / [文档] / [其他]。\n"
+    "第二行简要描述画面内容和文字：人物动作表情、画面里的文字、场景，60字以内。\n"
+    "只描述看到的东西，不要写“适合接梗/适合吐槽”这类用途判断。"
 )
 DOWNLOAD_TIMEOUT = 10.0
 MAX_IMAGE_BYTES = 15 * 1024 * 1024  # 15MB 上限，超出跳过
@@ -145,6 +147,20 @@ def _to_data_uri(data: bytes, mime: str = "image/jpeg") -> str:
 def _extra_params(model: str) -> dict:
     """按视觉模型给额外参数（glm 要关思考，gemini 不认识这个字段）。"""
     return VISION_EXTRA_PARAMS.get(model, {})
+
+
+_IMAGE_KIND_RE = re.compile(r"^\s*\[?(表情包|截图|照片|文档|其他)\]?")
+
+
+def image_kind(desc: str) -> str:
+    """视觉描述 → 图片类型；没有标签的旧描述按“表情包”前缀兜底。"""
+    text = (desc or "").strip()
+    m = _IMAGE_KIND_RE.match(text)
+    if m:
+        return m.group(1)
+    if text.startswith(("表情包", "一张表情包")):
+        return "表情包"
+    return "其他"
 
 
 async def describe_image_bytes(client, data: bytes, model: str = None) -> str:

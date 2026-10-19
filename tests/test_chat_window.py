@@ -14,13 +14,33 @@ class TestCombineText:
         assert cw._combine_text([]) == ""
 
 
+class TestKeepImageDesc:
+    """文字+表情包时是否保留视觉描述（2026-10-19）。"""
+
+    def test_question_text_drops_sticker(self):
+        assert cw._keep_image_desc("怎么评价", "[表情包]\n一只虫子") is False
+
+    def test_short_name_or_greeting_keeps_sticker(self):
+        assert cw._keep_image_desc("云子", "[表情包]\n躺在床上睡觉") is True
+        assert cw._keep_image_desc("晚安", "[表情包]\n睡觉") is True
+
+    def test_explicit_image_reference_keeps_sticker(self):
+        assert cw._keep_image_desc("这个表情包是什么", "[表情包]\n一只虫子") is True
+
+    def test_empty_text_keeps_sticker(self):
+        assert cw._keep_image_desc("", "[表情包]\n一只虫子") is True
+
+    def test_screenshot_always_kept(self):
+        assert cw._keep_image_desc("怎么评价", "[截图]\n小说封面") is True
+
+
 class TestFlush:
     async def test_flush_combines_and_splits(self, monkeypatch):
         win = cw._UserWindow("u1")
         win.pending = [("u1", "在吗", []), ("u1", "天气咋样", [])]
         captured = {}
 
-        async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False):
+        async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False, user_transcript=""):
             captured["text"] = text
             captured["vision"] = vision_desc
             captured["summary"] = batch_summary
@@ -57,7 +77,7 @@ class TestFlush:
         win.pending = [("u2", "", [("http://img1", "img1.image")])]
         captured = {}
 
-        async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False):
+        async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False, user_transcript=""):
             captured["text"] = text
             captured["vision"] = vision_desc
             captured["summary"] = batch_summary
@@ -90,7 +110,7 @@ class TestFlush:
         win.pending = [("u10", "你看", [("http://a", "fa"), ("http://b", "fb")])]
         captured = {}
 
-        async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False):
+        async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False, user_transcript=""):
             captured["vision"] = vision_desc
             return "好"
 
@@ -122,12 +142,88 @@ class TestFlush:
         assert captured["vision"] == "一张猫；一张狗"
         assert captured["summary_msgs"] == [("你看", "一张猫；一张狗")]
 
+    async def test_sticker_description_dropped_when_text_has_topic(self, monkeypatch):
+        """文字+表情包：表情包只是反应，描述不进当前批次（2807992783 的翻车点）。"""
+        win = cw._UserWindow("u11")
+        win.pending = [("u11", "怎么评价", [("http://img", "f")])]
+        captured = {}
+
+        async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False,
+                              user_transcript=""):
+            captured.update(text=text, vision=vision_desc, transcript=user_transcript)
+            return "好"
+
+        async def fake_describe(bot, url, file):
+            return "[表情包]\n一只绿色虫子在地上蠕动"
+
+        async def fake_summarize(msgs):
+            return ""
+
+        async def fake_send(win_, content):
+            pass
+
+        async def fake_send_voice(*a, **k):
+            return False
+
+        async def fake_pick(client, reply, avoid_groups=None, **kwargs):
+            return None
+
+        monkeypatch.setattr(cw, "handle_chat", fake_handle)
+        monkeypatch.setattr(cw, "_describe_image_src", fake_describe)
+        monkeypatch.setattr(cw, "summarize_batch", fake_summarize)
+        monkeypatch.setattr(cw, "_send", fake_send)
+        monkeypatch.setattr(cw, "send_voice", fake_send_voice)
+        monkeypatch.setattr(cw, "pick_sticker", fake_pick)
+        monkeypatch.setattr(cw, "_sticker_state", {})
+
+        await cw._flush(win)
+        assert captured["vision"] == ""
+        assert captured["transcript"] == "怎么评价"
+
+    async def test_screenshot_description_kept(self, monkeypatch):
+        """截图可能就是话题，不能因为带了文字就丢。"""
+        win = cw._UserWindow("u12")
+        win.pending = [("u12", "怎么评价", [("http://img", "f")])]
+        captured = {}
+
+        async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False,
+                              user_transcript=""):
+            captured.update(vision=vision_desc, transcript=user_transcript)
+            return "好"
+
+        async def fake_describe(bot, url, file):
+            return "[截图]\n小说《空中杀人事件》的封面和简介"
+
+        async def fake_summarize(msgs):
+            return ""
+
+        async def fake_send(win_, content):
+            pass
+
+        async def fake_send_voice(*a, **k):
+            return False
+
+        async def fake_pick(client, reply, avoid_groups=None, **kwargs):
+            return None
+
+        monkeypatch.setattr(cw, "handle_chat", fake_handle)
+        monkeypatch.setattr(cw, "_describe_image_src", fake_describe)
+        monkeypatch.setattr(cw, "summarize_batch", fake_summarize)
+        monkeypatch.setattr(cw, "_send", fake_send)
+        monkeypatch.setattr(cw, "send_voice", fake_send_voice)
+        monkeypatch.setattr(cw, "pick_sticker", fake_pick)
+        monkeypatch.setattr(cw, "_sticker_state", {})
+
+        await cw._flush(win)
+        assert "小说《空中杀人事件》" in captured["vision"]
+        assert "[图片：[截图]" in captured["transcript"]
+
     async def test_flush_vision_fallback_keeps_reply(self, monkeypatch):
         win = cw._UserWindow("u3")
         win.pending = [("u3", "", [("http://img1", "")])]
         captured = {}
 
-        async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False):
+        async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False, user_transcript=""):
             captured["vision"] = vision_desc
             return "嗯？没看清"
 
@@ -162,7 +258,7 @@ class TestVoiceFlush:
         win.pending = [("u4", "在吗", [])]
         voice_calls = []
 
-        async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False):
+        async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False, user_transcript=""):
             return reply_text
 
         async def fake_summarize(msgs):
@@ -242,7 +338,7 @@ class TestVoiceSurvivesInterrupt:
         win.pending = [("u9", "在吗", [])]
         sent, voice_done = [], []
 
-        async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False):
+        async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False, user_transcript=""):
             if supersede_during_handle:
                 win.generation += 1   # 模拟"她还在组织语言时，用户又发了一条"
             return self.SENTENCE

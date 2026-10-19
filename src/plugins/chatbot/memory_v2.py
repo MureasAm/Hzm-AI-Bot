@@ -50,6 +50,8 @@ _VALID_FOR_DAYS = {"3d": 3, "14d": 14, "90d": 90}
 COMMITMENT_TTL_DAYS = 14
 COMMITMENT_ONE_TIME_TTL_HOURS = 48
 COMMITMENT_STANDING_TTL_DAYS = 90
+# 称呼提示的冷却：同一用户 10 分钟内最多提示一次，避免用户连叫外号时她每句都用。
+NICKNAME_HINT_COOLDOWN_SECONDS = 600
 _ONE_TIME_COMMITMENT_RE = re.compile(r"今天|今晚|一会儿|待会|等下|明天")
 _STANDING_COMMITMENT_RE = re.compile(r"以后|天天|每天|每次|一直|长期")
 # 这些 key 的事实**不管聊没聊到都带上**——名字/地点/时区/身份是"不矛盾的底线"。
@@ -57,7 +59,7 @@ _STANDING_COMMITMENT_RE = re.compile(r"以后|天天|每天|每次|一直|长期
 # 模型实际会产 location / timezone / identity 这些，旧名单等于没生效。
 _ALWAYS_ON_FACT_KEYS = {
     "preferred_name", "name", "nickname", "location", "city",
-    "timezone", "identity", "occupation", "background",
+    "timezone", "identity", "occupation", "background", "her_nickname",
 }
 # 上面那批里**天然只有一个值**的（名字/地点/时区/职业）——同一 key 的新值必须顶掉旧的。
 # ⚠️ 不能直接用 `_ALWAYS_ON_FACT_KEYS` 当顶替名单：`identity` / `background` 会有多条
@@ -67,7 +69,15 @@ _ALWAYS_ON_FACT_KEYS = {
 #    1750961968 正是如此，还叠上"她每句都叫名字"的正反馈）。
 _SINGLE_VALUED_FACT_KEYS = {
     "preferred_name", "name", "nickname", "location", "city", "timezone", "occupation",
+    "her_nickname",
 }
+# 名字类事实的代码闸门（2026-10-19）：模型会把"云子"（网络用语，嫌她不懂/很云）、
+# "我是绿冻"（粉丝身份）、"用户希望被称呼为X"（整句）都当成 preferred_name。
+# 名字必须是**用户明确要求她这样称呼**，且 value 本身像名字。
+_NAME_KEYS = {"preferred_name", "name", "nickname"}
+_NAME_REQUEST_RE = re.compile(r"叫我|称呼我|喊我|管我叫|名字叫|我叫|以后叫|可以叫")
+_NAME_VALUE_OK_RE = re.compile(r"^[一-鿿A-Za-z0-9_\-·]{1,12}$")
+_NAME_VALUE_BAD_WORDS = ("用户", "希望", "称呼", "自称", "或者", "不叫")
 
 _KINDS = {"fact", "interaction_preference", "commitment"}
 _ACTIONS = {"upsert", "retract"}
@@ -83,7 +93,6 @@ _PREFERENCE_VALUES = {
     "address_style": {"nickname", "plain", "casual"},
     "reply_length": {"short", "medium", "long"},
     "topic_preference": {"engage", "avoid"},
-    "self_reference": {"name", "first_person", "nickname"},
 }
 _SENSITIVE_KEYS = {
     "phone", "phone_number", "email", "exact_address", "home_address",
@@ -167,6 +176,13 @@ MEMORY_V2_EXTRACT_PROMPT = """你是灰泽满私聊机器人的记忆候选提�
      （要问"他表白那次"，翻出来五条分不清哪条是哪条），还白占位置。
    · `preferred_name` / `nickname` 的 value **只写名字本身**（如"草草子哥"），
      **不要写成"用户希望被称呼为X"这种整句**——那个句子会被当成名字注入，又长又怪。
+     ⚠️ 只有用户**明确要求灰泽满这样称呼他**（"叫我X""以后叫我X"）才记。
+     "我是绿冻/暖冻"是粉丝身份，不是名字；"云子""云玩家"是网络用语（说他不懂/很云），不是名字；
+     玩梗称呼（"爸爸"）和整句（"用户希望被称呼为X"）都不要记。
+   · **用户给灰泽满起的称呼**：key=`her_nickname`，value 只写称呼本身（如"灰宝"）。
+     只在用户明确说"叫你X""就喊你X""可以叫你X吗"时记；这是对她的昵称，不是她的身份设定。
+     ⚠️ 只记这个称呼事实，**不要**借此改变她的自称——她默认仍自称"灰泽满"；
+     用户后来说"还是叫灰泽满吧/别叫X了"，对 `her_nickname` 输出 action=retract。
    · temporal_scope：**经历**用 past（可叠加，不倒旧的）；**地域/时区/身份**这类长期成立用 timeless；
      **当前状态**（在准备考试 / 在搬家）用 current（**同一 key 的新值会顶掉旧的**）。
    · valid_for：**只有"时效性近况"**（在准备考试 / 这周军训 / 最近感冒）才填其大概期限，
@@ -183,7 +199,6 @@ MEMORY_V2_EXTRACT_PROMPT = """你是灰泽满私聊机器人的记忆候选提�
    address_style=nickname|plain|casual                **他希望灰泽满怎么称呼他自己**
    reply_length=short|medium|long                     回复长度偏好
    topic_preference=engage|avoid                      话题偏好与雷区
-   self_reference=name|first_person|nickname          她该怎么自称
    用户明确说喜欢/不喜欢时 explicit=true；仅从互动表现推断时 explicit=false。
    ⚠️ **用户嫌她"阴阳怪气／挤兑人／说话冲／不好好讲话"，要她改语气 → `banter_tolerance=low`。**
       （2026-10-17 实测漏了：用户 3498594329 明说"以后能保证好好讲话、不要冲人、不要阴阳怪气"，
@@ -201,6 +216,8 @@ MEMORY_V2_EXTRACT_PROMPT = """你是灰泽满私聊机器人的记忆候选提�
 【反例清单——抽到这些一律不记】
 - 灰泽满自己/机器人自身的事：版本号、功能、更新日志、"你是不是 AI"、她自己的身份设定。
   **不管用户是告知、询问还是吐槽，只要讲的是灰泽满/机器人自己，都不是"关于用户的事实"**。
+  ⚠️ **例外**：用户给**她**起的称呼（`her_nickname`，如"我就叫你灰宝"）可以记——
+  那是用户对她的昵称，不是她的身份设定。
 - **网上抄来的段子 / 定型文 / 角色扮演**：长段工整得像"一篇自我介绍"的（"我重新介绍一下自己"
   "丫头，我…"这类套路开局）、网上流传的梗文案、演一个人设给你看——**那是在玩，不是他的真实信息**，
   一条都别记。判据：**这段字读起来像"一篇文章/一个模板"，而不是"他随口在说自己的事"**。
@@ -548,6 +565,20 @@ def _fact_relevance(query: str, record: dict) -> float:
     return 0.35 * ratio
 
 
+def _name_fact_rejection(key: str, value: str, source: dict) -> str:
+    """名字类事实的代码闸门：必须由用户明确要求称呼，且 value 本身像名字。"""
+    if key not in _NAME_KEYS:
+        return ""
+    excerpt = str((source or {}).get("excerpt") or "")
+    if not _NAME_REQUEST_RE.search(excerpt):
+        return "name_requires_explicit_request"
+    if not _NAME_VALUE_OK_RE.fullmatch(value or ""):
+        return "name_value_not_a_name"
+    if any(w in value for w in _NAME_VALUE_BAD_WORDS):
+        return "name_value_not_a_name"
+    return ""
+
+
 class ShadowMemoryStore:
     """Validate, consolidate, and inspect Memory V2 shadow state.
 
@@ -564,6 +595,7 @@ class ShadowMemoryStore:
         self.state_file = Path(state_file)
         self.audit_file = Path(audit_file)
         self.context_budget_chars = max(100, int(context_budget_chars))
+        self._nickname_hint_last: dict[str, float] = {}
         self._lock = threading.Lock()
 
     def _empty_state(self) -> dict:
@@ -664,6 +696,10 @@ class ShadowMemoryStore:
 
         if kind == "fact" and not explicit:
             return None, "inferred_fact_blocked"
+        if kind == "fact" and key in _NAME_KEYS and action != "retract":
+            reason = _name_fact_rejection(key, value, normalized_source)
+            if reason:
+                return None, reason
         if kind == "interaction_preference":
             if key not in _PREFERENCE_VALUES or value not in _PREFERENCE_VALUES[key]:
                 return None, "invalid_preference_dimension"
@@ -948,6 +984,30 @@ class ShadowMemoryStore:
         """靠前注入：相处方式行为句 + 话题相关事实（system，个体适配）。"""
         active = self._active_memories(user_id, now=now, session_id=session_id)
         return self._fit(self._preference_lines(active, query or ""), PREFERENCE_BUDGET_CHARS)
+
+    def her_nickname(self, user_id: str, *, now: datetime | None = None) -> str:
+        """用户给她起的外号（没有返回空串）。只用于识别/情境提示，不改变默认自称。"""
+        for memory in self._active_memories(user_id, now=now):
+            if memory.get("kind") == "fact" and memory.get("key") == "her_nickname":
+                return str(memory.get("value") or "").strip()
+        return ""
+
+    def nickname_hint(self, user_id: str, user_msg: str, *,
+                      now: datetime | None = None) -> str:
+        """用户**这一轮**叫了她的外号时，返回一条一次性自称提示；否则空串。
+
+        2026-10-19 用户定：默认永远自称"灰泽满"，只有用户这轮主动叫外号
+        （"灰宝在吗"）时，才允许这一轮偶尔用外号自称一次。不做长期偏好、不猜情绪。
+        """
+        now = now or datetime.now()
+        last = self._nickname_hint_last.get(user_id, 0.0)
+        if now.timestamp() - last < NICKNAME_HINT_COOLDOWN_SECONDS:
+            return ""
+        nickname = self.her_nickname(user_id, now=now)
+        if nickname and nickname in (user_msg or ""):
+            self._nickname_hint_last[user_id] = now.timestamp()
+            return inj.T("profile", "nickname_hint", nickname=nickname)
+        return ""
 
     def build_commitment_context(
         self,

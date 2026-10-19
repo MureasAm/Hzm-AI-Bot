@@ -241,6 +241,14 @@ class TestSummarizeBatch:
         monkeypatch.setattr(core, "_get_clients", _fail)
         assert await core.summarize_batch([("在吗", "")]) == ""
 
+    async def test_only_one_text_plus_image_skips(self, monkeypatch):
+        """一条文字 + 一条图片不归纳：图片不该成为这批"的主题（2026-10-19）。"""
+        def _fail(*a, **k):
+            raise AssertionError("一条文字+图片不应调用归纳")
+
+        monkeypatch.setattr(core, "_get_clients", _fail)
+        assert await core.summarize_batch([("怎么评价", "[表情包]\n一只虫子")]) == ""
+
     async def test_success_returns_summary(self, monkeypatch):
         class _FakeCompletions:
             async def create(self, **kwargs):
@@ -401,6 +409,25 @@ class TestHistoryGapNote:
             "在吗", [], ["用户：在吗"], history_gap_note="")
         block = [m["content"] for m in msgs if m["content"].startswith("【最近对话记录】")]
         assert block and "距离上一轮对话" not in block[0]
+
+    def test_nickname_hint_is_injected_near_user(self, monkeypatch):
+        monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
+        msgs = core.build_message_list(
+            "灰宝在吗", [], [],
+            nickname_hint="【称呼提示】用户这一轮叫你「灰宝」。",
+        )
+        assert any(m["content"].startswith("【称呼提示】") for m in msgs)
+
+    def test_user_transcript_overrides_trailing_vision_block(self, monkeypatch):
+        """私聊 batch 用按顺序拼好的 transcript；不要再把图片描述追加成尾部块。"""
+        monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
+        msgs = core.build_message_list(
+            "怎么评价", [], [],
+            vision_desc="[表情包]\n一只虫子",
+            user_transcript="怎么看《空中杀人事件》\n怎么评价",
+        )
+        assert msgs[-1]["content"] == "怎么看《空中杀人事件》\n怎么评价"
+        assert "[图片：" not in msgs[-1]["content"]
 
 
 class TestLengthGuard:

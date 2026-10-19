@@ -154,6 +154,20 @@ class TestVisionModelParams:
         assert vision._extra_params("gemini-3.1-flash-lite") == {}
 
 
+class TestImageKind:
+    """视觉描述的类型标签（2026-10-19 加，用于区分表情包和真正的图片内容）。"""
+
+    def test_tagged_types(self):
+        assert vision.image_kind("[表情包]\n一只虫子") == "表情包"
+        assert vision.image_kind("[截图]\n聊天界面") == "截图"
+        assert vision.image_kind("[照片]\n一只猫") == "照片"
+        assert vision.image_kind("[文档]\n一份表格") == "文档"
+
+    def test_untagged_legacy_description(self):
+        assert vision.image_kind("表情包：灰发角色躺着") == "表情包"
+        assert vision.image_kind("一只猫在窗台上") == "其他"
+
+
 class TestDescribeImage:
     async def test_data_uri_passthrough(self):
         client = _FakeClient("一只猫猫")

@@ -174,7 +174,7 @@ def test_system_prompt_is_readable():
 def test_behavior_sentence_table_covers_the_13_used_keys():
     """相处方式那张表必须覆盖 memory_v2 会产出的键，缺一个就静默少一句。"""
     assert inj.behavior_sentence("support_style", "comfort")
-    assert inj.behavior_sentence("self_reference", "first_person")
+    assert inj.behavior_sentence("self_reference", "nickname") == ""
     assert inj.behavior_sentence("不存在的键", "x") == ""
 
 

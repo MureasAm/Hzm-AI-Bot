@@ -92,6 +92,13 @@ class TestRecord:
         log_turn("123456", True, "小李：在吗\n小王：在", "在在在")
         assert _read(_tmp_log)[0]["kind"] == "group"
 
+    def test_records_images_and_batch_size(self, _tmp_log):
+        log_turn("u1", False, "怎么评价", "好",
+                 images=["[表情包]\n一只虫子"], batch_messages=2)
+        rec = _read(_tmp_log)[0]
+        assert rec["images"] == ["[表情包]\n一只虫子"]
+        assert rec["batch_messages"] == 2
+
     def test_appends_not_overwrites(self, _tmp_log):
         log_turn("u1", False, "第一句", "回一")
         log_turn("u1", False, "第二句", "回二")

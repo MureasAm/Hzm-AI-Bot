@@ -113,10 +113,10 @@ def _detach_behavior_from_rrf() -> bool:
 async def summarize_batch(msgs: list) -> str:
     """把一批消息归纳成一两句话（说了什么 + 语气 + 意图），供模型理解整批。
 
-    只有攒批 ≥2 条才归纳（单条零额外延迟）；只归纳原文已有信息，不编造；
+    只有**≥2 条有文字**的消息才归纳（单条/只有图片不归纳）；只归纳原文已有信息，不编造；
     失败返回空串（调用方忽略，原文照旧）。
     """
-    if len(msgs) < 2:
+    if sum(1 for t, _ in msgs if str(t or "").strip()) < 2:
         return ""
     texts = []
     for t, v in msgs:
@@ -355,6 +355,7 @@ def build_message_list(user_msg: str, fused_items: list,
                        prev_session_note: str = "", same_request: dict = None,
                        profile_context: str = "", commitment_context: str = "",
                        emotion_context: str = "", daily_context: str = "",
+                       user_transcript: str = "", nickname_hint: str = "",
                        log_hits: bool = False) -> list:
     """按优先级组装发送给模型的消息列表。
 
@@ -511,9 +512,11 @@ def build_message_list(user_msg: str, fused_items: list,
         hit_blocks.append("same_request")
 
 
-    # 感知源②：图片消息——把视觉描述并入用户消息，避免空消息让模型以为"对方没说话"
-    final_user = user_msg
-    if vision_desc:
+    # 感知源②：图片消息——把视觉描述并入用户消息，避免空消息让模型以为"对方没说话"。
+    # user_transcript 是 chat_window 按消息顺序拼好的完整批次（含图片标记、已过滤表情包）；
+    # 有它就优先用，避免把 vision_desc 再当尾部块重复/抢话题。
+    final_user = user_transcript or user_msg
+    if not user_transcript and vision_desc:
         final_user = f"{user_msg}\n[图片：{vision_desc}]" if user_msg.strip() else f"[图片：{vision_desc}]"
 
     # 感知源③：批量归纳（用户连发多条时，作为理解整批的提示层，原文仍完整保留）
@@ -550,6 +553,12 @@ def build_message_list(user_msg: str, fused_items: list,
     if emotion_context:
         messages.append({"role": "system", "content": emotion_context})
         hit_blocks.append("mood")
+
+    # 称呼提示（2026-10-19）：只在用户**这一轮**叫了她的外号时出现。
+    # 默认仍自称"灰泽满"；这一条是一次性的情境提示，不是长期偏好。
+    if nickname_hint:
+        messages.append({"role": "system", "content": nickname_hint})
+        hit_blocks.append("nickname")
 
     # 【他今天的日常】（第 20 块）：**每轮都注**，放最尾——跟【当前时间】同理，
     # 它是"每分钟都可能变"的动态段，放中间会把后面的块一起拖成缓存 miss。
@@ -830,7 +839,8 @@ async def _fill_retrieval(result: dict, query_text: str, retrieval_query: str, h
 
 
 async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
-                      batch_summary: str = "", is_group: bool = False) -> str:
+                      batch_summary: str = "", is_group: bool = False,
+                      user_transcript: str = "") -> str:
     """处理一条用户消息，返回机器人回复。vision_desc 为图片描述；batch_summary 为批量归纳。
 
     is_group=True 时按群会话处理：user_id 传群号（会话历史按群记），
@@ -939,6 +949,10 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         commitment_context = _MEMORY_V2_STORE.build_commitment_context(user_id, retrieval_query)
         if daily_memory.enabled():
             daily_context = daily_memory.context(user_id)
+    # 称呼提示：用户这轮叫了 her_nickname 才注入；不做长期自称偏好。
+    nickname_hint = ""
+    if not is_group and memory_v2.injection_enabled():
+        nickname_hint = _MEMORY_V2_STORE.nickname_hint(user_id, user_msg)
     # 当下情绪住在**会话记忆**里（2026-10-10 从长期记忆搬来），跟话题一起 3h 消散。
     # 它**不受 v2 开关控制**——情绪是会话级感知，生产里就该生效；注入位置仍是紧挨用户消息。
     emotion_context = "" if is_group else mood_note(user_id)
@@ -960,6 +974,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         same_request=ctx.get("same_request"),
         profile_context=profile_context, commitment_context=commitment_context,
         emotion_context=emotion_context, daily_context=daily_context,
+        user_transcript=user_transcript, nickname_hint=nickname_hint,
         log_hits=True,
     )
 
@@ -1059,7 +1074,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     # 存**清洗后**的版本（clean_reply 平时在 chat_window 里、本函数返回之后才跑）：
     # 否则她带换行/多括号的原始输出会存进记忆，再作为"她自己怎么说话"的 few-shot 喂回去，
     # 变成自我强化回路——后处理每次都得再洗一遍，坏习惯却一直被喂养。
-    record_msg = _compose_record_msg(user_msg, vision_desc)
+    record_msg = user_transcript or _compose_record_msg(user_msg, vision_desc)
     if is_fallback_reply(reply):
         # 这一轮压根没生成出来（上游异常），**整轮都不记**：
         # 记了就等于让她"记得自己说过"一句故障文案，还会当 few-shot 喂回去。

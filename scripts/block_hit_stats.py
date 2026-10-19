@@ -22,7 +22,7 @@ import _common  # noqa: E402
 
 HITS_FILE = ROOT / "data" / "block_hits.jsonl"
 ALL_BLOCKS = ["commitment", "history", "same_request", "batch",
-              "query_hint", "now", "mood", "daily"]
+              "query_hint", "now", "mood", "daily", "nickname"]
 
 
 def main() -> int:

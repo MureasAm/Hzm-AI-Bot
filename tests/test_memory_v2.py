@@ -212,7 +212,9 @@ def test_single_valued_fact_supersedes_even_when_timeless(store, clock):
             "u1",
             [{"kind": "fact", "key": "preferred_name", "value": value,
               "temporal_scope": "timeless", "explicit": True, "confidence": 0.9}],
-            source=_source(now=clock + timedelta(minutes=i)), now=clock + timedelta(minutes=i),
+            source=_source(now=clock + timedelta(minutes=i),
+                           user="我叫小明" if i == 0 else "以后叫我阿明"),
+            now=clock + timedelta(minutes=i),
         )
 
     kept = [m["value"] for m in store.snapshot("u1")["memories"] if m["status"] != "superseded"]
@@ -408,6 +410,96 @@ def test_same_key_commitment_supersedes_old_value(store, clock):
     assert active[0]["value"] == "明天给用户发语音，说到做到"
 
 
+def test_her_nickname_is_always_on_fact(store, clock):
+    """用户给她起的外号：存 her_nickname，且不因 query 不相关而丢。"""
+    accepted = store.ingest(
+        "u1",
+        [{"kind": "fact", "key": "her_nickname", "value": "灰宝",
+          "explicit": True, "confidence": 0.9}],
+        source=_source(now=clock, user="我就叫你灰宝吧"),
+        now=clock,
+    )
+    assert accepted and accepted[0]["key"] == "her_nickname"
+    assert "her_nickname：灰宝" in store.build_preference_context("u1", "今天天气怎么样", now=clock)
+
+
+def test_nickname_hint_only_when_user_calls_it(store, clock):
+    """第一档：只有用户这一轮叫了外号才提示一次；默认仍自称灰泽满。"""
+    store.ingest(
+        "u1",
+        [{"kind": "fact", "key": "her_nickname", "value": "灰宝",
+          "explicit": True, "confidence": 0.9}],
+        source=_source(now=clock, user="以后我就叫你灰宝了"),
+        now=clock,
+    )
+    hint = store.nickname_hint("u1", "灰宝在吗", now=clock)
+    assert "灰宝" in hint and "灰泽满" in hint
+    assert store.nickname_hint("u1", "在吗", now=clock) == ""
+    assert store.nickname_hint("u2", "灰宝在吗", now=clock) == ""
+
+
+def test_nickname_hint_cooldown(store, clock):
+    """用户连叫外号时，10 分钟内只提示一次，避免她每句都自称灰宝。"""
+    store.ingest(
+        "u1",
+        [{"kind": "fact", "key": "her_nickname", "value": "灰宝",
+          "explicit": True, "confidence": 0.9}],
+        source=_source(now=clock, user="以后我就叫你灰宝了"),
+        now=clock,
+    )
+    assert store.nickname_hint("u1", "灰宝在吗", now=clock)
+    assert store.nickname_hint("u1", "灰宝", now=clock + timedelta(minutes=1)) == ""
+    assert store.nickname_hint("u1", "灰宝", now=clock + timedelta(minutes=11))
+
+
+def test_self_reference_dimension_is_removed(store, clock):
+    """2026-10-19：整个 self_reference 维度删除——第三人称自称是核心人设，不能按用户改。"""
+    for value in ("first_person", "nickname"):
+        accepted = store.ingest(
+            "u1",
+            [{"kind": "interaction_preference", "key": "self_reference", "value": value,
+              "explicit": True, "confidence": 0.9}],
+            source=_source(now=clock), now=clock,
+        )
+        assert accepted == []
+
+
+def test_preferred_name_requires_explicit_request(store, clock):
+    """2026-10-19：'云子'是网络用语（嫌她不懂/很云），不是名字——没有称呼请求就拒收。"""
+    rejected = store.ingest(
+        "u1",
+        [{"kind": "fact", "key": "preferred_name", "value": "云子",
+          "explicit": True, "confidence": 0.9}],
+        source=_source(now=clock, user="云子", reply="灰泽满才没有要睡觉呢"),
+        now=clock,
+    )
+    assert rejected == []
+
+    accepted = store.ingest(
+        "u1",
+        [{"kind": "fact", "key": "preferred_name", "value": "云子",
+          "explicit": True, "confidence": 0.9}],
+        source=_source(now=clock, user="我叫云子，记住了吗", reply="记住了"),
+        now=clock,
+    )
+    assert accepted and accepted[0]["value"] == "云子"
+
+
+def test_preferred_name_rejects_fan_identity_and_sentences(store, clock):
+    for value, user_text in [
+        ("绿冻", "我是绿冻"),
+        ("用户希望被称呼为草草子", "你叫我草草子可以吗"),
+    ]:
+        accepted = store.ingest(
+            "u1",
+            [{"kind": "fact", "key": "preferred_name", "value": value,
+              "explicit": True, "confidence": 0.9}],
+            source=_source(now=clock, user=user_text, reply="嗯"),
+            now=clock,
+        )
+        assert accepted == [], value
+
+
 @pytest.mark.parametrize(
     ("key", "value"),
     [
@@ -528,13 +620,12 @@ def test_context_budget_is_hard_cap(store, clock):
 
 
 class TestPreferenceDimensions:
-    """偏好维度从 4 个扩到 8 个（2026-10-10）——每个维度都是"枚举值 → 行为句"。"""
+    """偏好维度从 4 个扩到 8 个，2026-10-19 删掉 self_reference → 7 个。"""
 
     NEW_DIMENSIONS = [
         ("address_style", "plain"),
         ("reply_length", "short"),
         ("topic_preference", "avoid"),
-        ("self_reference", "first_person"),
     ]
 
     def test_new_dimensions_validate_and_render_as_behavior(self, store, clock):
@@ -549,14 +640,14 @@ class TestPreferenceDimensions:
             now=clock,
         )
 
-        assert len(accepted) == 4
+        assert len(accepted) == 3
         assert all(item["status"] == "confirmed" for item in accepted)
 
         context = store.build_preference_context("u1", "在吗", now=clock)
         assert "别用亲昵称谓" in context
         assert "回复尽量短" in context
         assert "被带到就自然岔开" in context
-        assert "自称时用'我'" in context
+        assert "自称时用用户给她的昵称" not in context
 
     def test_unknown_value_is_rejected_for_new_dimensions(self, store, clock):
         accepted = store.ingest(
@@ -572,7 +663,7 @@ class TestPreferenceDimensions:
     def test_all_dimension_values_have_behavior_sentences(self):
         from src.plugins.chatbot import injection, memory_v2
 
-        assert len(memory_v2._PREFERENCE_VALUES) == 8
+        assert len(memory_v2._PREFERENCE_VALUES) == 7
         for key, values in memory_v2._PREFERENCE_VALUES.items():
             for value in values:
                 behavior = injection.behavior_sentence(key, value)
@@ -593,7 +684,7 @@ class TestContextSegments:
                 {"kind": "commitment", "key": "promise", "value": "下次给用户唱一段",
                  "actor": "assistant", "explicit": True, "confidence": 0.96},
             ],
-            source=_source(now=clock, reply="行，下次给你唱一段"),
+            source=_source(now=clock, user="我叫小明", reply="行，下次给你唱一段"),
             now=clock,
         )
 
@@ -655,7 +746,7 @@ def test_audit_log_is_jsonl_and_does_not_escape_user_partition(store, clock, tmp
             "explicit": True,
             "confidence": 0.98,
         }],
-        source=_source(now=clock),
+        source=_source(now=clock, user="我叫小明"),
         now=clock,
     )
 
@@ -674,8 +765,8 @@ def test_delete_user_removes_state_but_keeps_other_users(store, clock):
         "explicit": True,
         "confidence": 0.98,
     }
-    store.ingest("u1", [item], source=_source(now=clock), now=clock)
-    store.ingest("u2", [item | {"value": "小红"}], source=_source(now=clock), now=clock)
+    store.ingest("u1", [item], source=_source(now=clock, user="我叫小明"), now=clock)
+    store.ingest("u2", [item | {"value": "小红"}], source=_source(now=clock, user="我叫小红"), now=clock)
 
     store.delete_user("u1", now=clock)
 
@@ -759,9 +850,11 @@ class TestShadowExtraction:
         assert "反例清单" in prompt
         assert "版本号" in prompt  # bot_version 那类误记的正面拦截
         assert "感知模块的活" in prompt  # 时间/天气交给 context_probe
-        # 8 个偏好维度都要在提示词里（否则模型不会产出新维度）
-        for key in ("address_style", "reply_length", "topic_preference", "self_reference"):
+        # 7 个偏好维度都要在提示词里（self_reference 已于 2026-10-19 删除）
+        for key in ("address_style", "reply_length", "topic_preference"):
             assert key in prompt
+        assert "her_nickname" in prompt
+        assert "self_reference" not in prompt
 
     async def test_extract_and_ingest_uses_strict_schema(self, store, clock):
         captured = {}

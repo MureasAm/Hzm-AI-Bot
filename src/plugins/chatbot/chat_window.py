@@ -11,6 +11,7 @@ generation 计数用于区分代际：插话取消旧任务后，旧任务不会
 """
 import asyncio
 import random
+import re
 import time
 from pathlib import Path
 
@@ -28,7 +29,7 @@ from .reply_style import (
     split_reply, split_delay, clean_reply,
 )
 from .voice import should_voice, send_voice, voice_requested
-from .vision import describe_image_bytes, _read_image_bytes
+from .vision import describe_image_bytes, _read_image_bytes, image_kind
 from .constants import (
     READ_WINDOW_MIN_SECONDS, READ_WINDOW_MAX_SECONDS, SPLIT_REPLY_ENABLED,
     GROUP_EVENT_COOLDOWN, STICKER_COOLDOWN_TURNS, STICKER_RECENT_KEEP, PROJECT_ROOT,
@@ -80,6 +81,35 @@ async def _eager_download(source: str) -> None:
 def _combine_text(msgs) -> str:
     """合并本批文本（图片源不参与文本合并）。首元素为文本，兼容 (text, ...) 任意尾巴。"""
     return "\n".join(t for t, *_ in msgs if t.strip()).strip()
+
+
+# 文字里**明确指图**的说法：这时候图片就是话题，不能丢。
+_IMAGE_REF_RE = re.compile(
+    r"这张图|这个图|这张截图|这个截图|这个表情包|表情包|图里|图中|图上|"
+    r"上面这个|这个表情|看这个|你看这个|看图|这图"
+)
+# 问句/评价请求：文字在追问上一轮的话题，表情包通常只是反应。
+_QUESTION_RE = re.compile(r"怎么|什么|为什么|如何|评价|觉得|呢|吗|哪|咋")
+
+
+def _keep_image_desc(text: str, desc: str) -> bool:
+    """文字+表情包时，是否把表情包描述喂给模型（2026-10-19）。
+
+    实测 2807992783：上一轮在聊小说，用户发「怎么评价」+ 虫子表情包，
+    表情包描述被当成了当前话题，她评价虫子而不是小说。
+    → 文字非空、图是表情包、文字没有明确指图时，**丢掉表情包描述**；
+      只有「云子」「晚安」「哈哈」这类短的非问句、纯图片消息才保留（表情包本身就是内容）。
+    """
+    if image_kind(desc) != "表情包":
+        return True
+    t = (text or "").strip()
+    if not t:
+        return True
+    if _IMAGE_REF_RE.search(t):
+        return True
+    if len(t) <= 4 and not _QUESTION_RE.search(t):
+        return True
+    return False
 
 
 # 群聊发送者昵称缓存：(group:user) → 昵称
@@ -216,7 +246,9 @@ async def _flush(win: _UserWindow) -> None:
     for (i, _), d in zip(jobs, results):
         if d:
             descs[i].append(d)
-    parsed = [(s, t, ds) for (s, t, _), ds in zip(msgs, descs)]  # (sender, text, [该消息的图片描述...])
+    all_descs = [d for ds in descs for d in ds]
+    parsed = [(s, t, [d for d in ds if _keep_image_desc(t, d)])
+              for (s, t, _), ds in zip(msgs, descs)]  # (sender, text, [保留的图片描述...])
 
     # 组装：私聊=纯文本；群聊=每条带发送者名字，bot 知道谁在说话
     id_to_name = {}
@@ -232,6 +264,17 @@ async def _flush(win: _UserWindow) -> None:
         combined = "\n".join(lines).strip()
         if id_to_name:
             group_memory.upsert_members(win.target_id, id_to_name)
+    # 私聊：按消息顺序拼完整 transcript（图片放在它所属消息的文字后面）；
+    # 群聊沿用原逻辑（每条已带发送者名，图片统一放尾部）。
+    user_transcript = ""
+    if win.is_private:
+        tlines = []
+        for _, t, ds in parsed:
+            if t.strip():
+                tlines.append(t.strip())
+            for d in ds:
+                tlines.append(f"[图片：{d}]")
+        user_transcript = "\n".join(tlines).strip()
     vision_desc = "；".join(d for _, _, ds in parsed for d in ds)
     img_count = sum(len(ds) for _, _, ds in parsed)
     print(f"[读秒] {'群' if not win.is_private else '私聊'}={win.target_id} "
@@ -259,12 +302,14 @@ async def _flush(win: _UserWindow) -> None:
             return
 
     reply = await handle_chat(win.target_id, combined, vision_desc=vision_desc,
-                              batch_summary=batch_summary, is_group=not win.is_private)
+                              batch_summary=batch_summary, is_group=not win.is_private,
+                              user_transcript=user_transcript)
     reply = clean_reply(reply)  # 去括号前缀 + 整条至多 1 个括号
 
     # 聊天落盘（分析用，gitignore）。放这里而不是发完之后：下面**语音那条路会提前 return**，
     # 放到发送之后会漏掉所有语音回复。这里记的是"她这轮说了什么"（不管最终是语音还是文字）。
-    log_turn(win.target_id, not win.is_private, combined, reply)
+    log_turn(win.target_id, not win.is_private, combined, reply,
+             images=all_descs, batch_messages=len(msgs))
 
     # 语音优先：成句回复(≥30字、无内心戏括号/链接)朗读成语音条——像真人"话多就录给你听"。
     # 成功就不刷文字分段（互斥不双发）；未启用/合成失败时 send_voice 返回 False，
