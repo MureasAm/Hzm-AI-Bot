@@ -11,6 +11,7 @@
 用法：
     python scripts/injection_snapshot.py -o outputs/eval/injection_golden.json
     python scripts/injection_snapshot.py -o /tmp/after.json   # 改完再跑，然后 diff
+    python scripts/injection_snapshot.py --group -o /tmp/group.json   # 群聊场景单独抓一份
 """
 import argparse
 import json
@@ -77,25 +78,33 @@ def _args(**over):
     return base
 
 
-def capture() -> dict:
+def capture(group: bool = False) -> dict:
     _freeze_clock()
     out = {}
 
-    msgs = core.build_message_list(**_args())
+    msgs = core.build_message_list(**_args(is_group=group))
     out["全量(普通短消息)"] = _normalize([m["content"] for m in msgs if m["role"] == "system"])
 
     # 纯表情：user_msg 本身要是表情，才会走 emoji 变体（is_emoji_msg 看的是正文，不是 hint）
-    msgs = core.build_message_list(**_args(user_msg="[表情：可怜]", query_hint="用户发了个可怜的表情"))
+    msgs = core.build_message_list(**_args(user_msg="[表情：可怜]", query_hint="用户发了个可怜的表情",
+                                           is_group=group))
     out["全量(纯表情)"] = _normalize([m["content"] for m in msgs if m["role"] == "system"])
 
-    msgs = core.build_message_list(**_args(user_history="（上一条记忆）"))
+    msgs = core.build_message_list(**_args(user_history="（上一条记忆）", is_group=group))
     out["历史=非列表分支"] = _normalize([m["content"] for m in msgs if m["role"] == "system"])
 
-    msgs = core.build_message_list(**_args(prev_session_note=""))
+    msgs = core.build_message_list(**_args(prev_session_note="", is_group=group))
     out["无上次聊过"] = _normalize([m["content"] for m in msgs if m["role"] == "system"])
 
-    msgs = core.build_message_list(**_args(same_request={"count": 1, "what": "x"}))
+    msgs = core.build_message_list(**_args(same_request={"count": 1, "what": "x"}, is_group=group))
     out["没到连续索要"] = _normalize([m["content"] for m in msgs if m["role"] == "system"])
+
+    # 关联背景（作品→作者→喜好）：只验"段头确实注进去"，内容由 retrieval 单测覆盖
+    msgs = core.build_message_list(**_args(
+        association_context="《空中杀人现场》是东野圭吾的作品。",
+        association_entities=["空中杀人现场", "东野圭吾"],
+        is_group=group))
+    out["关联背景"] = _normalize([m["content"] for m in msgs if m["role"] == "system"])
 
     return out
 
@@ -103,13 +112,15 @@ def capture() -> dict:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("-o", "--out", required=True)
+    ap.add_argument("--group", action="store_true",
+                    help="按群聊捕获（注入 00_scene 的群聊文案、group_context 等）")
     args = ap.parse_args()
-    data = capture()
+    data = capture(group=args.group)
     p = Path(args.out)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
     n = sum(len(v) for v in data.values())
-    print(f"[OK] {n} 块快照 → {p}")
+    print(f"[OK] {n} 块快照（{'群聊' if args.group else '私聊'}）→ {p}")
     return 0
 
 

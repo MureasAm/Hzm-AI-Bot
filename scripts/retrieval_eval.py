@@ -48,6 +48,7 @@ from src.plugins.chatbot.config import _get_clients  # noqa: E402
 from src.plugins.chatbot.constants import ZHIPU_BASE_URL  # noqa: E402
 from src.plugins.chatbot.persona import load_persona_rules  # noqa: E402
 from src.plugins.chatbot.retrieval import select_behavior_item  # noqa: E402
+from src.plugins.chatbot.core import build_terms_note  # noqa: E402
 from src.plugins.chatbot.routing import classify_l3  # noqa: E402  (L3：一次判行为 + 措辞)
 from src.plugins.chatbot.corpus_judge import judge_corpus  # noqa: E402  (corpus 语义判)
 
@@ -84,7 +85,7 @@ def check_case(case: dict, got: dict) -> dict:
     checks = []
     for source, cond in expect.items():
         items = got.get(source, [])
-        dict_style = source in ("preference", "core_story")
+        dict_style = source in ("preference", "core_story", "associations", "terms")
         if "should" in cond:
             ids = _ids_of(items, dict_style)
             hit = [i for i in cond["should"] if i in ids]
@@ -123,7 +124,7 @@ def _summarize_got(got: dict, top: int = 3) -> dict:
     """压缩各 source 命中项（id + 分数），供 --verbose 打印。"""
     out = {}
     for source, items in got.items():
-        if source in ("preference", "core_story"):
+        if source in ("preference", "core_story", "associations", "terms"):
             out[source] = [(str(i.get("id", "")), round(i.get("score", 0), 3)) for i in items[:top]]
         elif source == "corpus":
             out[source] = [(it.item_id, round(it.score, 3), it.text[:18]) for it in items[:top]]
@@ -149,11 +150,18 @@ async def snapshot(query: str, client, ds_client, behaviors) -> tuple:
     # L3：一次调用同时判行为 + 措辞（与 core.handle_chat 同一条路）
     l3 = (await classify_l3(ds_client, query, "", behaviors)
           if ds_client else {"behavior": "", "phrases": []})
+    # 关联背景（2026-10-20）：已知实体沿边走的偏好要并进偏好检索——与 handle_chat 同一条路。
+    # 评测里没有 probe 的 entities（那要一轮真实对话），只测"消息里直接出现专名"这条确定性命中。
+    assoc = retrieval.resolve_associations(query)
+    term_hits: list = []
+    build_terms_note(query, hit_out=term_hits)
     got = {
         "corpus": await corpus_items(query, qv, ds_client),
-        "preference": retrieval.retrieve_preferences(query),
+        "preference": retrieval.retrieve_preferences(query, extra_ids=assoc["preference_ids"]),
         "core_story": retrieval.retrieve_core_stories(query, qv),
         "behavior": [],
+        "associations": [{"id": e, "score": 1.0} for e in assoc["entities"]],
+        "terms": [{"id": kw, "score": 1.0} for kw in term_hits],
     }
     # 行为：LLM 判意图 → 判别词兜底（不再有 embedding 基线）
     item = select_behavior_item(query, l3["behavior"], behaviors)
@@ -229,7 +237,8 @@ async def run(cases, verbose: bool, only_id: str = None):
 
     # ---- 汇总：按 source 的命中率 ----
     total = {"behavior": [0, 0], "corpus": [0, 0],
-             "preference": [0, 0], "core_story": [0, 0]}
+             "preference": [0, 0], "core_story": [0, 0],
+             "associations": [0, 0], "terms": [0, 0]}
     for r in results:
         for c in r["checks"]:
             total[c["source"]][1] += 1

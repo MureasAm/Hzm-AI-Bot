@@ -411,3 +411,104 @@ class TestEnqueue:
         bot = object()
         cw.enqueue("u1", "u1", "", [], bot, True)
         assert "u1" not in cw._windows  # 空消息不入缓冲
+
+
+class TestGroupTranscript:
+    """群聊消息结构（2026-10-20）：每条带 [对灰泽满]/[未点名]，整批带点名情况。
+
+    为什么要确定性标记：群里有好几个绿冻，主模型不该去猜"这句'你'是谁"——
+    点名判定复用接话门的 `_addressed_to_her`（@ / 引用她 / 直呼名字）。
+    """
+
+    async def test_marks_batch_line_and_plain_record(self, monkeypatch):
+        win = cw._UserWindow("g1")
+        win.is_private = False
+        win.pending = [("u1", "今天下雨了", []),
+                       ("u2", "[有人@了灰泽满] 你怎么看", [])]
+        captured = {}
+
+        async def fake_name(bot, group_id, user_id):
+            return "甲" if user_id == "u1" else "乙"
+
+        async def fake_gate(client, hist, batch):
+            return True
+
+        async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False,
+                              user_transcript="", **kwargs):
+            captured.update(text=text, is_group=is_group,
+                            transcript=user_transcript, record=kwargs.get("record_text"))
+            return "在呢"
+
+        async def fake_summarize(msgs):
+            return ""
+
+        async def fake_pick(client, reply, avoid_groups=None, **kwargs):
+            return None
+
+        async def fake_send(win_, content):
+            pass
+
+        monkeypatch.setattr(cw, "_get_sender_name", fake_name)
+        monkeypatch.setattr(cw, "should_reply_in_group", fake_gate)
+        monkeypatch.setattr(cw, "handle_chat", fake_handle)
+        monkeypatch.setattr(cw, "summarize_batch", fake_summarize)
+        monkeypatch.setattr(cw, "_get_clients", lambda: (object(), None))
+        monkeypatch.setattr(cw, "pick_sticker", fake_pick)
+        monkeypatch.setattr(cw, "_sticker_state", {})
+        monkeypatch.setattr(cw, "_send", fake_send)
+        monkeypatch.setattr(cw.group_memory, "upsert_members", lambda *a, **k: None)
+
+        await cw._flush(win)
+
+        assert captured["is_group"] is True
+        lines = captured["transcript"].splitlines()
+        assert lines[0] == "本批有人点名灰泽满"
+        assert "[未点名] 甲：今天下雨了" in lines[1:]
+        assert any(l.startswith("[对灰泽满] 乙：") for l in lines[1:])
+        # 短期记忆记干净版：批次标记不进历史
+        assert captured["record"] == ("甲：今天下雨了\n"
+                                      "乙：[有人@了灰泽满] 你怎么看")
+
+    async def test_images_are_inline_per_message(self, monkeypatch):
+        win = cw._UserWindow("g2")
+        win.is_private = False
+        win.pending = [("u1", "看这个", [("http://x", "fx")])]
+        captured = {}
+
+        async def fake_name(bot, group_id, user_id):
+            return "甲"
+
+        async def fake_describe(bot, url, file):
+            return "一只虫子"
+
+        async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False,
+                              user_transcript="", **kwargs):
+            captured.update(transcript=user_transcript, vision=vision_desc)
+            return "在呢"
+
+        async def fake_summarize(msgs):
+            return ""
+
+        async def fake_gate(client, hist, batch):
+            return True
+
+        async def fake_pick(client, reply, avoid_groups=None, **kwargs):
+            return None
+
+        async def fake_send(win_, content):
+            pass
+
+        monkeypatch.setattr(cw, "_get_sender_name", fake_name)
+        monkeypatch.setattr(cw, "_describe_image_src", fake_describe)
+        monkeypatch.setattr(cw, "should_reply_in_group", fake_gate)
+        monkeypatch.setattr(cw, "handle_chat", fake_handle)
+        monkeypatch.setattr(cw, "summarize_batch", fake_summarize)
+        monkeypatch.setattr(cw, "_get_clients", lambda: (object(), None))
+        monkeypatch.setattr(cw, "pick_sticker", fake_pick)
+        monkeypatch.setattr(cw, "_sticker_state", {})
+        monkeypatch.setattr(cw, "_send", fake_send)
+        monkeypatch.setattr(cw.group_memory, "upsert_members", lambda *a, **k: None)
+
+        await cw._flush(win)
+
+        assert "[未点名] 甲：看这个 [图片：一只虫子]" in captured["transcript"].splitlines()

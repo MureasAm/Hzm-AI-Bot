@@ -1,0 +1,27 @@
+{
+ "_readme": "第 7 块·关联背景：**实体别名 + 边**，不复制事实/态度。\n\n【为什么有它】用户只报作品名（如《空中杀人现场》）时，模型要能沿「作品 → 作者 → 她的喜好」自己接上——不逐本收书、不逐条写特例。\n【唯一真值】事实仍放同目录 terms.json，态度仍放 04_preferences；这里只存 id/关系。新增书/地点只加实体和边，不改代码。\n【什么时候注】用户消息命中的已知实体（别名子串），或会话探测（session_memory.probe_session 的 entities 字段）识别到作者/地点/动物时；识别不到就不注。\n【边怎么解析】retrieval.resolve_associations 走最多 2 跳：has_preference → 偏好块补对应条目（不在这里复制态度原文）；written_by/representative_work/located_in → 渲染成【关联背景】里的关系句。\n【match:false】像《真相》这种词平时是普通词（'说出真相'），只作代表作品引用、**不能**拿来做消息匹配。",
+ "entities": {
+  "空中杀人现场": {"kind": "work", "aliases": ["空中杀人事件", "杀人现场在云上"]},
+  "白夜行": {"kind": "work"},
+  "真相": {"kind": "work", "match": false},
+  "挪威的森林": {"kind": "work"},
+  "东野圭吾": {"kind": "author", "aliases": ["东野"]},
+  "村上春树": {"kind": "author", "aliases": ["村上"]},
+  "周杰伦": {"kind": "singer", "aliases": ["周董"]},
+  "袋鼠": {"kind": "animal", "aliases": ["kangaroo"]},
+  "澳洲": {"kind": "place", "aliases": ["澳大利亚", "袋鼠国"]}
+ },
+ "edges": [
+  {"from": "空中杀人现场", "to": "东野圭吾", "rel": "written_by"},
+  {"from": "白夜行", "to": "东野圭吾", "rel": "written_by"},
+  {"from": "真相", "to": "东野圭吾", "rel": "written_by"},
+  {"from": "挪威的森林", "to": "村上春树", "rel": "written_by"},
+  {"from": "东野圭吾", "to": "白夜行", "rel": "representative_work"},
+  {"from": "东野圭吾", "to": "真相", "rel": "representative_work"},
+  {"from": "村上春树", "to": "挪威的森林", "rel": "representative_work"},
+  {"from": "东野圭吾", "to": "preference:author", "rel": "has_preference"},
+  {"from": "村上春树", "to": "preference:author", "rel": "has_preference"},
+  {"from": "周杰伦", "to": "preference:singer", "rel": "has_preference"},
+  {"from": "袋鼠", "to": "澳洲", "rel": "located_in"}
+ ]
+}

@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 
 from .constants import (
     CORE_STORY_VECTOR_FILE,
-    PREFERENCES_FILE, CORPUS_KEYWORDS_FILE, BEHAVIOR_KEYWORDS_FILE,
+    PREFERENCES_FILE, CORPUS_KEYWORDS_FILE, BEHAVIOR_KEYWORDS_FILE, ASSOCIATIONS_FILE,
     RAG_THRESHOLD, CORPUS_TOP_N, CORPUS_CANDIDATE_N, CORPUS_LEXICAL_EXTRA_N,
     CORPUS_KEYWORD_FLOOR, CORPUS_STRONG_KEYWORD,
     PREFERENCE_TOP_N,
@@ -31,6 +31,7 @@ from .constants import (
 )
 from .rag import cosine_similarity, load_vector_db
 from .persona import _format_behavior_rule
+from . import injection as inj
 
 
 @dataclass
@@ -310,11 +311,170 @@ def load_preferences() -> list:
     return _preferences_cache
 
 
-def retrieve_preferences(user_query: str, top_n: int = PREFERENCE_TOP_N) -> list:
+# ==================== 关联背景（作品 → 作者 → 喜好） ====================
+# 数据在 persona/injection/07_terms/associations.json（**只存实体别名 + 边**）：
+# 事实仍在 terms.json，态度仍在 04_preferences，这里只负责"沿边走"并把关系句渲染出来。
+# 为什么不让 terms 自己展开：terms 是"一个词什么意思"的关键词匹配，**按话题索引**；
+# 关联要的是"用户只报作品名，也能自己接上作者/地点"。两者判据不同，别混在一处。
+
+_associations_cache = None
+_MAX_ASSOCIATION_SEEDS = 3      # 一次最多从几个命中实体出发（防一条消息带出一串）
+_MAX_ASSOCIATION_ENTITIES = 4   # 轨迹/实体清单上限：种子 + 作者 + 2 本代表作
+_ASSOCIATION_NOTE_BUDGET = 300  # 【关联背景】整段字符预算
+
+
+def load_associations() -> dict:
+    """读 associations.json（缓存）。坏文件/缺文件返回空结构——注入链不能因此挂掉。"""
+    global _associations_cache
+    if _associations_cache is not None:
+        return _associations_cache
+    empty = {"entities": {}, "edges": []}
+    if not ASSOCIATIONS_FILE.exists():
+        _associations_cache = empty
+        return _associations_cache
+    try:
+        data = json.loads(ASSOCIATIONS_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        _associations_cache = empty
+        return _associations_cache
+    if not isinstance(data, dict):
+        _associations_cache = empty
+        return _associations_cache
+    entities = data.get("entities") if isinstance(data.get("entities"), dict) else {}
+    edges = [e for e in (data.get("edges") or [])
+             if isinstance(e, dict) and e.get("from") and e.get("to")]
+    _associations_cache = {
+        "entities": {str(k): v for k, v in entities.items() if isinstance(v, dict)},
+        "edges": edges,
+    }
+    return _associations_cache
+
+
+def _canonical_entity(name: str) -> str:
+    """实体名/别名 → 实体 id；不认识返回空串。"""
+    name = (name or "").strip()
+    if not name:
+        return ""
+    entities = load_associations()["entities"]
+    if name in entities:
+        return name
+    for eid, meta in entities.items():
+        if any(str(a).strip() == name for a in (meta.get("aliases") or [])):
+            return eid
+    return ""
+
+
+def match_entities(text: str, extra_entities=None) -> list:
+    """消息里命中的已知实体（别名子串）+ 探测给出的实体（规范化后）。
+
+    `match:false` 的实体（如《真相》——平时是普通词）不参与子串匹配，
+    但探测**明确**给出它时仍然认（那是"用户真在聊这本书"）。
+    """
+    data = load_associations()
+    entities = data["entities"]
+    found: list = []
+    lowered = (text or "").lower()
+    for eid, meta in entities.items():
+        if meta.get("match", True) is False:
+            continue
+        keys = [eid] + [str(a) for a in (meta.get("aliases") or []) if a]
+        if any(k.lower() in lowered for k in keys):
+            found.append(eid)
+    for raw in extra_entities or []:
+        eid = _canonical_entity(str(raw))
+        if eid and eid not in found:
+            found.append(eid)
+    return found[:_MAX_ASSOCIATION_SEEDS]
+
+
+def resolve_associations(text: str, extra_entities=None) -> dict:
+    """沿关联边走最多 2 跳，返回 `{entities, note, preference_ids}`。
+
+    · entities：这轮实际用到的实体（种子 + 沿边到达的作者/代表作），供注入轨迹定位；
+    · note：注入【关联背景】的关系句（**不含**偏好原文——态度由偏好块自己注，避免一轮出现两次）；
+    · preference_ids：边 `has_preference` 指向的偏好 id，由调用方并进偏好检索。
+    识别不到实体、或走完没有任何可说的关系 → note 为空串（不注入）。
+    """
+    data = load_associations()
+    entities = data["entities"]
+    seeds = match_entities(text, extra_entities)
+    if not seeds:
+        return {"entities": [], "note": "", "preference_ids": []}
+
+    outgoing: dict = {}
+    for edge in data["edges"]:
+        outgoing.setdefault(edge["from"], []).append(edge)
+
+    used = list(seeds)
+    sentences: list = []
+    pref_ids: list = []
+    rendered_rep: set = set()
+    rendered_work: set = set()
+
+    def _use(name: str) -> None:
+        if name and name not in used and len(used) < _MAX_ASSOCIATION_ENTITIES:
+            used.append(name)
+
+    def _add(sentence: str) -> None:
+        if sentence and sentence not in sentences:
+            sentences.append(sentence)
+
+    def _pref(target: str) -> None:
+        pid = str(target).split(":", 1)[1] if ":" in str(target) else ""
+        if pid and pid not in pref_ids:
+            pref_ids.append(pid)
+
+    def _representative(author: str) -> None:
+        """作者的代表作（最多 2 本、跳过已经说过的书）。每个作者只说一次。"""
+        if author in rendered_rep:
+            return
+        works = [e["to"] for e in outgoing.get(author, [])
+                 if e.get("rel") == "representative_work" and e["to"] not in rendered_work][:2]
+        if not works:
+            return
+        rendered_rep.add(author)
+        for w in works:
+            rendered_work.add(w)
+            _use(w)
+        _add(inj.T("terms", "associations_representative",
+                   author=author, works="".join(f"《{w}》" for w in works)))
+
+    for seed in seeds:
+        for edge in outgoing.get(seed, []):
+            rel, target = edge.get("rel"), edge["to"]
+            if rel == "written_by":
+                rendered_work.add(seed)
+                _use(target)
+                _add(inj.T("terms", "associations_written_by", work=seed, author=target))
+                _representative(target)
+                for pe in outgoing.get(target, []):
+                    if pe.get("rel") == "has_preference":
+                        _pref(pe["to"])
+            elif rel == "located_in":
+                _use(target)
+                _add(inj.T("terms", "associations_located_in", subject=seed, place=target))
+            elif rel == "has_preference":
+                _pref(target)
+        if entities.get(seed, {}).get("kind") == "author":
+            _representative(seed)
+
+    note = ""
+    for sentence in sentences:
+        if len(note) + len(sentence) > _ASSOCIATION_NOTE_BUDGET:
+            break
+        note += sentence
+    return {"entities": used if note else [], "note": note, "preference_ids": pref_ids}
+
+
+def retrieve_preferences(user_query: str, top_n: int = PREFERENCE_TOP_N,
+                         extra_ids: list | None = None) -> list:
     """偏好命中（第 5 路）：**keyword 子串 或 pattern 正则**命中，就带该条。
 
     返回 [{id, category, text, score}]，供【灰泽满的偏好】注入。
     不进 RRF 融合、不占检索预算——偏好是身份事实层，命中才带，避免与风格样本抢预算。
+
+    `extra_ids`：关联边（`has_preference`）指过来的偏好 id，**排在最前**——
+    它代表"这轮话题顺着作品/作者落到了她的喜好上"，比碰巧撞上的关键词更该带。
 
     **为什么不用向量了**：偏好是"类别 + 一串用户能直接说出的词"（食物 / 水果 / 猫狗…），
     跟 terms 同构。而实测余弦的噪声地板 0.565 **插在正例正中间**（正例 0.501/0.552/0.590），
@@ -325,11 +485,26 @@ def retrieve_preferences(user_query: str, top_n: int = PREFERENCE_TOP_N) -> list
     子串做不到的场景——如"吃"会撞"吃什么药/吃瓜"，用负向断言排除。**子串法的天花板就在这**：
     只能靠挑更多具体词逼近，不可能根治；真要好得换分类器。
     """
-    if not user_query:
+    if not user_query and not extra_ids:
         return []
-    q = user_query.lower()
+    q = (user_query or "").lower()
+    entries = load_preferences()
     hits = []
-    for e in load_preferences():
+    seen = set()
+    if extra_ids:
+        by_id = {str(e.get("id", "")): e for e in entries}
+        for pid in extra_ids:
+            e = by_id.get(str(pid))
+            if not e or not e.get("text") or str(pid) in seen:
+                continue
+            hits.append({"id": e.get("id", ""), "category": e.get("category", ""),
+                         "text": e.get("text", ""), "score": 1.0})
+            seen.add(str(pid))
+            if len(hits) >= top_n:
+                return hits
+    for e in entries:
+        if str(e.get("id", "")) in seen:
+            continue
         kw_hit = any(str(k).lower() in q for k in e.get("keywords", []))
         pat = e.get("pattern")
         try:
@@ -339,6 +514,7 @@ def retrieve_preferences(user_query: str, top_n: int = PREFERENCE_TOP_N) -> list
         if kw_hit or pat_hit:
             hits.append({"id": e.get("id", ""), "category": e.get("category", ""),
                          "text": e.get("text", ""), "score": 1.0})
+            seen.add(str(e.get("id", "")))
         if len(hits) >= top_n:
             break
     return hits

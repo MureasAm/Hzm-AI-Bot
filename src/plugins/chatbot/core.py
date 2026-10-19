@@ -26,6 +26,7 @@ from .rag import embed_query
 from .retrieval import (
     retrieve_corpus_candidates,
     retrieve_preferences, retrieve_core_stories, fuse_and_truncate, select_behavior_item,
+    resolve_associations,
 )
 from .corpus_judge import judge_corpus
 from .chatlog import log_corpus_hits, log_block_hits, log_injection_trace
@@ -362,7 +363,9 @@ def build_message_list(user_msg: str, fused_items: list,
                        profile_context: str = "", commitment_context: str = "",
                        emotion_context: str = "", daily_context: str = "",
                        user_transcript: str = "", nickname_hint: str = "",
-                       log_hits: bool = False, trace: dict | None = None) -> list:
+                       log_hits: bool = False, trace: dict | None = None,
+                       association_context: str = "", association_entities: list | None = None,
+                       is_group: bool = False) -> list:
     """按优先级组装发送给模型的消息列表。
 
     fused_items 为融合后的 RetrievalItem 列表（corpus + behavior），按源分组注入。
@@ -382,6 +385,12 @@ def build_message_list(user_msg: str, fused_items: list,
     trace：条目级注入轨迹（`docs/数据迭代.md` §2）。传一个 dict 进来，这里把
     **实际注入了哪些块、哪些条目**填进 `blocks` / `items` / `values`；写盘由
     `handle_chat` 统一做（离线/实验路径不传就不留痕）。只记 id/名称/值，不记整段提示词。
+
+    association_context：关联背景（作品→作者→喜好）的关系句，见
+    `retrieval.resolve_associations`；association_entities 是轨迹里的实体清单。
+
+    is_group：**私聊/群聊的唯一真值**（来自 NapCat 的 message_type，别拿 to_me 或
+    group_context 是否为空反推）。决定第 00 块注入哪段场景文案。
     """
     messages = []
     messages.append({"role": "system", "content": SYSTEM_PROMPT})
@@ -397,6 +406,13 @@ def build_message_list(user_msg: str, fused_items: list,
         values = [str(v) for v in values if v]
         if trace is not None and values:
             trace.setdefault("items", {})[name] = values
+
+    # 场景（第 00 块）：私聊/群聊**二选一**，紧跟骨架、在周表之前。
+    # 从骨架里搬出来的是"一对一"那句——群聊里说"你"前必须知道有几个人在场。
+    scene_key = "group" if is_group else "private"
+    messages.append({"role": "system", "content": inj.T("scene", scene_key)})
+    hit_blocks.append(f"scene_{scene_key}")
+    _mark(f"scene_{scene_key}")
 
     # 周表（地面真值）：被问"明天来吗/这周/几点播"以它为准。
     # 记忆里带"明天/下周"的话是过去某场直播当时的说法，可能早过期，不能当现在的安排。
@@ -449,6 +465,15 @@ def build_message_list(user_msg: str, fused_items: list,
         messages.append({"role": "system", "content": inj.T("terms", note=terms_note)})
         _mark("terms")
         _items("terms", _term_hits)
+
+    # 关联背景（作品 → 作者 → 喜好）：紧跟在名词库之后，段头文案在 07_terms/block.json。
+    # 为什么单独一段：terms 是"这个词什么意思"，这里补的是"这个名字牵出什么"——
+    # 用户只报作品名时，模型要能自己沿「作品 → 作者 → 她的喜好」接上，不用逐本收书。
+    if association_context:
+        messages.append({"role": "system",
+                         "content": inj.T("terms", "associations", note=association_context)})
+        _mark("associations")
+        _items("associations", association_entities or [])
 
     # 会话级记忆（当前话题 + 本场事件）：让模型接得住会话调性
     if session_context:
@@ -621,7 +646,7 @@ def build_message_list(user_msg: str, fused_items: list,
         if trace is not None:
             trace.setdefault("values", {})["daily"] = True
 
-    # 12–19 块级开火留痕（真实聊天路径才写；离线实验/回归不污染）
+    # 运行时块级开火留痕（scene_* / 12–19；真实聊天路径才写，离线实验/回归不污染）
     if log_hits and get_llm_route() in ("私", "群"):
         log_block_hits(hit_blocks)
 
@@ -802,7 +827,8 @@ def _user_name_for(user_id: str) -> str:
 
 async def gather_retrieval(query_text: str, retrieval_query: str, history_text: str,
                            deepseek_client, zhipu_client,
-                           is_user_msg: bool = True) -> dict:
+                           is_user_msg: bool = True,
+                           extra_preference_ids: list | None = None) -> dict:
     """规范取素材：一段文本该配的东西一次捞齐（人设 + 行为/措辞 + 直播记忆 + 风格样本 + 偏好 + 核心记忆）。
 
     **聊天和主动发言共用这一份**。抽出来的原因：主动发言原来是自己在
@@ -837,7 +863,8 @@ async def gather_retrieval(query_text: str, retrieval_query: str, history_text: 
 
     try:
         await _fill_retrieval(result, query_text, retrieval_query, history_text,
-                              deepseek_client, zhipu_client, behaviors, is_user_msg)
+                              deepseek_client, zhipu_client, behaviors, is_user_msg,
+                              extra_preference_ids)
     except Exception as e:
         # **检索层炸了不能让她变哑巴**：素材按"没检索到"处理，回复/主动发言继续。
         # 踩坑（2026-09-27）：智谱 embedding key 过期 → 检索层抛
@@ -849,7 +876,8 @@ async def gather_retrieval(query_text: str, retrieval_query: str, history_text: 
 
 
 async def _fill_retrieval(result: dict, query_text: str, retrieval_query: str, history_text: str,
-                          deepseek_client, zhipu_client, behaviors, is_user_msg: bool) -> None:
+                          deepseek_client, zhipu_client, behaviors, is_user_msg: bool,
+                          extra_preference_ids: list | None = None) -> None:
     """`gather_retrieval` 的干活部分（单独一层，方便上面统一兜底）。结果写进 result。"""
     behavior_items, corpus_items = [], []
     # L3：归属用 LLM 判意图（不再用 embedding 猜——embedding 按句式聚团，
@@ -888,17 +916,23 @@ async def _fill_retrieval(result: dict, query_text: str, retrieval_query: str, h
     else:
         result["fused_items"] = fuse_and_truncate(corpus_items, behavior_items)
     # 第 5 路：偏好（关键词命中）／核心记忆（结晶）
-    result["preference_items"] = retrieve_preferences(retrieval_query or query_text)
+    # 关联边（has_preference）指过来的偏好排最前——"顺着作品/作者落到她的喜好上"比碰巧撞词更该带
+    result["preference_items"] = retrieve_preferences(
+        retrieval_query or query_text, extra_ids=extra_preference_ids)
     result["core_stories"] = retrieve_core_stories(retrieval_query or query_text, query_vector)
 
 
 async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
                       batch_summary: str = "", is_group: bool = False,
-                      user_transcript: str = "") -> str:
+                      user_transcript: str = "", record_text: str = "") -> str:
     """处理一条用户消息，返回机器人回复。vision_desc 为图片描述；batch_summary 为批量归纳。
 
     is_group=True 时按群会话处理：user_id 传群号（会话历史按群记），
     不建用户记忆卡（群不是单个用户），回复对象由调用方按群发送。
+
+    user_transcript = **给模型看的**本批完整文本（群聊带 [对灰泽满]/[未点名] 标记）；
+    record_text = **记进短期记忆的**版本（群聊是干净的「昵称：文本」）——两者分开，
+    免得批次级标记被当成对话历史喂回去。
     """
     deepseek_client, zhipu_client = _get_clients()
 
@@ -917,8 +951,12 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     # probe 会把 last_active 改写成"现在"，之后再问就永远判成"没过期"。
     _prev_session_note = previous_session_note(user_id)
     retrieval_query = query_text
+    probe_meta: dict = {}
     if query_text:
-        retrieval_query = await probe_session(user_id, query_text, history_text, deepseek_client)
+        # debug=True 只是为了拿到**这次探测已经算出来的** entities（作品/作者/地点/动物）——
+        # 不多调一次模型；生产路径的返回值仍是扩充后的检索 query。
+        retrieval_query, probe_meta = await probe_session(
+            user_id, query_text, history_text, deepseek_client, debug=True)
         if retrieval_query != query_text:
             print(f"[会话记忆] 短 query 扩充: 「{query_text}」→「{retrieval_query}」")
     # 命中已知术语：probe 的短 query 扩充可能猜错含义（如"富区"→"富拉尔基区"），
@@ -965,10 +1003,19 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
                 ))
             return reply
 
+    # --- 🔗 关联背景（作品 → 作者 → 喜好）---
+    # 用**用户原话**匹配已知实体，再补上本轮 probe 识别出的专名（未知作品 → 作者/地点）。
+    # 必须放在检索前：边上 has_preference 指向的偏好要并进偏好检索（如 东野 → author）。
+    # 识别不到实体、或走完没有可说的关系 → note 为空，后面什么都不注。
+    _assoc = resolve_associations(query_text, probe_meta.get("entities"))
+    if _assoc["note"]:
+        print(f"[关联] {_assoc['entities']} → {_assoc['note'][:40]}")
+
     # --- 🎭 人格规则 + 🔍 检索融合（query 只算 1 次 embedding）---
     # 素材统一从 gather_retrieval 取（主动发言也走同一个入口，别再各拼一套）
     ctx = await gather_retrieval(query_text, retrieval_query, history_text,
-                                 deepseek_client, zhipu_client)
+                                 deepseek_client, zhipu_client,
+                                 extra_preference_ids=_assoc["preference_ids"])
     fused_items = ctx["fused_items"]
     preference_items = ctx["preference_items"]
     core_stories = ctx["core_stories"]
@@ -1036,6 +1083,8 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         emotion_context=emotion_context, daily_context=daily_context,
         user_transcript=user_transcript, nickname_hint=nickname_hint,
         log_hits=True, trace=injection_trace,
+        association_context=_assoc["note"], association_entities=_assoc["entities"],
+        is_group=is_group,
     )
 
     # --- 🤖 调用大模型 ---
@@ -1167,7 +1216,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     # 存**清洗后**的版本（clean_reply 平时在 chat_window 里、本函数返回之后才跑）：
     # 否则她带换行/多括号的原始输出会存进记忆，再作为"她自己怎么说话"的 few-shot 喂回去，
     # 变成自我强化回路——后处理每次都得再洗一遍，坏习惯却一直被喂养。
-    record_msg = user_transcript or _compose_record_msg(user_msg, vision_desc)
+    record_msg = record_text or user_transcript or _compose_record_msg(user_msg, vision_desc)
     if is_fallback_reply(reply):
         # 这一轮压根没生成出来（上游异常），**整轮都不记**：
         # 记了就等于让她"记得自己说过"一句故障文案，还会当 few-shot 喂回去。

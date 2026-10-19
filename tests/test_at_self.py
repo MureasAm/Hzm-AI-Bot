@@ -141,6 +141,19 @@ class TestHandleChatMarks:
         assert self.enqueued[0][0][2] == AT_SELF_MARK
 
     @pytest.mark.asyncio
+    async def test_private_message_type_enqueues_private(self):
+        """私聊/群聊的唯一真值是 event.message_type——不靠文本、不靠 to_me 推断。"""
+        await self._run(_msg(MessageSegment.text("在吗")), message_type="private")
+        assert len(self.enqueued) == 1
+        assert self.enqueued[0][0][-1] is True   # enqueue(..., is_private)
+
+    @pytest.mark.asyncio
+    async def test_group_message_type_enqueues_group(self):
+        await self._run(_msg(MessageSegment.text("你们吃了吗")), message_type="group")
+        assert len(self.enqueued) == 1
+        assert self.enqueued[0][0][-1] is False
+
+    @pytest.mark.asyncio
     async def test_at_other_groupmate_not_marked(self):
         # @ 的是别人 → 不加标记，照常当普通群聊消息过门
         await self._run(_msg(MessageSegment.at("30000"), MessageSegment.text(" 看这个")))

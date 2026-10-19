@@ -170,6 +170,32 @@ class TestProbeSession:
     async def test_empty_msg_returns_early(self):
         assert await sm.probe_session("u1", "  ", "历史", None) == ""
 
+    async def test_entities_normalized_in_debug_meta(self, monkeypatch):
+        """probe 顺带识别专名（作品/作者/地点/动物），供【关联背景】沿边走。
+
+        形状收口在这里：list[str]、去空、≤3、单个 ≤20 字、去重。
+        """
+        async def fake_llm(client, prompt, max_tokens=250, temperature=0.2):
+            return json.dumps({
+                "topic": "聊书", "topic_changed": True, "new_event": None,
+                "entities": ["东野圭吾", "空中杀人事件", "", "东野圭吾", "x" * 30, "袋鼠"],
+                "expanded_query": None,
+            }, ensure_ascii=False)
+
+        monkeypatch.setattr(sm, "_llm", fake_llm)
+        out, meta = await sm.probe_session("u1", "东野的书怎么样", "历史", object(), debug=True)
+        assert out == "东野的书怎么样"
+        assert meta["entities"] == ["东野圭吾", "空中杀人事件", "袋鼠"]
+
+    async def test_missing_entities_defaults_to_empty(self, monkeypatch):
+        async def fake_llm(client, prompt, max_tokens=250, temperature=0.2):
+            return json.dumps({"topic": "闲聊", "topic_changed": False,
+                               "new_event": None, "expanded_query": None}, ensure_ascii=False)
+
+        monkeypatch.setattr(sm, "_llm", fake_llm)
+        _, meta = await sm.probe_session("u1", "在吗", "历史", object(), debug=True)
+        assert meta["entities"] == []
+
     async def test_llm_failure_degrades(self, tmp_path, monkeypatch):
         """LLM 失败返回空 → probe_session 静默降级，原消息返回，不写文件。"""
         f = tmp_path / "s.json"

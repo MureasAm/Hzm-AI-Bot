@@ -208,7 +208,8 @@ class TestWiring:
             log_cache_usage(resp, "接话门")
             return True
 
-        async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False, user_transcript=""):
+        async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False,
+                              user_transcript="", **kwargs):
             log_cache_usage(resp, "主回复")
             return "在"
 

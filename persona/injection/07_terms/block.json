@@ -6,6 +6,10 @@
   "when": "always 词每轮 / 其余命中时",
   "source": "terms.json",
   "strings": {
-    "main": "【灰泽满的世界】{note}（其中『用词规则』是说话习惯，回复里表达对应概念时主动用她的黑话称呼）"
+    "main": "【灰泽满的世界】{note}（其中『用词规则』是说话习惯，回复里表达对应概念时主动用她的黑话称呼）",
+    "associations": "【关联背景】{note}",
+    "associations_written_by": "《{work}》是{author}的作品。",
+    "associations_representative": "{author}的代表作有{works}。",
+    "associations_located_in": "{subject}生活在{place}。"
   }
 }

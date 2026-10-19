@@ -19,7 +19,7 @@ NoneBot2 + OneBot v11(NapCat) 的"灰泽满"人格聊天机器人。核心是**�
 
 ## 怎么跑 / 怎么测
 - 启动：NapCat 自己开 → `env\python.exe api_v2.py`(GPT-SoVITS,端口9880) → `python bot.py`（或双击 `启动.bat`）。**改代码/数据后要重启 bot**（有进程内缓存）。
-- 测试：`.venv\Scripts\python.exe -m pytest -q`（**1140 个**，全绿才算完）。
+- 测试：`.venv\Scripts\python.exe -m pytest -q`（**1173 个**，全绿才算完）。
   ⚠️ **数字的权威在 `docs/地图.md` §10**——改了用例数去那里改一次，然后跑
   `.venv/Scripts/python.exe scripts/check_docs.py` 看还有哪几处没跟上（别只改本文件）。
 - 改**检索/判据/素材**后必跑这两个（unit test 测不出"检索该不该命中"）：
@@ -44,7 +44,7 @@ NoneBot2 + OneBot v11(NapCat) 的"灰泽满"人格聊天机器人。核心是**�
   `__init__._handle_chat` → `chat_window.enqueue` → 读秒窗口 → `_flush`(读图+归纳) → `core.handle_chat` → `build_message_list`(17 段注入) → `generate_reply` → `clean_reply` → `split_reply` → `_send`
   （语音优先：`clean_reply` 后先 `should_voice`→`send_voice`，成功就不走文字分段）
 - 运行时核心：`src/plugins/chatbot/`（core 主循环 / chat_window 读秒窗口 / retrieval 两路 RRF+两路直达 / reply_style 纯函数 / routing 梗库+行为分类 / persona 加载 / **memory_v2 长期记忆（2026-10-10 转正）** + memory|session_memory|group_memory / voice 语音 / bili_bridge|weibo_bridge 联动 / context_probe 感知 / vision 看图 / rag 向量 / config 客户端 / constants 常量★）
-- 人格数据：`persona/`（**injection/ = 19 个注入块，一块一个文件夹**，块里的 block.json 写着段头/文案/来源/时机；
+- 人格数据：`persona/`（**injection/ = 20 个注入块，一块一个文件夹**，块里的 block.json 写着段头/文案/来源/时机；
   core=骨架；world/legendary.json 不进提示词；media=表情包。`behavior/` `speech/` `core/traits|styles` 已分别于 2026-10-16 / 10-04 删除）
 - 长期记忆：`memory_v2.py`（**类型化条目，2026-10-10 起正位**：真实聊天重建 + 运行时写入/注入；
   临时关掉设 `MEMORY_V2_SHADOW=0` / `MEMORY_V2_INJECT=0`）。**v1 已于 2026-10-12 整个删除**

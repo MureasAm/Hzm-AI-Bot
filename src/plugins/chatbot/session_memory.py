@@ -285,6 +285,7 @@ SESSION_PROBE_PROMPT = """你是会话话题追踪器。用户在聊天中刚发
   "topic_changed": true 或 false,
   "new_event": "这条消息值得记住的关键事件，一句话（如'用户发比爱心示好'）；纯寒暄无事件则 null",
   "mood": "用户**此刻**的情绪状态，一句话（如'因为考试失利而失落''和队友闹别扭后很委屈'）；看不出来 / 没有明显情绪则 null",
+  "entities": "用户这句话提到/问到的**作品、作者、地点、动物**等专名（最多 3 个，写规范名，如'空中杀人现场''东野圭吾''袋鼠'）；没有或只是普通闲聊则 null",
   "expanded_query": "如果这条消息很短（≤4字）**或是指代性的**（必须结合前面聊的话题才能理解，如'能读给我听听吗''那个呢''然后呢'——单看这句不知道指什么），补全成既能检索到相关记忆、又能帮模型理解的一句话（如'用户让灰泽满念她写的小说乌色月'）；其他情况则 null"
 }}
 要求：
@@ -298,6 +299,8 @@ SESSION_PROBE_PROMPT = """你是会话话题追踪器。用户在聊天中刚发
 - new_event 只记有意义的互动（示好/情绪/承诺/分享），寒暄问候不记
 - mood 只在用户**明显**带情绪时写（失落/焦虑/兴奋/委屈…）；纯寒暄、看不出情绪就 null。
   **别把"话题"当情绪**（聊考试 ≠ 焦虑），也**别把灰泽满自己的语气**算成用户的情绪。
+- entities 只收**专名**（书名/作者/地点/动物），别把普通名词（"书""作家""动物"）当实体；
+  用户没提具体名字、拿不准就 null。作品名写用户说的那个，作者写全名。
 - **expanded_query 表情识别铁律**：如果消息是**纯表情/纯符号**（emoji 或[表情：xx]），必须先按**表情的标准含义**识别，不要从对话历史臆测：
   · 😅 = 无语/无奈/尴尬（不是傲娇调侃）
   · 😭 = 委屈/难过/哭
@@ -407,7 +410,7 @@ async def probe_session(user_id: str, user_msg: str, history_text: str, client,
         history=history_text or "（无）",
         user_msg=msg,
     )
-    content = await _llm(client, prompt, max_tokens=250, temperature=0.2)
+    content = await _llm(client, prompt, max_tokens=320, temperature=0.2)
     expanded = msg
     if not content:
         return (expanded, {}) if debug else expanded
@@ -428,6 +431,16 @@ async def probe_session(user_id: str, user_msg: str, history_text: str, client,
     mood = mood.strip() if isinstance(mood, str) else ""
     if mood.lower() in ("null", "none"):
         mood = ""
+    # 关联实体（2026-10-20）：作品/作者/地点/动物的专名，供【关联背景】沿边走。
+    # 这里只做形状收口（list[str]、去空、≤3、单个 ≤20 字）；认不认识、怎么展开由 retrieval 决定。
+    raw_entities = parsed.get("entities")
+    entities: list = []
+    if isinstance(raw_entities, list):
+        for item in raw_entities:
+            s = str(item or "").strip()
+            if s and s.lower() not in ("null", "none") and len(s) <= 20 and s not in entities:
+                entities.append(s)
+    parsed["entities"] = entities[:3]
 
     # 转话题：清空旧事件，起新话题
     events = [] if changed else list(prev.get("events", []))

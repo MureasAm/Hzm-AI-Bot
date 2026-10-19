@@ -18,11 +18,11 @@ from pathlib import Path
 from nonebot.adapters.onebot.v11 import Message, MessageSegment
 
 from .core import (
-    handle_chat, summarize_batch, _get_clients,
+    handle_chat, summarize_batch, _get_clients, _compose_record_msg,
 )
 from .config import set_llm_route, get_vision_client
 from .memory import get_user_history, append_user_history
-from .group_gate import should_reply_in_group
+from .group_gate import should_reply_in_group, _addressed_to_her
 from .chatlog import log_turn
 from .stickers import pick_sticker, log_event
 from .reply_style import (
@@ -250,24 +250,18 @@ async def _flush(win: _UserWindow) -> None:
     parsed = [(s, t, [d for d in ds if _keep_image_desc(t, d)])
               for (s, t, _), ds in zip(msgs, descs)]  # (sender, text, [保留的图片描述...])
 
-    # 组装：私聊=纯文本；群聊=每条带发送者名字，bot 知道谁在说话
+    # 组装：
+    # · 私聊 = 纯文本 transcript（图片按顺序内联）
+    # · 群聊 = 每条「[对灰泽满]/[未点名] + 昵称：文本」，图片按顺序内联；整批再带一句
+    #   「本批有人点名灰泽满 / 本批无人点名灰泽满」。
+    #   为什么要确定性标记（2026-10-20）：群里有好几个绿冻，主模型不该去猜"这句'你'是谁"——
+    #   点名判定复用接话门的 `_addressed_to_her`（@ / 引用她 / 直呼名字），确定性、可回归。
     id_to_name = {}
+    combined = ""
+    user_transcript = ""
+    batch_addressed = False
     if win.is_private:
         combined = _combine_text([(t, ds) for _, t, ds in parsed])
-    else:
-        lines = []
-        for s, t, _ in parsed:
-            if t.strip():
-                name = await _get_sender_name(win.bot, win.target_id, s)
-                lines.append(f"{name}：{t.strip()}")
-                id_to_name[s] = name
-        combined = "\n".join(lines).strip()
-        if id_to_name:
-            group_memory.upsert_members(win.target_id, id_to_name)
-    # 私聊：按消息顺序拼完整 transcript（图片放在它所属消息的文字后面）；
-    # 群聊沿用原逻辑（每条已带发送者名，图片统一放尾部）。
-    user_transcript = ""
-    if win.is_private:
         tlines = []
         for _, t, ds in parsed:
             if t.strip():
@@ -275,6 +269,27 @@ async def _flush(win: _UserWindow) -> None:
             for d in ds:
                 tlines.append(f"[图片：{d}]")
         user_transcript = "\n".join(tlines).strip()
+    else:
+        plain_lines, transcript_lines = [], []
+        for s, t, ds in parsed:
+            text = t.strip()
+            if not text and not ds:
+                continue
+            name = await _get_sender_name(win.bot, win.target_id, s)
+            if text:
+                id_to_name[s] = name
+            addressed = _addressed_to_her(text)   # @ 已被 __init__ 变成 AT_SELF_MARK
+            batch_addressed = batch_addressed or addressed
+            body = " ".join(([text] if text else []) + [f"[图片：{d}]" for d in ds])
+            transcript_lines.append(f"{'[对灰泽满]' if addressed else '[未点名]'} {name}：{body}")
+            if text:
+                plain_lines.append(f"{name}：{text}")
+        combined = "\n".join(plain_lines).strip()
+        if id_to_name:
+            group_memory.upsert_members(win.target_id, id_to_name)
+        if transcript_lines:
+            head = "本批有人点名灰泽满" if batch_addressed else "本批无人点名灰泽满"
+            user_transcript = head + "\n" + "\n".join(transcript_lines)
     vision_desc = "；".join(d for _, _, ds in parsed for d in ds)
     img_count = sum(len(ds) for _, _, ds in parsed)
     print(f"[读秒] {'群' if not win.is_private else '私聊'}={win.target_id} "
@@ -301,9 +316,14 @@ async def _flush(win: _UserWindow) -> None:
             print(f"[读秒] 群={win.target_id} 这批不接，只记不发")
             return
 
+    # 群聊的 user_transcript 带批次标记（给模型看）；**短期记忆记干净版**——
+    # 批次级标记不该被当成"对话历史"喂回去（record_text，见 core.handle_chat）。
+    record_kwargs = {}
+    if not win.is_private:
+        record_kwargs["record_text"] = _compose_record_msg(combined, vision_desc)
     reply = await handle_chat(win.target_id, combined, vision_desc=vision_desc,
                               batch_summary=batch_summary, is_group=not win.is_private,
-                              user_transcript=user_transcript)
+                              user_transcript=user_transcript, **record_kwargs)
     reply = clean_reply(reply)  # 去括号前缀 + 整条至多 1 个括号
 
     # 聊天落盘（分析用，gitignore）。放这里而不是发完之后：下面**语音那条路会提前 return**，

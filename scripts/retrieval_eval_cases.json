@@ -1,7 +1,7 @@
 {
  "_readme": "检索层评测标注集 —— **唯一**的 query→期望 存储。跑法：`python scripts/run_tool.py retrieval-eval`（或 `scripts/retrieval_eval.py`）。2026-09-29 起 `scripts/judge_labels.json` 已并入本文件并删除（原来两份同源数据互相打架，见 _change_log）。**改这里就是改用例**，不用碰代码。⚠️ corpus 一路**镜像线上**：关键词门直通 + 门没放行的交 LLM 判（见 src/plugins/chatbot/corpus_judge.py）。",
  "_expect_strength": "四档从强到弱，按'你能确定到什么程度'选：should（钉具体 id）> contains（钉关键词）> should_fire（只要求该路非空，不钉是哪条）> should_not_hit（必须为空）。⚠️ **别把'现在返回的东西'钉成 should** —— 那是把现状当真理，是反过来的循环论证（本仓踩过：合成场景自测 8/8 却毫无意义）。说不出是哪条时用 should_fire 或 contains。",
- "_routes": "behavior=该套哪个行为模式（LLM 分类）｜voice_sample=该用哪条风格样本（向量）｜phrase=该用哪组措辞（LLM 分类）｜preference=该带哪条偏好（keywords 子串/pattern）｜core_story=该带哪条核心记忆（向量）｜corpus=该不该唤起某段经历（门+LLM 判）",
+ "_routes": "behavior=该套哪个行为模式（LLM 分类）｜preference=该带哪条偏好（keywords 子串/pattern，含关联边的 has_preference）｜core_story=该带哪条核心记忆（向量）｜corpus=该不该唤起某段经历（门+LLM 判）｜associations=关联背景沿边走到的实体（作品/作者/地点）｜terms=命中并注入的名词库词条",
  "_source_vocab": "翻车=由真实翻车固化的回归｜真实对话=data/chat_log 里查到的｜标注集=从旧 judge_labels.json 并入（原是 41 条手工 want 标注）｜问题记录=问题驱动入口生成｜抽查=spot_check 勾选生成",
  "_borderline": "`borderline: true` = **这条的期望本身就是我的判断，最该由人裁决**。它不影响评测判定，但 judge_experiment 会单独报数量——边界案例的标签直接决定'哪个判据赢'，所以要盯着它。",
  "_change_log": [
@@ -13,7 +13,8 @@
   "2026-09-29 取消 corpus 的「门放行直通」（n7 驱动）：门/钩子只决定候选，判定全交 LLM；候选补位**只看词面不看语义分**、按 ov 排序封顶 6 条（`CORPUS_LEXICAL_EXTRA_N`）。⚠️ **中途走过一条错路、已退回**：先试的是把 `CORPUS_KEYWORD_FLOOR` 0.12→0.5，结果挡住 n7 却把 co9/co10 一起打回红——因为**误报的 ov(0.40) 比真阳性 co9 的 ov(0.143) 还高**，阈值只是在拿一个换另一个（换 bigram 文档频率方向同样相反）。根因：词重叠拿不到「说的是谁」。**别再试调阈值了。**\n   另记一个写错的机制：起初写成'钩子挂了裸词直通'——**错**，钩子不参与放行。教训：改之前先把机制算清楚，别照着名字猜。",
   "2026-09-29 改 co10「你就说过最近直播里」的期望：**该唤起 → 不该唤起**（理由见该条 why）。同时补了 #42 的钩子 `学霸/男学霸` 修 co9（用户的说法不在生成器给的钩子里 → 该条进不了候选；钩子现在是合并式的，手补不会被重跑覆盖）。",
   "2026-09-29 最终评测 **48 条 47 过**（corpus 19/19、behavior 14/14、preference 22/22、voice_sample 3/3、core_story 2/2；phrase 8/9）。唯一红的 `n4_tech` 是待用户裁决的『你这个声音是怎么调试的这么真实的啊』算不算被夸（phrase 的 brag_deny 跟着行为走）。",
-  "2026-09-29 n4「你这个声音是怎么调试的这么真实的啊」：用户裁决为**问技术 → 期望装傻**。骨架补了对应条目；行为层还没有『装傻』这一类，所以本用例仍红、标注为已知缺口。同轮用户确认 co10 保持『不该唤起』（我改的方向对）。"
+  "2026-09-29 n4「你这个声音是怎么调试的这么真实的啊」：用户裁决为**问技术 → 期望装傻**。骨架补了对应条目；行为层还没有『装傻』这一类，所以本用例仍红、标注为已知缺口。同轮用户确认 co10 保持『不该唤起』（我改的方向对）。",
+  "2026-10-20 加关联背景（associations）与名词库（terms）两路 + 4 条用例：作品名→作者→偏好、作者简称、动物→地点、天气负例。"
  ],
  "cases": [
   {
@@ -647,6 +648,72 @@
      "should": [
       "被推着要求时打太极"
      ]
+    }
+   }
+  },
+  {
+   "id": "as1_work_name",
+   "query": "你看过空中杀人事件吗",
+   "source": "标注集",
+   "why": "用户只报作品名（实际说法是'空中杀人事件'）→ 关联边应接上《空中杀人现场》和东野，并把 author 偏好带进来",
+   "expect": {
+    "associations": {
+     "should": [
+      "空中杀人现场",
+      "东野圭吾"
+     ]
+    },
+    "preference": {
+     "should": [
+      "author"
+     ]
+    }
+   }
+  },
+  {
+   "id": "as2_author_alias",
+   "query": "东野",
+   "source": "标注集",
+   "why": "只报作者的简称（不是偏好关键词里的'东野圭吾'）→ 关联边补上 author 偏好",
+   "expect": {
+    "associations": {
+     "should": [
+      "东野圭吾"
+     ]
+    },
+    "preference": {
+     "should": [
+      "author"
+     ]
+    }
+   }
+  },
+  {
+   "id": "as3_kangaroo",
+   "query": "你在澳洲见过袋鼠吗",
+   "source": "标注集",
+   "why": "动物→地点：关联背景给'袋鼠生活在澳洲'，名词库命中袋鼠词条；不得编她的亲身经历",
+   "expect": {
+    "associations": {
+     "should": [
+      "袋鼠"
+     ]
+    },
+    "terms": {
+     "should": [
+      "袋鼠"
+     ]
+    }
+   }
+  },
+  {
+   "id": "as4_neg_weather",
+   "query": "今天天气怎么样",
+   "source": "标注集",
+   "why": "反向检查：普通闲聊不能被实体展开误触发",
+   "expect": {
+    "associations": {
+     "should_not_hit": true
     }
    }
   }

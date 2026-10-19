@@ -21,7 +21,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _common  # noqa: E402
 
 HITS_FILE = ROOT / "data" / "block_hits.jsonl"
-ALL_BLOCKS = ["commitment", "history", "same_request", "batch",
+ALL_BLOCKS = ["scene_private", "scene_group",
+              "commitment", "history", "same_request", "batch",
               "query_hint", "now", "mood", "daily", "nickname"]
 
 

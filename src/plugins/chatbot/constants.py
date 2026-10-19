@@ -8,7 +8,7 @@ from pathlib import Path
 # constants.py -> chatbot -> plugins -> src -> 项目根
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
-# ==================== persona：19 个注入块，一块一个文件夹 ====================
+# ==================== persona：20 个注入块，一块一个文件夹 ====================
 # 目录名 = "序号_块名"，**序号就是注入顺序**（core.build_message_list 按它排）。
 # 每个文件夹里有一个 `block.json`：这块的段头 + 文案模板 + 它从哪拿内容 + 什么时候注。
 # ⚠️ **注入文案一律写在 block.json 里，不要写回 Python**（2026-10-16 从 4 个 py 文件里抽出来。
@@ -25,6 +25,7 @@ SCHEDULE_FILE = INJECTION_DIR / "02_schedule" / "schedule.json"                #
 PREFERENCES_FILE = INJECTION_DIR / "04_preferences" / "preferences.json"       # 第 4 块（按 keywords 子串命中，不走向量）
 CORE_STORIES_FILE = INJECTION_DIR / "05_core_stories" / "core_stories.json"    # 第 5 块
 TERMS_FILE = INJECTION_DIR / "07_terms" / "terms.json"                         # 第 7 块 名词库：核心词 always + 命中注入
+ASSOCIATIONS_FILE = INJECTION_DIR / "07_terms" / "associations.json"           # 第 7 块 的「关联背景」：实体别名 + 边（不复制事实）
 BEHAVIORS_FILE = INJECTION_DIR / "10_behaviors" / "behaviors.json"             # 第 10 块
 BEHAVIOR_KEYWORDS_FILE = INJECTION_DIR / "10_behaviors" / "behavior_keywords.json"  # 行为判定的确定性兜底
 STATEMENT_FILE = INJECTION_DIR / "11_corpus" / "statement_final.json"          # 第 11 块 的源文本（运行时读的是下面的向量库）

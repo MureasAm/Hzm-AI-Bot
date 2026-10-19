@@ -472,8 +472,9 @@ class TestLengthGuard:
             calls.append(len(messages))
             return seq.pop(0) if seq else "在呢"
 
-        async def fake_probe(uid, msg, hist, client):
-            return "用户发了个偷笑的表情"       # 纯情绪 → 跳过检索，最小 harness
+        async def fake_probe(uid, msg, hist, client, debug=False):
+            _v = '用户发了个偷笑的表情'
+            return (_v, {}) if debug else _v       # 纯情绪 → 跳过检索，最小 harness
 
         async def _async_noop(*a, **k):
             return None
@@ -534,8 +535,9 @@ class TestFallbackReplyNotRemembered:
     async def _run(self, monkeypatch, reply_text):
         captured = {"short": 0, "long": 0}
 
-        async def fake_probe(uid, msg, hist, client):
-            return "用户发了个偷笑的表情"   # 纯情绪 → 跳过检索，最小 harness
+        async def fake_probe(uid, msg, hist, client, debug=False):
+            _v = '用户发了个偷笑的表情'
+            return (_v, {}) if debug else _v   # 纯情绪 → 跳过检索，最小 harness
 
         async def fake_reply(messages):
             return reply_text
@@ -671,8 +673,8 @@ class TestGroupEventAge:
         })
         monkeypatch.setattr(core, "load_schedule", lambda: {})
 
-        async def fake_probe(uid, msg, hist, client):
-            return msg
+        async def fake_probe(uid, msg, hist, client, debug=False):
+            return (msg, {}) if debug else msg
 
         monkeypatch.setattr(core, "probe_session", fake_probe)
 
@@ -847,6 +849,7 @@ class TestCorpusTimePrefix:
         assert recorded["query"] == "你多高啊"
         assert recorded["ids"] == ["42"]
         assert set(recorded["blocks"]) == {
+            "scene_private",
             "commitment", "history", "same_request", "batch",
             "query_hint", "now", "mood", "daily",
         }
@@ -891,6 +894,7 @@ class TestInjectionTrace:
         trace = {}
         self._build(monkeypatch, trace)
         assert trace["blocks"] == [
+            "scene_private",
             "preferences", "core_stories", "terms", "behaviors", "corpus",
             "commitment", "history", "same_request", "batch", "query_hint",
             "now", "mood", "daily",
@@ -931,8 +935,9 @@ class TestInjectionTraceWrite:
     async def _run(self, monkeypatch, route):
         recorded = []
 
-        async def fake_probe(uid, msg, hist, client):
-            return "用户发了个偷笑的表情"   # 纯情绪 → 跳过检索，最小 harness
+        async def fake_probe(uid, msg, hist, client, debug=False):
+            _v = '用户发了个偷笑的表情'
+            return (_v, {}) if debug else _v   # 纯情绪 → 跳过检索，最小 harness
 
         async def fake_reply(messages):
             return "在呢"
@@ -968,6 +973,115 @@ class TestInjectionTraceWrite:
 
     async def test_offline_route_records_nothing(self, monkeypatch):
         assert await self._run(monkeypatch, "") == []
+
+
+class TestSceneBlock:
+    """私聊/群聊场景（00_scene）：「现在在哪儿、对面是谁」只按 is_group 二选一。
+
+    真值只有 NapCat 的 message_type（经 handle_chat 传 is_group）——
+    别从文本、group_context 是否为空、to_me 推断。
+    """
+
+    def _msgs(self, monkeypatch, is_group):
+        monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
+        monkeypatch.setattr(core, "load_schedule", lambda: {})
+        return core.build_message_list("在吗", [], [], is_group=is_group)
+
+    def test_private_scene_only(self, monkeypatch):
+        msgs = self._msgs(monkeypatch, False)
+        joined = "\n".join(m["content"] for m in msgs if m["role"] == "system")
+        assert "现在是一对一私聊" in joined and "现在是群聊" not in joined
+        # 位置：紧跟骨架（SYSTEM_PROMPT 之后、周表之前）
+        assert msgs[0]["content"] == core.SYSTEM_PROMPT
+        assert msgs[1]["content"].startswith("现在是一对一私聊")
+
+    def test_group_scene_only(self, monkeypatch):
+        msgs = self._msgs(monkeypatch, True)
+        joined = "\n".join(m["content"] for m in msgs if m["role"] == "system")
+        assert "现在是群聊" in joined and "现在是一对一私聊" not in joined
+        assert msgs[1]["content"].startswith("现在是群聊")
+
+    def test_skeleton_no_longer_asserts_one_on_one(self):
+        """骨架里的一对一场景句已搬走——群聊里那句话会把"你"读成同一个人。"""
+        text = core.SYSTEM_PROMPT
+        assert "正在 QQ 上与绿冻聊天" not in text
+        assert "你是在直接与对方聊天" not in text
+        assert "你就是灰泽满本人" in text
+        assert "不是在撰写关于灰泽满的旁白" in text
+
+
+class TestAssociationInjection:
+    """【关联背景】注入 + 轨迹：证明算出来的东西真的进了提示词。"""
+
+    def _build(self, monkeypatch, trace=None, **kwargs):
+        monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
+        monkeypatch.setattr(core, "load_schedule", lambda: {})
+        return core.build_message_list("你看过空中杀人事件吗", [], [], trace=trace, **kwargs)
+
+    def test_header_injected_after_terms(self, monkeypatch):
+        msgs = self._build(monkeypatch,
+                           association_context="《空中杀人现场》是东野圭吾的作品。",
+                           association_entities=["空中杀人现场", "东野圭吾"])
+        idx = [i for i, m in enumerate(msgs) if m["content"].startswith("【关联背景】")]
+        assert idx, "【关联背景】没注入"
+        assert "《空中杀人现场》是东野圭吾的作品。" in msgs[idx[0]]["content"]
+        terms_i = [i for i, m in enumerate(msgs) if m["content"].startswith("【灰泽满的世界】")]
+        assert not terms_i or terms_i[0] < idx[0], "关联背景应在名词库之后"
+
+    def test_trace_records_entities(self, monkeypatch):
+        trace = {}
+        self._build(monkeypatch, trace=trace,
+                    association_context="《空中杀人现场》是东野圭吾的作品。",
+                    association_entities=["空中杀人现场", "东野圭吾"])
+        assert "associations" in trace["blocks"]
+        assert trace["items"]["associations"] == ["空中杀人现场", "东野圭吾"]
+
+    def test_absent_by_default(self, monkeypatch):
+        msgs = self._build(monkeypatch)
+        assert not any(m["content"].startswith("【关联背景】") for m in msgs)
+
+
+class TestAssociationWiring:
+    """handle_chat 要把 probe 识别出的专名交给关联解析——不然未知作品永远接不上。"""
+
+    async def test_probe_entities_reach_resolver(self, monkeypatch):
+        seen = {}
+
+        async def fake_probe(uid, msg, hist, client, debug=False):
+            # 返回"纯情绪"扩充句 → gather_retrieval 直接跳过检索（最小 harness，不调外部）
+            return ("用户发了个无语的表情", {"entities": ["东野圭吾"]})
+
+        def fake_resolve(text, extra=None):
+            seen["text"] = text
+            seen["extra"] = extra
+            return {"entities": [], "note": "", "preference_ids": []}
+
+        async def fake_reply(messages):
+            return "在呢"
+
+        async def _anoop(*a, **k):
+            return None
+
+        def _noop(*a, **k):
+            return None
+
+        monkeypatch.setenv("MEMORY_V2_INJECT", "0")
+        monkeypatch.setattr(core, "probe_session", fake_probe)
+        monkeypatch.setattr(core, "resolve_associations", fake_resolve)
+        monkeypatch.setattr(core, "generate_reply", fake_reply)
+        monkeypatch.setattr(core, "get_user_history", lambda uid: [])
+        monkeypatch.setattr(core, "get_last_turn_gap_seconds", lambda uid: None)
+        monkeypatch.setattr(core, "append_user_history", _noop)
+        monkeypatch.setattr(core, "update_memory_v2_shadow_task", _anoop)
+        monkeypatch.setattr(core, "get_llm_route", lambda: "")
+        monkeypatch.setattr(core, "log_corpus_hits", _noop)
+        monkeypatch.setattr(core, "log_block_hits", _noop)
+        monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
+        monkeypatch.setattr(core, "load_schedule", lambda: {})
+        await core.handle_chat("u", "那本小说怎么样")
+
+        assert seen["text"] == "那本小说怎么样"
+        assert seen["extra"] == ["东野圭吾"]
 
 
 class TestRetrievePreferences:
@@ -1069,8 +1183,9 @@ class TestMemoryStoresCleanedReply:
     """
 
     async def test_memory_gets_cleaned_reply(self, monkeypatch):
-        async def fake_probe(uid, msg, hist, client):
-            return "用户发了个偷笑的表情"   # 纯情绪 → 跳过检索，最小 harness
+        async def fake_probe(uid, msg, hist, client, debug=False):
+            _v = '用户发了个偷笑的表情'
+            return (_v, {}) if debug else _v   # 纯情绪 → 跳过检索，最小 harness
 
         captured = {}
 
@@ -1299,8 +1414,9 @@ class TestHandleChatEmotionOnly:
     防误命中无关样本（曾导致回'喜欢新衣服'）。"""
 
     async def test_emotion_only_skips_retrieval(self, monkeypatch):
-        async def fake_probe(uid, msg, hist, client):
-            return "用户发了个偷笑的表情"
+        async def fake_probe(uid, msg, hist, client, debug=False):
+            _v = '用户发了个偷笑的表情'
+            return (_v, {}) if debug else _v
         monkeypatch.setattr(core, "probe_session", fake_probe)
 
         def _fail(*a, **k):

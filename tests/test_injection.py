@@ -15,6 +15,7 @@ import pytest
 from src.plugins.chatbot import injection as inj
 
 EXPECTED_IDS = [
+    "scene",
     "identity", "schedule", "profile", "preferences", "core_stories", "group",
     "terms", "session", "prev_session", "behaviors", "corpus", "commitment",
     "history", "same_request", "batch", "query_hint", "now", "mood", "daily",
@@ -23,14 +24,14 @@ EXPECTED_IDS = [
 
 # ---------------------------------------------------------------- 目录结构
 
-def test_all_19_blocks_load():
+def test_all_20_blocks_load():
     blocks = inj.load_blocks()
     assert sorted(blocks) == sorted(EXPECTED_IDS), "块的 id 集合变了"
 
 
-def test_order_is_1_to_19_and_unique():
+def test_order_is_0_to_19_and_unique():
     orders = [inj.load_blocks()[b]["order"] for b in EXPECTED_IDS]
-    assert sorted(orders) == list(range(1, 20)), "序号必须 1..19 且不重复"
+    assert sorted(orders) == list(range(0, 20)), "序号必须 0..19 且不重复"
 
 
 def test_folder_prefix_matches_order():
@@ -50,7 +51,7 @@ def test_order_function_follows_folder_order():
 def test_block_has_required_metadata(bid):
     b = inj.block(bid)
     for field in ("id", "order", "title", "when", "source", "_readme"):
-        assert b.get(field), f"{bid} 缺字段 {field}"
+        assert b.get(field) not in (None, ""), f"{bid} 缺字段 {field}"
     assert len(b["_readme"]) > 40, f"{bid} 的 _readme 太短，等于没写"
 
 
@@ -105,7 +106,12 @@ def test_each_text_block_starts_with_its_header():
         if b.get("kind") == "raw_file":
             continue
         for key, tpl in (b.get("strings") or {}).items():
-            if key in ("behaviors", "item", "contradiction", "fallback", "tail"):
+            if key in ("behaviors", "item", "contradiction", "fallback", "tail",
+                       "private", "group",
+                       # 关联背景的关系句是拼进"段头"里的碎片
+                       "associations_written_by", "associations_representative",
+                       "associations_located_in"):
+                # private/group 是 00_scene 的两段场景文案（用户逐字给定，不带段头）
                 continue       # 拼接用的碎片，不带头
             assert tpl.startswith("【"), f"{bid}.{key} 没有以段头开头：{tpl[:20]}"
 
@@ -186,6 +192,7 @@ DATA_FILES = [
     ("05_core_stories", "core_stories.json"),
     ("05_core_stories", "core_story_vectors.json"),
     ("07_terms", "terms.json"),
+    ("07_terms", "associations.json"),
     ("10_behaviors", "behaviors.json"),
     ("10_behaviors", "behavior_keywords.json"),
     ("11_corpus", "statement_final.json"),
