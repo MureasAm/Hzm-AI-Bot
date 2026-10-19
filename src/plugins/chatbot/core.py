@@ -41,7 +41,7 @@ from .routing import (
 )
 from .reply_style import (
     clean_reply, is_echo_reply, is_emotion_only_query, uses_time_hook, starts_with_name,
-    uses_hollow_opener,
+    uses_hollow_opener, repeated_formula,
 )
 from .session_memory import (
     probe_session, build_session_context, get_session, is_emoji_msg, previous_session_note,
@@ -1015,6 +1015,24 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
             candidate = await generate_reply(list(messages) + [nudge])
             reply = candidate
             if not (uses_time_hook(reply) and any(uses_time_hook(prev) for prev in recent_bot[-2:])):
+                break
+
+    # 「固定模板」重复：`灰泽满才没…` / `突然说这个…` 是**模型级模板**（2026-10-20 A/B：
+    # 同一批 prompt 下 gemini-3.1 10/20 出现、gemini-3.8 0/20、deepseek 1/20），
+    # 不是 behaviors 例句。只在**最近 4 条里有 2 条同模板**时才拦，单条不管。
+    opener = repeated_formula(reply, recent_bot)
+    if opener:
+        print(f"[防复读] 固定模板『{opener}…』连续出现，换说法")
+        nudge = {
+            "role": "system",
+            "content": f"你最近几条回复都在用『{opener}…』这个固定句式，对方已经听腻了。"
+                       f"这条**不要用这个句式开场**，换一个动作：直接承认、反问、换话题、"
+                       f"或者自嘲一句。重新回复这条消息。",
+        }
+        for _ in range(2):
+            candidate = await generate_reply(list(messages) + [nudge])
+            reply = candidate
+            if not repeated_formula(reply, recent_bot):
                 break
 
     # 「名字开头」重复：名字进记忆只是"种子"，真正让它停不下来的是**正反馈**——她的回复进

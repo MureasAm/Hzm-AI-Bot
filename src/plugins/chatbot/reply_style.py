@@ -102,6 +102,40 @@ def uses_hollow_opener(reply: str) -> bool:
     return bool(_HOLLOW_OPENER_RE.match(_LEADING_PAREN_RE.sub("", (reply or "").lstrip())))
 
 
+# 「固定模板起手」：她最近反复用同一个否定/转移句式开场。
+# 2026-10-20 实测：`灰泽满才没` 全库 2.6%，但 10-15 起从 ~0.3% 跳到 8–10%
+# （gemini-3.1-flash-lite；同批 prompt 下 gemini-3.8 是 0/20、deepseek 1/20），
+# 是**模型级模板**，不是 behaviors 例句。
+# 用户 2026-10-20 定：核心就是「才不」「才没」两个词——不限定主语/前缀，
+# 只要**第一句**里出现这两个词就算同一模板；`突然说这个` 保留为第二模板。
+def formula_opener(reply: str) -> str:
+    """回复第一句里有没有 `才不/才没`，或是否以 `突然说这个` 开头。"""
+    text = _LEADING_PAREN_RE.sub("", (reply or "").lstrip())
+    first_sentence = re.split(r"[。！？!?]", text, maxsplit=1)[0]
+    if "才不" in first_sentence or "才没" in first_sentence:
+        return "才不/才没"
+    if re.match(
+        r"^(?:(?:啊|哎呀|好端端的?|干嘛|怎么)\s*[，,、：:\s]*)?突然说这个",
+        text,
+    ):
+        return "突然说这个"
+    return ""
+
+
+def repeated_formula(reply: str, recent_bot_replies: list,
+                     window: int = 4, min_prev: int = 2) -> str:
+    """当前回复 + 最近 window 条里有 >=min_prev 条同模板时，返回该模板；否则空串。
+
+    只用于"最近反复用同一个固定句式"的窄场景；单条或偶尔出现不拦。
+    """
+    opener = formula_opener(reply)
+    if not opener:
+        return ""
+    count = sum(1 for prev in (recent_bot_replies or [])[-window:]
+                if formula_opener(prev) == opener)
+    return opener if count >= min_prev else ""
+
+
 def starts_with_name(reply: str, name: str) -> bool:
     """这条回复是不是**拿用户的名字当开头**。
 

@@ -162,6 +162,31 @@ class TestHollowOpener:
             assert reply_style.uses_hollow_opener(s) is False, s
 
 
+class TestFormulaOpener:
+    """`灰泽满才没…` / `突然说这个…` 的模板判据（2026-10-20 A/B：模型级口癖）。"""
+
+    def test_detects_two_known_templates(self):
+        assert reply_style.formula_opener("灰泽满才没感动呢") == "才不/才没"
+        assert reply_style.formula_opener("灰泽满才不呢") == "才不/才没"
+        assert reply_style.formula_opener("我才不要") == "才不/才没"
+        assert reply_style.formula_opener("才没有呢") == "才不/才没"
+        assert reply_style.formula_opener("你这话灰泽满才没说过") == "才不/才没"
+        assert reply_style.formula_opener("突然说这个干嘛") == "突然说这个"
+        assert reply_style.formula_opener("啊，突然说这个干嘛") == "突然说这个"
+        assert reply_style.formula_opener("（心虚）灰泽满才没有") == "才不/才没"
+
+    def test_normal_openers_are_untouched(self):
+        for s in ("今天过得怎么样呀", "嗯，知道了", "灰泽满哪能睡啊",
+                  "才刚睡醒", "现在是两个人"):
+            assert reply_style.formula_opener(s) == "", s
+
+    def test_only_fires_when_recent_replies_repeat_it(self):
+        recent = ["灰泽满才没感动", "别的", "我才不要呢"]
+        assert reply_style.repeated_formula("灰泽满才不担心你", recent) == "才不/才没"
+        assert reply_style.repeated_formula("灰泽满才没担心你", ["灰泽满才没感动", "别的", "别的"]) == ""
+        assert reply_style.repeated_formula("今天天气不错", recent) == ""
+
+
 class TestWeatherCity:
     """天气城市从 V2 的 location 事实取（v1 卡的 weather_city 回落已于 2026-10-12 撤掉）。"""
 
