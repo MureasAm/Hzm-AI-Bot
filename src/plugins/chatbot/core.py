@@ -396,14 +396,15 @@ def build_message_list(user_msg: str, fused_items: list,
     group_address_note：群聊本批谁点名了她（系统元信息）。**不写进用户消息**——
     写进去模型会偶发把标记原样吐出来（2026-10-21 实测 2/216）。
     """
-    # 场景（第 00 块）：私聊/群聊**二选一**。
-    # ⚠️ 2026-10-21：场景**并进骨架那条身份消息**，不再单独发一条 system。
-    #    A/B（12 条真实私聊消息、gemini-3.1）：单独一条时“灰泽满/hzm 开头”58%，
-    #    并进身份消息后 17%（旧骨架 25%）。单独一条容易被当成“旁白/设定”，
-    #    并进去才读成“你就是她，此刻正在跟对面说话”。
-    scene_key = "group" if is_group else "private"
-    messages = [{"role": "system",
-                 "content": SYSTEM_PROMPT + "\n\n" + inj.T("scene", scene_key)}]
+    # 场景（第 00 块）：**只有群聊注入**。
+    # 私聊场景已移回骨架（2026-10-21 用户定：骨架保持原句
+    # 「正在 QQ 上与绿冻聊天 / 你是在直接与对方聊天」）。群聊才需要额外提醒
+    # “有多个绿冻、只有点名才是跟她说”——这句不能写进骨架，否则私聊也会带上。
+    if is_group:
+        messages = [{"role": "system",
+                     "content": SYSTEM_PROMPT + "\n\n" + inj.T("scene", "group")}]
+    else:
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     hit_blocks: list[str] = []   # 12–19 本轮回实际注入了哪些块（真实聊天才落盘）
 
     # 轨迹：按**实际注入顺序**记块名；items 只收真正渲染进提示词的条目
@@ -417,9 +418,9 @@ def build_message_list(user_msg: str, fused_items: list,
         if trace is not None and values:
             trace.setdefault("items", {})[name] = values
 
-    hit_blocks.append(f"scene_{scene_key}")
-    _mark(f"scene_{scene_key}")
-
+    if is_group:
+        hit_blocks.append("scene_group")
+        _mark("scene_group")
 
     # 周表（地面真值）：被问"明天来吗/这周/几点播"以它为准。
     # 记忆里带"明天/下周"的话是过去某场直播当时的说法，可能早过期，不能当现在的安排。

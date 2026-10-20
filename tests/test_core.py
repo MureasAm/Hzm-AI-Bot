@@ -849,7 +849,6 @@ class TestCorpusTimePrefix:
         assert recorded["query"] == "你多高啊"
         assert recorded["ids"] == ["42"]
         assert set(recorded["blocks"]) == {
-            "scene_private",
             "commitment", "history", "same_request", "batch",
             "query_hint", "now", "mood", "daily",
         }
@@ -894,7 +893,6 @@ class TestInjectionTrace:
         trace = {}
         self._build(monkeypatch, trace)
         assert trace["blocks"] == [
-            "scene_private",
             "preferences", "core_stories", "terms", "behaviors", "corpus",
             "commitment", "history", "same_request", "batch", "query_hint",
             "now", "mood", "daily",
@@ -1054,27 +1052,28 @@ class TestSceneBlock:
         monkeypatch.setattr(core, "load_schedule", lambda: {})
         return core.build_message_list("在吗", [], [], is_group=is_group)
 
-    def test_private_scene_only(self, monkeypatch):
+    def test_private_scene_lives_in_skeleton(self, monkeypatch):
         msgs = self._msgs(monkeypatch, False)
         joined = "\n".join(m["content"] for m in msgs if m["role"] == "system")
-        assert "现在是一对一私聊" in joined and "现在是群聊" not in joined
-        # 位置：**并进骨架那条身份消息**（不是单独一条 system）
-        assert msgs[0]["content"].startswith(core.SYSTEM_PROMPT)
-        assert "现在是一对一私聊：你正在和对面的人说话" in msgs[0]["content"]
+        # 私聊不再额外注入场景块；一对一场景就是骨架原句
+        assert "现在是群聊" not in joined
+        assert msgs[0]["content"] == core.SYSTEM_PROMPT
+        assert "正在 QQ 上与绿冻聊天" in msgs[0]["content"]
+        assert "你是在直接与对方聊天" in msgs[0]["content"]
 
     def test_group_scene_only(self, monkeypatch):
         msgs = self._msgs(monkeypatch, True)
         joined = "\n".join(m["content"] for m in msgs if m["role"] == "system")
-        assert "现在是群聊" in joined and "现在是一对一私聊" not in joined
+        assert "现在是群聊" in joined
         assert msgs[0]["content"].startswith(core.SYSTEM_PROMPT)
         assert "现在是群聊" in msgs[0]["content"]
         assert "偶尔也可以插一句" in joined, "没点名也可能偶尔接一句，文案不能写成“只有点名”"
 
-    def test_skeleton_no_longer_asserts_one_on_one(self):
-        """骨架里的一对一场景句已搬走——群聊里那句话会把"你"读成同一个人。"""
+    def test_skeleton_keeps_one_on_one_scene(self):
+        """私聊场景移回骨架：一对一场景句保留在骨架里（2026-10-21 用户定）。"""
         text = core.SYSTEM_PROMPT
-        assert "正在 QQ 上与绿冻聊天" not in text
-        assert "你是在直接与对方聊天" not in text
+        assert "正在 QQ 上与绿冻聊天" in text
+        assert "你是在直接与对方聊天" in text
         assert "你就是灰泽满本人" in text
         assert "不是在撰写关于灰泽满的旁白" in text
 
