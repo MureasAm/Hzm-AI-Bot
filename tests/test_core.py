@@ -1058,15 +1058,16 @@ class TestSceneBlock:
         msgs = self._msgs(monkeypatch, False)
         joined = "\n".join(m["content"] for m in msgs if m["role"] == "system")
         assert "现在是一对一私聊" in joined and "现在是群聊" not in joined
-        # 位置：紧跟骨架（SYSTEM_PROMPT 之后、周表之前）
-        assert msgs[0]["content"] == core.SYSTEM_PROMPT
-        assert msgs[1]["content"].startswith("现在是一对一私聊")
+        # 位置：**并进骨架那条身份消息**（不是单独一条 system）
+        assert msgs[0]["content"].startswith(core.SYSTEM_PROMPT)
+        assert "现在是一对一私聊：你正在和对面的人说话" in msgs[0]["content"]
 
     def test_group_scene_only(self, monkeypatch):
         msgs = self._msgs(monkeypatch, True)
         joined = "\n".join(m["content"] for m in msgs if m["role"] == "system")
         assert "现在是群聊" in joined and "现在是一对一私聊" not in joined
-        assert msgs[1]["content"].startswith("现在是群聊")
+        assert msgs[0]["content"].startswith(core.SYSTEM_PROMPT)
+        assert "现在是群聊" in msgs[0]["content"]
         assert "偶尔也可以插一句" in joined, "没点名也可能偶尔接一句，文案不能写成“只有点名”"
 
     def test_skeleton_no_longer_asserts_one_on_one(self):
@@ -1107,6 +1108,21 @@ class TestAssociationInjection:
     def test_absent_by_default(self, monkeypatch):
         msgs = self._build(monkeypatch)
         assert not any(m["content"].startswith("【关联背景】") for m in msgs)
+
+    def test_group_address_note_is_system_only(self, monkeypatch):
+        """群聊点名情况走系统元信息，用户消息保持干净（模型没有标记可抄）。"""
+        monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
+        monkeypatch.setattr(core, "load_schedule", lambda: {})
+        msgs = core.build_message_list(
+            "甲：大疲", [], [], is_group=True,
+            user_transcript="甲：大疲",
+            group_context="在场成员：甲",
+            group_address_note="本批无人点名灰泽满：以上都是群友在互相聊。",
+        )
+        hit = [m for m in msgs if m["content"].startswith("【本批点名情况】")]
+        assert hit and "本批无人点名" in hit[0]["content"]
+        assert msgs[-1]["content"] == "甲：大疲"
+        assert "[未点名]" not in msgs[-1]["content"]
 
 
 class TestAssociationWiring:

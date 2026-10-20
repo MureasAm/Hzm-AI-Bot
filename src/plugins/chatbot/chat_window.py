@@ -34,6 +34,7 @@ from .vision import describe_image_bytes, _read_image_bytes, image_kind
 from .constants import (
     READ_WINDOW_MIN_SECONDS, READ_WINDOW_MAX_SECONDS, SPLIT_REPLY_ENABLED,
     GROUP_EVENT_COOLDOWN, STICKER_COOLDOWN_TURNS, STICKER_RECENT_KEEP, PROJECT_ROOT,
+    AT_SELF_MARK,
 )
 from . import group_memory
 
@@ -82,6 +83,17 @@ async def _eager_download(source: str) -> None:
 def _combine_text(msgs) -> str:
     """合并本批文本（图片源不参与文本合并）。首元素为文本，兼容 (text, ...) 任意尾巴。"""
     return "\n".join(t for t, *_ in msgs if t.strip()).strip()
+
+
+def _clean_group_record(text: str) -> str:
+    """群聊记入短期记忆的版本：去掉内部 @ 标记和它后面的空格，别让模型从历史里抄标记。"""
+    lines = []
+    for line in (text or "").splitlines():
+        line = line.replace(f"{AT_SELF_MARK} ", "").replace(AT_SELF_MARK, "").rstrip()
+        if line.endswith("："):
+            line += "（只 @ 了她）"
+        lines.append(line)
+    return "\n".join(lines).strip()
 
 
 # 文字里**明确指图**的说法：这时候图片就是话题，不能丢。
@@ -263,13 +275,15 @@ async def _flush(win: _UserWindow) -> None:
 
     # 组装：
     # · 私聊 = 纯文本 transcript（图片按顺序内联）
-    # · 群聊 = 每条「[对灰泽满]/[未点名] + 昵称：文本」，图片按顺序内联；整批再带一句
-    #   「本批有人点名灰泽满 / 本批无人点名灰泽满」。
-    #   为什么要确定性标记（2026-10-20）：群里有好几个绿冻，主模型不该去猜"这句'你'是谁"——
-    #   点名判定复用接话门的 `_addressed_to_her`（@ / 引用她 / 直呼名字），确定性、可回归。
+    # · 群聊 = 纯「昵称：文本」（图片按顺序内联）+ 一条**系统元信息**说明本批谁点名了她。
+    #   ⚠️ 2026-10-21 改：原来把 `[对灰泽满]/[未点名]` 直接写进用户消息，模型偶尔会把
+    #   标记原样吐出来（实测 2/216 条群回复带了 `[未点名]`）。**标记不该出现在用户消息里**——
+    #   换成系统侧的【本批点名情况】，用户消息保持干净，模型没有可抄的标记。
+    #   点名判定仍复用接话门的 `_addressed_to_her`（@ / 引用她 / 直呼名字），确定性、可回归。
     id_to_name = {}
     combined = ""
     user_transcript = ""
+    group_address_note = ""
     batch_addressed = False
     if win.is_private:
         combined = _combine_text([(t, ds) for _, t, ds in parsed])
@@ -281,7 +295,7 @@ async def _flush(win: _UserWindow) -> None:
                 tlines.append(f"[图片：{d}]")
         user_transcript = "\n".join(tlines).strip()
     else:
-        plain_lines, transcript_lines = [], []
+        lines, plain_lines, addressed_lines = [], [], []
         for s, t, ds in parsed:
             text = t.strip()
             if not text and not ds:
@@ -291,16 +305,24 @@ async def _flush(win: _UserWindow) -> None:
                 id_to_name[s] = name
             addressed = _addressed_to_her(text)   # @ 已被 __init__ 变成 AT_SELF_MARK
             batch_addressed = batch_addressed or addressed
-            body = " ".join(([text] if text else []) + [f"[图片：{d}]" for d in ds])
-            transcript_lines.append(f"{'[对灰泽满]' if addressed else '[未点名]'} {name}：{body}")
+            # 模型看到的用户消息也要干净：把内部的 @ 标记换成中性说法（点名情况另由系统元信息给）
+            shown = text.replace(AT_SELF_MARK, "").strip() or ("（只 @ 了她）" if addressed else "")
+            body = " ".join(([shown] if shown else []) + [f"[图片：{d}]" for d in ds])
+            lines.append(f"{name}：{body}")
             if text:
                 plain_lines.append(f"{name}：{text}")
+            if addressed:
+                said = shown or "（只 @ 了她 / 发了图）"
+                addressed_lines.append(f"{name}说「{said[:60]}」")
         combined = "\n".join(plain_lines).strip()
+        user_transcript = "\n".join(lines).strip()
         if id_to_name:
             group_memory.upsert_members(win.target_id, id_to_name)
-        if transcript_lines:
-            head = "本批有人点名灰泽满" if batch_addressed else "本批无人点名灰泽满"
-            user_transcript = head + "\n" + "\n".join(transcript_lines)
+        if batch_addressed:
+            group_address_note = ("本批有人点名灰泽满：" + "；".join(addressed_lines[:3]) +
+                                  "（其余消息是群友在互相聊）")
+        else:
+            group_address_note = "本批无人点名灰泽满：以上都是群友在互相聊。"
     vision_desc = "；".join(d for _, _, ds in parsed for d in ds)
     img_count = sum(len(ds) for _, _, ds in parsed)
     print(f"[读秒] {'群' if not win.is_private else '私聊'}={win.target_id} "
@@ -323,7 +345,7 @@ async def _flush(win: _UserWindow) -> None:
         deepseek_client, _ = _get_clients()
         hist = "\n".join(get_user_history(win.target_id)[-8:])
         if not await should_reply_in_group(deepseek_client, hist, combined):
-            append_user_history(win.target_id, combined, "")
+            append_user_history(win.target_id, _clean_group_record(combined), "")
             _commit_batch()   # 这批已经“处理”了（只记不发），不能留给下一轮重判
             print(f"[读秒] 群={win.target_id} 这批不接，只记不发")
             return
@@ -332,11 +354,13 @@ async def _flush(win: _UserWindow) -> None:
     # 批次级标记不该被当成"对话历史"喂回去（record_text，见 core.handle_chat）。
     record_kwargs = {}
     if not win.is_private:
-        record_kwargs["record_text"] = _compose_record_msg(combined, vision_desc)
+        # 内部 @ 标记也不进历史（模型会照抄）；历史只留干净的「昵称：文本」
+        record_kwargs["record_text"] = _compose_record_msg(_clean_group_record(combined), vision_desc)
     reply = await handle_chat(win.target_id, combined, vision_desc=vision_desc,
                               batch_summary=batch_summary, is_group=not win.is_private,
                               user_transcript=user_transcript,
                               group_addressed=(True if win.is_private else batch_addressed),
+                              group_address_note=group_address_note,
                               **record_kwargs)
     reply = clean_reply(reply)  # 去括号前缀 + 整条至多 1 个括号
     if not reply:

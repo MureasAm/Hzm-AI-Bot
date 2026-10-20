@@ -436,7 +436,8 @@ class TestGroupTranscript:
         async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False,
                               user_transcript="", **kwargs):
             captured.update(text=text, is_group=is_group,
-                            transcript=user_transcript, record=kwargs.get("record_text"))
+                            transcript=user_transcript, record=kwargs.get("record_text"),
+                            address_note=kwargs.get("group_address_note"))
             return "在呢"
 
         async def fake_summarize(msgs):
@@ -461,13 +462,19 @@ class TestGroupTranscript:
         await cw._flush(win)
 
         assert captured["is_group"] is True
-        lines = captured["transcript"].splitlines()
-        assert lines[0] == "本批有人点名灰泽满"
-        assert "[未点名] 甲：今天下雨了" in lines[1:]
-        assert any(l.startswith("[对灰泽满] 乙：") for l in lines[1:])
-        # 短期记忆记干净版：批次标记不进历史
+        # 用户消息里不再有 [未点名]/[对灰泽满] 标记（模型会照抄）
+        assert captured["transcript"] == ("甲：今天下雨了\n"
+                                          "乙：你怎么看")
+        assert "[未点名]" not in captured["transcript"]
+        assert "[对灰泽满]" not in captured["transcript"]
+        assert "[有人@了灰泽满]" not in captured["transcript"]
+        # 点名情况改由系统元信息给出
+        note = captured["address_note"]
+        assert note.startswith("本批有人点名灰泽满")
+        assert "乙说「" in note
+        # 短期记忆记干净版：内部标记不进历史
         assert captured["record"] == ("甲：今天下雨了\n"
-                                      "乙：[有人@了灰泽满] 你怎么看")
+                                      "乙：你怎么看")
 
     async def test_images_are_inline_per_message(self, monkeypatch):
         win = cw._UserWindow("g2")
@@ -483,7 +490,8 @@ class TestGroupTranscript:
 
         async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False,
                               user_transcript="", **kwargs):
-            captured.update(transcript=user_transcript, vision=vision_desc)
+            captured.update(transcript=user_transcript, vision=vision_desc,
+                            address_note=kwargs.get("group_address_note"))
             return "在呢"
 
         async def fake_summarize(msgs):
@@ -511,7 +519,8 @@ class TestGroupTranscript:
 
         await cw._flush(win)
 
-        assert "[未点名] 甲：看这个 [图片：一只虫子]" in captured["transcript"].splitlines()
+        assert captured["transcript"] == "甲：看这个 [图片：一只虫子]"
+        assert captured["address_note"].startswith("本批无人点名灰泽满")
 
 
 class TestBatchCommitOnInterrupt:

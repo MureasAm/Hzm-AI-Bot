@@ -366,7 +366,7 @@ def build_message_list(user_msg: str, fused_items: list,
                        user_transcript: str = "", nickname_hint: str = "",
                        log_hits: bool = False, trace: dict | None = None,
                        association_context: str = "", association_entities: list | None = None,
-                       is_group: bool = False) -> list:
+                       is_group: bool = False, group_address_note: str = "") -> list:
     """按优先级组装发送给模型的消息列表。
 
     fused_items 为融合后的 RetrievalItem 列表（corpus + behavior），按源分组注入。
@@ -392,9 +392,18 @@ def build_message_list(user_msg: str, fused_items: list,
 
     is_group：**私聊/群聊的唯一真值**（来自 NapCat 的 message_type，别拿 to_me 或
     group_context 是否为空反推）。决定第 00 块注入哪段场景文案。
+
+    group_address_note：群聊本批谁点名了她（系统元信息）。**不写进用户消息**——
+    写进去模型会偶发把标记原样吐出来（2026-10-21 实测 2/216）。
     """
-    messages = []
-    messages.append({"role": "system", "content": SYSTEM_PROMPT})
+    # 场景（第 00 块）：私聊/群聊**二选一**。
+    # ⚠️ 2026-10-21：场景**并进骨架那条身份消息**，不再单独发一条 system。
+    #    A/B（12 条真实私聊消息、gemini-3.1）：单独一条时“灰泽满/hzm 开头”58%，
+    #    并进身份消息后 17%（旧骨架 25%）。单独一条容易被当成“旁白/设定”，
+    #    并进去才读成“你就是她，此刻正在跟对面说话”。
+    scene_key = "group" if is_group else "private"
+    messages = [{"role": "system",
+                 "content": SYSTEM_PROMPT + "\n\n" + inj.T("scene", scene_key)}]
     hit_blocks: list[str] = []   # 12–19 本轮回实际注入了哪些块（真实聊天才落盘）
 
     # 轨迹：按**实际注入顺序**记块名；items 只收真正渲染进提示词的条目
@@ -408,12 +417,9 @@ def build_message_list(user_msg: str, fused_items: list,
         if trace is not None and values:
             trace.setdefault("items", {})[name] = values
 
-    # 场景（第 00 块）：私聊/群聊**二选一**，紧跟骨架、在周表之前。
-    # 从骨架里搬出来的是"一对一"那句——群聊里说"你"前必须知道有几个人在场。
-    scene_key = "group" if is_group else "private"
-    messages.append({"role": "system", "content": inj.T("scene", scene_key)})
     hit_blocks.append(f"scene_{scene_key}")
     _mark(f"scene_{scene_key}")
+
 
     # 周表（地面真值）：被问"明天来吗/这周/几点播"以它为准。
     # 记忆里带"明天/下周"的话是过去某场直播当时的说法，可能早过期，不能当现在的安排。
@@ -457,6 +463,12 @@ def build_message_list(user_msg: str, fused_items: list,
     if group_context:
         messages.append({"role": "system", "content": inj.T("group", context=group_context)})
         _mark("group")
+
+    # 本批谁点名了她：系统元信息（用户消息里只留干净的「昵称：文本」）。
+    if group_address_note:
+        messages.append({"role": "system",
+                         "content": inj.T("group", "address_note", note=group_address_note)})
+        _mark("group_addr")
 
     # 名词库（terms/lorebook）：核心词 always 注入 + 命中用户消息的词注入——让模型懂"绿冻/枪神8/slg"这类词并带对的态度
     _term_hits: list = []
@@ -933,7 +945,7 @@ async def _fill_retrieval(result: dict, query_text: str, retrieval_query: str, h
 async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
                       batch_summary: str = "", is_group: bool = False,
                       user_transcript: str = "", record_text: str = "",
-                      group_addressed: bool = True) -> str:
+                      group_addressed: bool = True, group_address_note: str = "") -> str:
     """处理一条用户消息，返回机器人回复。vision_desc 为图片描述；batch_summary 为批量归纳。
 
     is_group=True 时按群会话处理：user_id 传群号（会话历史按群记），
@@ -945,6 +957,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
 
     group_addressed：这批群里有没有人点名/@ 她（接话门的确定性判定）。为 False 时，
     如果模型输出的是“没点我/保持潜水”这类**元回复**，视为这批不说话（只记用户侧、不发）。
+    group_address_note：本批点名情况的系统元信息（见 build_message_list）。
     """
     deepseek_client, zhipu_client = _get_clients()
 
@@ -1098,7 +1111,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         user_transcript=user_transcript, nickname_hint=nickname_hint,
         log_hits=True, trace=injection_trace,
         association_context=_assoc["note"], association_entities=_assoc["entities"],
-        is_group=is_group,
+        is_group=is_group, group_address_note=group_address_note,
     )
 
     # --- 🤖 调用大模型 ---

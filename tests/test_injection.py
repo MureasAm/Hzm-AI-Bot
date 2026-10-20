@@ -224,5 +224,6 @@ def test_group_block_allows_occasional_chime_in():
     """
     t = inj.T("group", context="在场成员：甲")
     assert "偶尔可以插一句" in t
-    assert "内部判断标记" in t
     assert "只有点名或 @ 灰泽满时才是在跟她说话" not in t
+    note = inj.T("group", "address_note", note="本批无人点名灰泽满：以上都是群友在互相聊。")
+    assert "内部信息" in note and "本批无人点名" in note
