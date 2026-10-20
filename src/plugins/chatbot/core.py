@@ -38,6 +38,7 @@ from . import group_memory
 from . import injection as inj
 from . import daily_memory
 from . import memory_v2
+from . import self_speech
 from .routing import (
     LEGENDARY_REPLIES, LEGENDARY_CONFIRMS, legendary_confirmed, legendary_hit, classify_l3,
 )
@@ -1099,8 +1100,15 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     # 条目级注入轨迹：build 时填"实际注入了哪些块/条目"，回复生成后再补称呼是否被用，
     # 由下面统一落盘（只有 私/群 真实聊天路径写，和 block_hits 同一个闸）。
     injection_trace: dict = {}
+    # 自述转述（2026-10-21）：历史里她的原句 + 本轮对她自己话的引用，注入前改写成大意。
+    # 实测原句 20/20 会复读同一句式，加提醒仍 16–20/20，改成大意 0/20。
+    # 只改注入，不改检索、不改落盘记录。
+    hist_for_injection, gen_user_msg = user_history_timed, user_msg
+    if self_speech.enabled():
+        hist_for_injection, gen_user_msg = await self_speech.annotate_turn(
+            user_history_timed, user_msg, deepseek_client)
     messages = build_message_list(
-        user_msg, fused_items, user_history_timed,
+        gen_user_msg, fused_items, hist_for_injection,
         vision_desc=vision_desc, weather_city=weather_city, batch_summary=batch_summary,
         preference_items=preference_items, core_stories=core_stories,
         session_context=session_context, query_hint=query_hint,
@@ -1257,7 +1265,11 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         print("[群聊] 模型输出的是“没点名/潜水”式元回复 → 这批不发，只记用户侧")
         append_user_history(user_id, record_msg, "")
         return ""
-    append_user_history(user_id, record_msg, clean_reply(reply))
+    cleaned_reply = clean_reply(reply)
+    append_user_history(user_id, record_msg, cleaned_reply)
+    # 预转述她这句：下一轮注入直接命中缓存，把转述开销挪出关键路径。
+    if self_speech.enabled():
+        spawn(self_speech.prewarm(cleaned_reply))
 
     # --- 📝 异步更新长期记忆（V2；会话级记忆已在对话前 probe_session 同步更新） ---
     if not is_group:  # 群会话不建用户记忆卡
