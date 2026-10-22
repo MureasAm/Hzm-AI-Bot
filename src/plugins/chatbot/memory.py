@@ -268,13 +268,19 @@ def _append_lines(user_id: str, lines: list) -> None:
         _write_json(_file_for(user_id), history[-SHORT_MEMORY_LINES:])
 
 
-def append_user_history(user_id: str, user_msg: str, reply: str) -> None:
+def append_user_history(user_id: str, user_msg: str, reply: str,
+                        user_label: str = "用户", reply_label: str = "灰泽满") -> None:
     """追加一轮对话到短期记忆（带时间戳），保留最近 N 条。全程持锁。
 
     `reply` 传空串 = **她这批没开口**（群聊接话门判定安静）。这时只记"群里说了什么"，
     不记一条空的"灰泽满："——她看到了、只是没接，下一轮判定和生成仍该看得到上下文。
+
+    `user_label` / `reply_label`：群聊传 `"群聊"` / `"灰泽满（回甲）"`，
+    让历史一眼看出这是群聊、她回的是谁（好几个群友不该糊成同一个“用户”，2026-10-23）。
+    私聊用默认值，格式与以前完全一样。
     """
-    _append_lines(user_id, [f"用户：{user_msg}", f"灰泽满：{reply}" if reply else ""])
+    _append_lines(user_id, [f"{user_label}：{user_msg}",
+                            f"{reply_label}：{reply}" if reply else ""])
 
 
 def count_consecutive_requests(user_id: str, current_msg: str, max_look: int = 10,
@@ -300,7 +306,8 @@ def count_consecutive_requests(user_id: str, current_msg: str, max_look: int = 1
         return 1
     prev = []
     for ln in hist:
-        if ln.startswith("用户："):
+        # 群聊历史是「群聊：甲：…」，私聊是「用户：…」；两种都算“对方说的话”。
+        if ln.startswith(USER_LABELS):
             prev.append(ln[3:])
     if not prev:
         return 1
@@ -344,15 +351,32 @@ def append_bot_message(user_id: str, text: str) -> None:
 # 历史行可能带 `[3小时前] ` 前缀（get_user_history_timed 渲染的），判断"谁说的"要先剥掉
 _TIMED_PREFIX_RE = re.compile(r"^\[[^\]]{0,12}前\]\s*")
 
+# 对方发言的行首标签：私聊「用户：」，群聊「群聊：甲：…」（2026-10-23 起）。
+USER_LABELS = ("用户：", "群聊：")
+
+# 她自己发言的行首：私聊「灰泽满：」，群聊「灰泽满（回甲）：」。
+_BOT_LINE_RE = re.compile(r"^灰泽满(?:（[^）]*）)?：")
+
+
+def _strip_timed(line: str) -> str:
+    return _TIMED_PREFIX_RE.sub("", line or "").lstrip()
+
 
 def is_bot_line(line: str) -> bool:
-    """这行历史是不是**她自己说的**（`灰泽满：…`，行首可能带 [多久前] 前缀）。
+    """这行历史是不是**她自己说的**（`灰泽满：…` / `灰泽满（回甲）：…`，行首可能带 [多久前] 前缀）。
 
     存在的意义：注入层要把她的那半边滤掉（2026-10-14 去自反馈），而"谁说的"这个
     约定住在 `append_user_history` / `append_bot_message` 里，所以判断也放这儿——
-    别在调用方手写 `startswith("灰泽满：")`，那条前缀会漏。
+    别在调用方手写 `startswith("灰泽满：")`，那条前缀会漏（群聊还有「（回甲）」后缀）。
     """
-    return _TIMED_PREFIX_RE.sub("", line or "").lstrip().startswith("灰泽满：")
+    return bool(_BOT_LINE_RE.match(_strip_timed(line)))
+
+
+def bot_line_text(line: str) -> str:
+    """取她这行历史里**说的话本身**（剥掉时间前缀和「灰泽满（回甲）：」标签）。"""
+    s = _strip_timed(line)
+    m = _BOT_LINE_RE.match(s)
+    return s[m.end():] if m else ""
 
 
 __all__ = [
@@ -362,6 +386,7 @@ __all__ = [
     "append_user_history",
     "append_bot_message",
     "is_bot_line",
+    "bot_line_text",
     "humanize_gap",
     "use_storage",
     "PROJECT_ROOT",

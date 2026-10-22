@@ -21,7 +21,7 @@ from .persona import (
 )
 from .memory import (
     get_user_history, get_user_history_timed, append_user_history,
-    get_last_turn_gap_seconds, humanize_gap,
+    get_last_turn_gap_seconds, humanize_gap, is_bot_line, bot_line_text,
 )
 from .rag import embed_query
 from .retrieval import (
@@ -145,6 +145,50 @@ async def summarize_batch(msgs: list) -> str:
         return extract_chat_content(resp)
     except Exception as e:
         print(f"⚠️ 批量归纳失败（忽略）: {e}")
+        return ""
+
+
+async def summarize_group_batch(items: list) -> str:
+    """把一批群聊消息归纳成「对话线」：谁在对谁说什么、几条线、停在哪句话头上。
+
+    `items` = [(昵称, 文本, 图片描述), ...]。和 `summarize_batch` 的区别是**带发言人**：
+    群里有好几个人，只说“他们在聊什么”分不清谁在接谁；她要接在同一条线上，
+    就必须知道最后一句是谁抛给谁的（2026-10-23，见 docs/历史/交接文档.md）。
+
+    只有 **≥2 条有文字**的消息才归纳（单条/只有图片不归纳——本批本身就是那句）；
+    失败返回空串（调用方不注入，原文照旧）。
+    """
+    if sum(1 for _, t, _ in items if str(t or "").strip()) < 2:
+        return ""
+    lines = []
+    for name, text, desc in items:
+        body = " ".join(
+            part for part in (str(text or "").strip(), f"[图片：{desc}]" if desc else "") if part
+        )
+        if body:
+            lines.append(f"{name}：{body}")
+    if not lines:
+        return ""
+    prompt = (
+        "下面是群里刚聊的一批消息。用 1–3 句话说明：谁在对谁说什么、这批有几条对话线、"
+        "最后停在哪句话头上。\n"
+        "要求：只归纳原文已有的信息，不要编造、不要评价；别逐条复述；"
+        "如果大家各说各的、没有接同一条线，就直接说没有。\n\n"
+        "消息：\n" + "\n".join(lines)
+    )
+    try:
+        deepseek_client, _ = _get_clients()
+        resp = await deepseek_client.chat.completions.create(
+            model=_get_model_name(),
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=120,
+            **THINKING_DISABLED,
+        )
+        log_cache_usage(resp, "群聊归纳")
+        return extract_chat_content(resp)
+    except Exception as e:
+        print(f"⚠️ 群聊对话线归纳失败（忽略）: {e}")
         return ""
 
 
@@ -378,7 +422,8 @@ def build_message_list(user_msg: str, fused_items: list,
                        user_transcript: str = "", nickname_hint: str = "",
                        log_hits: bool = False, trace: dict | None = None,
                        association_context: str = "", association_entities: list | None = None,
-                       is_group: bool = False, group_address_note: str = "") -> list:
+                       is_group: bool = False, group_address_note: str = "",
+                       group_thread_note: str = "", name_budget: str = "") -> list:
     """按优先级组装发送给模型的消息列表。
 
     fused_items 为融合后的 RetrievalItem 列表（corpus + behavior），按源分组注入。
@@ -407,6 +452,13 @@ def build_message_list(user_msg: str, fused_items: list,
 
     group_address_note：群聊本批谁点名了她（系统元信息）。**不写进用户消息**——
     写进去模型会偶发把标记原样吐出来（2026-10-21 实测 2/216）。
+    **只在有人点名时才有值**；没人点名就不注入任何“没点名”的信息（2026-10-23）。
+
+    group_thread_note：群聊这批的对话线归纳（谁在对谁说、停在哪句话头上），
+    紧跟在群块后注入，让她接在同一条线上。
+
+    name_budget：称呼预算提醒（`name_budget_note` 渲染好的整句）。
+    位置紧跟相处方式——它是对“怎么称呼这个人”的当场修正，不该被后面的素材盖过。
     """
     # 场景（第 00 块）：**只有群聊注入**。
     # 私聊场景已移回骨架（2026-10-21 用户定：骨架保持原句
@@ -449,6 +501,12 @@ def build_message_list(user_msg: str, fused_items: list,
         messages.append({"role": "system", "content": profile_context})
         _mark("profile")
 
+    # 称呼预算（2026-10-23）：最近几轮叫得太多时，这轮前置提醒别再叫。
+    # 紧跟在相处方式之后：`address_style.nickname` 会鼓励称呼，这里是对它的当场配平。
+    if name_budget:
+        messages.append({"role": "system", "content": name_budget})
+        _mark("name_budget")
+
     # 偏好档案（第 5 路语义检索）：聊到相关话题才注入；与语料/记忆冲突时以偏好为准
     if preference_items:
         prefs_text = "；".join(
@@ -477,7 +535,16 @@ def build_message_list(user_msg: str, fused_items: list,
         messages.append({"role": "system", "content": inj.T("group", context=group_context)})
         _mark("group")
 
+    # 群聊对话线：这批谁在对谁说、停在哪句话头上（群聊归纳，2026-10-23）。
+    # 放在群块后面、点名情况前面——先知道场子，再知道谁在跟她说话。
+    if group_thread_note:
+        messages.append({"role": "system",
+                         "content": inj.T("group", "thread_note", note=group_thread_note)})
+        _mark("group_thread")
+
     # 本批谁点名了她：系统元信息（用户消息里只留干净的「昵称：文本」）。
+    # ⚠️ 只有**有人点名**时才有值并被注入；没人点名时一个字都不注——
+    #    「本批无人点名」本身会被模型复述成「没点我，才不管」（2026-10-23）。
     if group_address_note:
         messages.append({"role": "system",
                          "content": inj.T("group", "address_note", note=group_address_note)})
@@ -851,6 +918,43 @@ def _user_name_for(user_id: str) -> str:
     return ""
 
 
+# 称呼预算（2026-10-23）：最近 5 轮（10 行）里她叫对方名字的次数达到阈值，
+# 就前置提醒“这轮尽量别再叫”。阈值可用 NAME_BUDGET_MIN_CALLS 覆盖（A/B 用），
+# 设 0 等于关掉。
+# 默认 1（5 轮内出现过就提醒）：真实回放 A/B（20 条，同一份提示词）含名字回复
+# 基线 35% → ≥1 档 5%（降 86%）、≥2 档 15%（降 57%）、最近 2 条档 20%（降 43%，未达标）。
+# 见 docs/历史/交接文档.md 2026-10-23。
+NAME_BUDGET_WINDOW_LINES = 10
+NAME_BUDGET_MIN_CALLS = 1
+
+
+def name_budget_note(user_id: str) -> str:
+    """最近几轮她叫对方名字太多次 → 返回一条**前置提醒**；否则空串。
+
+    为什么需要它（2026-10-23）：名字一旦进短期记忆会自我强化——实测某用户前 100 轮
+    0 次，第 103 轮起一路涨到最近 14 轮 14/14。现有 `starts_with_name` 守卫只拦
+    “名字开头”这一条窄路径，管不住句中反复称呼；而 `address_style.nickname` 那条
+    偏好又会鼓励她称呼。所以补一条**事实型**的前置提醒（只给次数，不下命令）。
+
+    ⚠️ **只统计她自己说的话**（`is_bot_line`）：用户消息里提到名字不等于她在叫，
+    算进来会把“用户自己说了一次名字”误判成她称呼滥用。
+    """
+    name = _user_name_for(user_id)
+    if not name:
+        return ""
+    try:
+        min_calls = int(os.environ.get("NAME_BUDGET_MIN_CALLS", str(NAME_BUDGET_MIN_CALLS)))
+    except ValueError:
+        min_calls = NAME_BUDGET_MIN_CALLS
+    if min_calls <= 0:
+        return ""
+    hist = get_user_history(user_id)[-NAME_BUDGET_WINDOW_LINES:]
+    calls = sum(bot_line_text(ln).count(name) for ln in hist if is_bot_line(ln))
+    if calls < min_calls:
+        return ""
+    return inj.T("profile", "name_budget", name=name, n=calls)
+
+
 async def gather_retrieval(query_text: str, retrieval_query: str, history_text: str,
                            deepseek_client, zhipu_client,
                            is_user_msg: bool = True,
@@ -958,7 +1062,8 @@ async def _fill_retrieval(result: dict, query_text: str, retrieval_query: str, h
 async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
                       batch_summary: str = "", is_group: bool = False,
                       user_transcript: str = "", record_text: str = "",
-                      group_addressed: bool = True, group_address_note: str = "") -> str:
+                      group_addressed: bool = True, group_address_note: str = "",
+                      group_thread_note: str = "", reply_to: str = "") -> str:
     """处理一条用户消息，返回机器人回复。vision_desc 为图片描述；batch_summary 为批量归纳。
 
     is_group=True 时按群会话处理：user_id 传群号（会话历史按群记），
@@ -970,9 +1075,17 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
 
     group_addressed：这批群里有没有人点名/@ 她（接话门的确定性判定）。为 False 时，
     如果模型输出的是“没点我/保持潜水”这类**元回复**，视为这批不说话（只记用户侧、不发）。
-    group_address_note：本批点名情况的系统元信息（见 build_message_list）。
+    group_address_note：本批点名情况的系统元信息（见 build_message_list）；**只有点名时才有值**。
+    group_thread_note：本批群聊对话线归纳（见 summarize_group_batch）。
+    reply_to：她这句在回群里哪位（写进短期记忆的「灰泽满（回X）：」，只用于群聊）。
     """
     deepseek_client, zhipu_client = _get_clients()
+
+    # 短期记忆的说话人标签：群聊写成「群聊：甲：…」/「灰泽满（回甲）：…」，
+    # 私聊保持原来的「用户：」/「灰泽满：」——历史一读就知道是群聊、她回的是谁，
+    # 不会把好几个群友的消息糊成同一个“用户”（2026-10-23）。
+    _user_label = "群聊" if is_group else "用户"
+    _reply_label = f"灰泽满（回{reply_to}）" if (is_group and reply_to) else "灰泽满"
 
     # --- 会话级记忆：对话前同步探测（判断话题延续/转换 + 短 query 扩充） ---
     # 必须在组装消息前完成，这样本轮注入的就是本轮自己的话题，不滞后一轮。
@@ -1036,7 +1149,8 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
                     continue  # 只跳过这一条；同句还可能命中别的更明确梗，别一并放弃
             reply = random.choice(replies)
             # 梗匹配也记入短期记忆 + 异步长期记忆，避免后续对话"失忆"
-            append_user_history(user_id, user_msg, reply)
+            append_user_history(user_id, user_msg, reply,
+                                user_label=_user_label, reply_label=_reply_label)
             if not is_group:  # 群会话不建用户记忆卡
                 spawn(update_memory_v2_shadow_task(
                     user_id, user_msg, reply, memory_scope_id,
@@ -1097,6 +1211,9 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     nickname_hint = ""
     if not is_group and memory_v2.injection_enabled():
         nickname_hint = _MEMORY_V2_STORE.nickname_hint(user_id, user_msg)
+    # 称呼预算：最近几轮她叫对方名字太多 → 这轮前置提醒别再叫。
+    # **只对私聊**：群聊没有“单独对某个人称呼”的语境，切进来只会让她更奇怪。
+    name_budget = "" if is_group else name_budget_note(user_id)
     # 当下情绪住在**会话记忆**里（2026-10-10 从长期记忆搬来），跟话题一起 3h 消散。
     # 它**不受 v2 开关控制**——情绪是会话级感知，生产里就该生效；注入位置仍是紧挨用户消息。
     emotion_context = "" if is_group else mood_note(user_id)
@@ -1132,6 +1249,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         log_hits=True, trace=injection_trace,
         association_context=_assoc["note"], association_entities=_assoc["entities"],
         is_group=is_group, group_address_note=group_address_note,
+        group_thread_note=group_thread_note, name_budget=name_budget,
     )
 
     # --- 🤖 调用大模型 ---
@@ -1142,7 +1260,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     # 它会整段照搬上上轮的解释（隔几句也一样，故窗口放宽到 8，不只最近 3）。
     # 检测到就强制"换动作"重生成：光"换个说法"不够，得 pivot——
     # 对方大概率在重复同一句/同一情绪，应认怂答应去做/自嘲/点破，而不是把解释再说一遍。
-    recent_bot = [ln[4:] for ln in get_user_history(user_id) if ln.startswith("灰泽满：")]
+    recent_bot = [bot_line_text(ln) for ln in get_user_history(user_id) if is_bot_line(ln)]
     if is_echo_reply(reply, recent_bot, window=8):
         print(f"[防复读] 与最近自己说过的话重复『{reply[:20]}』，强制换说法")
         nudge = {
@@ -1274,10 +1392,11 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     # 视为这批她不说话——只记用户侧，不发。点名后的“关我什么事”是正常斗嘴，不拦。
     if is_group and not group_addressed and is_meta_silence(clean_reply(reply)):
         print("[群聊] 模型输出的是“没点名/潜水”式元回复 → 这批不发，只记用户侧")
-        append_user_history(user_id, record_msg, "")
+        append_user_history(user_id, record_msg, "", user_label=_user_label)
         return ""
     cleaned_reply = clean_reply(reply)
-    append_user_history(user_id, record_msg, cleaned_reply)
+    append_user_history(user_id, record_msg, cleaned_reply,
+                        user_label=_user_label, reply_label=_reply_label)
     # 预转述她这句：下一轮注入直接命中缓存，把转述开销挪出关键路径。
     if self_speech.enabled():
         spawn(self_speech.prewarm(cleaned_reply))

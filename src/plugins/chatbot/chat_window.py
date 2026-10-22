@@ -19,7 +19,7 @@ from nonebot.adapters.onebot.v11 import Message, MessageSegment
 
 from .bg import spawn
 from .core import (
-    handle_chat, summarize_batch, _get_clients, _compose_record_msg,
+    handle_chat, summarize_batch, summarize_group_batch, _get_clients, _compose_record_msg,
 )
 from .config import set_llm_route, get_vision_client
 from .memory import get_user_history, append_user_history
@@ -285,6 +285,8 @@ async def _flush(win: _UserWindow) -> None:
     user_transcript = ""
     group_address_note = ""
     batch_addressed = False
+    group_items: list[tuple[str, str, str]] = []   # (昵称, 文本, 图片描述) → 对话线归纳
+    reply_to = ""                                  # 她这句在回谁（历史里标「灰泽满（回X）」）
     if win.is_private:
         combined = _combine_text([(t, ds) for _, t, ds in parsed])
         tlines = []
@@ -296,11 +298,14 @@ async def _flush(win: _UserWindow) -> None:
         user_transcript = "\n".join(tlines).strip()
     else:
         lines, plain_lines, addressed_lines = [], [], []
+        addressed_speakers = []
+        last_speaker = ""
         for s, t, ds in parsed:
             text = t.strip()
             if not text and not ds:
                 continue
             name = await _get_sender_name(win.bot, win.target_id, s)
+            last_speaker = name
             if text:
                 id_to_name[s] = name
             addressed = _addressed_to_her(text)   # @ 已被 __init__ 变成 AT_SELF_MARK
@@ -309,33 +314,47 @@ async def _flush(win: _UserWindow) -> None:
             shown = text.replace(AT_SELF_MARK, "").strip() or ("（只 @ 了她）" if addressed else "")
             body = " ".join(([shown] if shown else []) + [f"[图片：{d}]" for d in ds])
             lines.append(f"{name}：{body}")
+            # 归纳用**中性版**（`shown`）：内部 @ 标记不该进对话线，否则会被归纳成
+            # 「有人@了灰泽满」再注入回去，模型有了可复述的标记来源。
+            group_items.append((name, shown, "；".join(ds)))
             if text:
                 plain_lines.append(f"{name}：{text}")
             if addressed:
                 said = shown or "（只 @ 了她 / 发了图）"
                 addressed_lines.append(f"{name}说「{said[:60]}」")
+                addressed_speakers.append(name)
         combined = "\n".join(plain_lines).strip()
         user_transcript = "\n".join(lines).strip()
         if id_to_name:
             group_memory.upsert_members(win.target_id, id_to_name)
-        if batch_addressed:
-            group_address_note = ("本批有人点名灰泽满：" + "；".join(addressed_lines[:3]) +
-                                  "（其余消息是群友在互相聊）")
-        else:
-            group_address_note = "本批无人点名灰泽满：以上都是群友在互相聊。"
+        # ⚠️ **未点名时不注入任何“没点名”的信息**（2026-10-23）。旧版会注一句
+        #    「本批无人点名灰泽满：以上都是群友在互相聊」——模型于是把这句话复述成
+        #    「没点我，灰泽满才不管」「（群里没人 @ 灰泽满，保持潜水）」这类元回复。
+        #    安静与否由接话门决定；她这边只需要知道「有人在跟她说话」这个**正向**事实。
+        if addressed_lines:
+            group_address_note = "；".join(addressed_lines[:3])
+        reply_to = addressed_speakers[-1] if addressed_speakers else last_speaker
+
     vision_desc = "；".join(d for _, _, ds in parsed for d in ds)
     img_count = sum(len(ds) for _, _, ds in parsed)
     print(f"[读秒] {'群' if not win.is_private else '私聊'}={win.target_id} "
           f"攒批 {len(msgs)} 条 → 回复" + (f"（含 {img_count} 张图）" if img_count else ""))
 
-    # 归纳：整批（含图片描述）一起给模型做理解提示
-    batch_summary = await summarize_batch([(t, "；".join(ds)) for _, t, ds in parsed])
+    # 归纳：私聊整批（含图片描述）给模型做理解提示；群聊换成**带发言人的对话线**——
+    # 群里有好几个人，只归纳“说了什么”不够，得知道谁在对谁说、停在哪句话头上，
+    # 她才能接在同一条线上（2026-10-23，见 docs/历史/交接文档.md）。
+    batch_summary = ""
+    group_thread_note = ""
+    if win.is_private:
+        batch_summary = await summarize_batch([(t, "；".join(ds)) for _, t, ds in parsed])
+    else:
+        group_thread_note = await summarize_group_batch(group_items)
     # 群近况写入群记忆（有冷却，防碎碎念刷爆；只记有信息量的归纳）
-    if not win.is_private and batch_summary:
+    if not win.is_private and group_thread_note:
         g = group_memory.get_group(win.target_id)
         last_t = (g.get("events") or [{}])[0].get("t", 0.0) if g.get("events") else 0.0
         if time.time() - last_t >= GROUP_EVENT_COOLDOWN:
-            group_memory.add_event(win.target_id, batch_summary)
+            group_memory.add_event(win.target_id, group_thread_note)
 
     # 群聊接话判定：群友不是每条都接，攒批安静下来时先问一句"这批要不要开口"。
     # **私聊不过门**——被人直接找来必回，那是另一回事。
@@ -344,8 +363,10 @@ async def _flush(win: _UserWindow) -> None:
     if not win.is_private:
         deepseek_client, _ = _get_clients()
         hist = "\n".join(get_user_history(win.target_id)[-8:])
-        if not await should_reply_in_group(deepseek_client, hist, combined):
-            append_user_history(win.target_id, _clean_group_record(combined), "")
+        if not await should_reply_in_group(deepseek_client, hist, combined,
+                                           thread_note=group_thread_note):
+            append_user_history(win.target_id, _clean_group_record(combined), "",
+                                user_label="群聊")
             _commit_batch()   # 这批已经“处理”了（只记不发），不能留给下一轮重判
             print(f"[读秒] 群={win.target_id} 这批不接，只记不发")
             return
@@ -361,6 +382,8 @@ async def _flush(win: _UserWindow) -> None:
                               user_transcript=user_transcript,
                               group_addressed=(True if win.is_private else batch_addressed),
                               group_address_note=group_address_note,
+                              group_thread_note=group_thread_note,
+                              reply_to=reply_to if not win.is_private else "",
                               **record_kwargs)
     reply = clean_reply(reply)  # 去括号前缀 + 整条至多 1 个括号
     if not reply:

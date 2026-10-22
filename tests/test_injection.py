@@ -221,9 +221,25 @@ def test_group_block_allows_occasional_chime_in():
 
     接话门允许她对没点名的情绪批次偶尔插一句；文案若写“只有点名才算跟她说话”，
     模型被允许发言时会回「没点我，才不管」或「（不说话，潜水）」。
+
+    2026-10-23 之后还要求：`address_note` 只保留**正向**文案（“有人在跟你说话”），
+    不再有“本批无人点名”那种把“没被点名”喂给模型的句子。
     """
     t = inj.T("group", context="在场成员：甲")
-    assert "偶尔可以插一句" in t
+    assert "也可以顺着话题接一句" in t
     assert "只有点名或 @ 灰泽满时才是在跟她说话" not in t
-    note = inj.T("group", "address_note", note="本批无人点名灰泽满：以上都是群友在互相聊。")
-    assert "内部信息" in note and "本批无人点名" in note
+    note = inj.T("group", "address_note", note="乙说「你怎么看」")
+    assert "有人在跟你说话" in note and "内部信息" in note
+    assert "无人点名" not in note
+
+
+def test_group_thread_note_renders():
+    t = inj.T("group", "thread_note", note="甲在说天气，乙接了一句。")
+    assert t.startswith("【群聊对话线】")
+    assert "甲在说天气" in t
+
+
+def test_name_budget_renders():
+    t = inj.T("profile", "name_budget", name="温温", n=3)
+    assert "温温" in t and "3 次" in t
+    assert "尽量别再叫" in t

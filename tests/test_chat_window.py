@@ -430,18 +430,20 @@ class TestGroupTranscript:
         async def fake_name(bot, group_id, user_id):
             return "甲" if user_id == "u1" else "乙"
 
-        async def fake_gate(client, hist, batch):
+        async def fake_gate(client, hist, batch, thread_note=""):
             return True
 
         async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False,
                               user_transcript="", **kwargs):
             captured.update(text=text, is_group=is_group,
                             transcript=user_transcript, record=kwargs.get("record_text"),
-                            address_note=kwargs.get("group_address_note"))
+                            address_note=kwargs.get("group_address_note"),
+                            thread_note=kwargs.get("group_thread_note"),
+                            reply_to=kwargs.get("reply_to"))
             return "在呢"
 
         async def fake_summarize(msgs):
-            return ""
+            return "甲在说天气；乙接了一句，最后问灰泽满怎么看"
 
         async def fake_pick(client, reply, avoid_groups=None, **kwargs):
             return None
@@ -453,11 +455,13 @@ class TestGroupTranscript:
         monkeypatch.setattr(cw, "should_reply_in_group", fake_gate)
         monkeypatch.setattr(cw, "handle_chat", fake_handle)
         monkeypatch.setattr(cw, "summarize_batch", fake_summarize)
+        monkeypatch.setattr(cw, "summarize_group_batch", fake_summarize)
         monkeypatch.setattr(cw, "_get_clients", lambda: (object(), None))
         monkeypatch.setattr(cw, "pick_sticker", fake_pick)
         monkeypatch.setattr(cw, "_sticker_state", {})
         monkeypatch.setattr(cw, "_send", fake_send)
         monkeypatch.setattr(cw.group_memory, "upsert_members", lambda *a, **k: None)
+        monkeypatch.setattr(cw.group_memory, "add_event", lambda *a, **k: None)
 
         await cw._flush(win)
 
@@ -468,10 +472,12 @@ class TestGroupTranscript:
         assert "[未点名]" not in captured["transcript"]
         assert "[对灰泽满]" not in captured["transcript"]
         assert "[有人@了灰泽满]" not in captured["transcript"]
-        # 点名情况改由系统元信息给出
-        note = captured["address_note"]
-        assert note.startswith("本批有人点名灰泽满")
-        assert "乙说「" in note
+        # 点名情况改由系统元信息给出；**只给正向信息**，不再有“本批有人点名”的说明
+        assert captured["address_note"] == "乙说「你怎么看」"
+        # 对话线（带发言人）也交给主模型
+        assert captured["thread_note"] == "甲在说天气；乙接了一句，最后问灰泽满怎么看"
+        # 她这句回的是点她名的那位
+        assert captured["reply_to"] == "乙"
         # 短期记忆记干净版：内部标记不进历史
         assert captured["record"] == ("甲：今天下雨了\n"
                                       "乙：你怎么看")
@@ -497,7 +503,7 @@ class TestGroupTranscript:
         async def fake_summarize(msgs):
             return ""
 
-        async def fake_gate(client, hist, batch):
+        async def fake_gate(client, hist, batch, thread_note=""):
             return True
 
         async def fake_pick(client, reply, avoid_groups=None, **kwargs):
@@ -520,7 +526,8 @@ class TestGroupTranscript:
         await cw._flush(win)
 
         assert captured["transcript"] == "甲：看这个 [图片：一只虫子]"
-        assert captured["address_note"].startswith("本批无人点名灰泽满")
+        # 未点名：一个字都不注（旧版会注“本批无人点名”，正是元回复的根）
+        assert captured["address_note"] == ""
 
 
 class TestBatchCommitOnInterrupt:
@@ -589,7 +596,7 @@ class TestBatchCommitOnInterrupt:
         win.is_private = False
         win.pending = [("u1", "嗯", [])]
 
-        async def fake_gate(client, hist, batch):
+        async def fake_gate(client, hist, batch, thread_note=""):
             return False
 
         async def fake_summarize(msgs):
@@ -616,7 +623,7 @@ class TestBatchCommitOnInterrupt:
         async def fake_handle(uid, text, **kwargs):
             return ""   # handle_chat 判定是“没点我/潜水”式元回复后会返回空串
 
-        async def fake_gate(client, hist, batch):
+        async def fake_gate(client, hist, batch, thread_note=""):
             return True
 
         async def fake_name(bot, gid, uid):

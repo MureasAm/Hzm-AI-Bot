@@ -52,6 +52,18 @@ async def test_rewrites_history_and_self_quote():
 
 
 @pytest.mark.asyncio
+async def test_rewrites_group_reply_to_line():
+    """群聊历史是「灰泽满（回甲）：…」，转述要认这个后缀（2026-10-23）。"""
+    hist = ["[3分钟前] 群聊：甲：满神和绿冻是一对吗",
+            "[3分钟前] 灰泽满（回甲）：少来，灰泽满才不承认。"]
+    client, comp = _client('{"gists": ["她否认和对方是一对。"]}')
+    new_hist, _ = await self_speech.annotate_turn(hist, "嗯", client)
+    assert comp.calls == 1
+    assert new_hist[0] == hist[0]
+    assert new_hist[1] == "[3分钟前] 灰泽满（转述）：她否认和对方是一对。"
+
+
+@pytest.mark.asyncio
 async def test_fail_open_on_api_error():
     hist = ["灰泽满：少来，灰泽满才不承认。"]
     msg = "你好"

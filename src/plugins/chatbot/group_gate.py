@@ -47,7 +47,7 @@ GROUP_GATE_PROMPT = """灰泽满是一个 QQ 群里的虚拟主播，正混在�
 
 kind 填最贴近的那**一档**（一档就好，别自己造新词）。
 
-【群里刚才聊的】
+{thread}【群里刚才聊的】
 {history}
 
 【刚安静下来的一批】
@@ -84,8 +84,12 @@ def _addressed_to_her(batch_text: str) -> bool:
     return AT_SELF_MARK in t or any(n in t for n in _SELF_NAMES)
 
 
-async def should_reply_in_group(deepseek_client, history_text: str, batch_text: str) -> bool:
+async def should_reply_in_group(deepseek_client, history_text: str, batch_text: str,
+                                thread_note: str = "") -> bool:
     """群里这一批，灰泽满要开口吗？
+
+    `thread_note`：这批的对话线归纳（谁在对谁说、停在什么话头上）。判据不变，
+    只补上下文——各说各的、没接同一条线时，真人更少插嘴（2026-10-23）。
 
     **失败一律返回 True（宁滥勿缺）**：判不出来就让她回，别因为一次上游抖动
     把她变成哑巴——"偶尔安静"是风格，"该说时不说"是故障，后者更难发现也更伤。
@@ -99,7 +103,9 @@ async def should_reply_in_group(deepseek_client, history_text: str, batch_text: 
         print("[群聊接话] 接（点名了她——确定性放行，不判定）")
         return True
 
+    thread = (thread_note or "").strip()
     prompt = GROUP_GATE_PROMPT.format(
+        thread=f"【对话线】（这批谁在对谁说、最后停在哪）\n{thread}\n\n" if thread else "",
         history=(history_text or "").strip()[-1500:] or "（这是群里最早的一批）",
         batch=batch_text.strip(),
     )

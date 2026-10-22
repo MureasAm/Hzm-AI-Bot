@@ -293,6 +293,45 @@ class TestSummarizeBatch:
         assert await core.summarize_batch([("a", ""), ("b", "")]) == ""
 
 
+class TestSummarizeGroupBatch:
+    """群聊对话线归纳：**带发言人**（谁在对谁说、停在哪），不是只归纳“聊了什么”。"""
+
+    async def test_single_message_skips(self, monkeypatch):
+        def _fail(*a, **k):
+            raise AssertionError("单条群消息不用归纳")
+
+        monkeypatch.setattr(core, "_get_clients", _fail)
+        assert await core.summarize_group_batch([("甲", "今天下雨了", "")]) == ""
+
+    async def test_prompt_carries_speakers(self, monkeypatch):
+        seen = {}
+
+        class _FakeCompletions:
+            async def create(self, **kwargs):
+                seen["prompt"] = kwargs["messages"][0]["content"]
+                msg = type("M", (), {"content": "甲说下雨，乙在追问。"})()
+                return type("R", (), {"choices": [type("C", (), {"message": msg})()]})()
+
+        fake_client = type("C", (), {
+            "chat": type("Chat", (), {"completions": _FakeCompletions()})()})()
+        monkeypatch.setattr(core, "_get_clients", lambda: (fake_client, None))
+        out = await core.summarize_group_batch([
+            ("甲", "今天下雨了", ""),
+            ("乙", "真的假的", "[截图]天预报"),
+        ])
+        assert "甲：今天下雨了" in seen["prompt"]
+        assert "乙：真的假的 [图片：[截图]天预报]" in seen["prompt"]
+        assert "谁在对谁" in seen["prompt"]
+        assert out == "甲说下雨，乙在追问。"
+
+    async def test_failure_returns_empty(self, monkeypatch):
+        def _raise():
+            raise RuntimeError("no api")
+
+        monkeypatch.setattr(core, "_get_clients", _raise)
+        assert await core.summarize_group_batch([("甲", "a", ""), ("乙", "b", "")]) == ""
+
+
 class TestBatchSummaryInjection:
     def test_injected_as_system_before_user(self, monkeypatch):
         monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
@@ -1004,7 +1043,7 @@ class TestGroupMetaSilenceNotSent:
         async def fake_reply(messages):
             return reply_text
 
-        def fake_append(uid, user, reply):
+        def fake_append(uid, user, reply, **kwargs):
             recorded.append((user, reply))
 
         async def _anoop(*a, **k):
@@ -1040,6 +1079,161 @@ class TestGroupMetaSilenceNotSent:
         assert recorded == [("大疲", "没点灰泽满，灰泽满才不管。")]
 
 
+class TestGroupHistoryLabels:
+    """群聊短期记忆带说话人标签：`群聊：甲：…` / `灰泽满（回甲）：…`（2026-10-23）。"""
+
+    async def test_group_reply_records_reply_to(self, monkeypatch):
+        recorded = []
+
+        async def fake_probe(uid, msg, hist, client, debug=False):
+            return ("用户发了个无语的表情", {})   # 纯情绪 → 跳过检索
+
+        async def fake_reply(messages):
+            return "在呢"
+
+        def fake_append(uid, user, reply, user_label="用户", reply_label="灰泽满"):
+            recorded.append((user_label, user, reply_label, reply))
+
+        async def _anoop(*a, **k):
+            return None
+
+        def _noop(*a, **k):
+            return None
+
+        monkeypatch.setenv("MEMORY_V2_INJECT", "0")
+        monkeypatch.setattr(core, "probe_session", fake_probe)
+        monkeypatch.setattr(core, "generate_reply", fake_reply)
+        monkeypatch.setattr(core, "get_user_history", lambda uid: [])
+        monkeypatch.setattr(core, "get_last_turn_gap_seconds", lambda uid: None)
+        monkeypatch.setattr(core, "append_user_history", fake_append)
+        monkeypatch.setattr(core, "update_memory_v2_shadow_task", _anoop)
+        monkeypatch.setattr(core, "get_llm_route", lambda: "")
+        monkeypatch.setattr(core, "log_corpus_hits", _noop)
+        monkeypatch.setattr(core, "log_block_hits", _noop)
+        monkeypatch.setattr(core.group_memory, "get_group", lambda gid: {})
+        monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
+        monkeypatch.setattr(core, "load_schedule", lambda: {})
+
+        await core.handle_chat("g1", "甲：大疲", is_group=True, group_addressed=True,
+                               record_text="甲：大疲", reply_to="甲")
+
+        assert recorded == [("群聊", "甲：大疲", "灰泽满（回甲）", "在呢")]
+
+    async def test_group_skips_name_budget(self, monkeypatch):
+        """群聊不注入称呼预算：群里没有“单独对某个人称呼”的语境。"""
+        seen = {}
+
+        def fake_build(*a, **k):
+            seen.update(k)
+            return [{"role": "system", "content": "x"}]
+
+        async def fake_probe(uid, msg, hist, client, debug=False):
+            return ("用户发了个无语的表情", {})
+
+        async def fake_reply(messages):
+            return "在呢"
+
+        async def _anoop(*a, **k):
+            return None
+
+        def _noop(*a, **k):
+            return None
+
+        monkeypatch.setenv("MEMORY_V2_INJECT", "0")
+        monkeypatch.setattr(core, "build_message_list", fake_build)
+        monkeypatch.setattr(core, "probe_session", fake_probe)
+        monkeypatch.setattr(core, "generate_reply", fake_reply)
+        monkeypatch.setattr(core, "get_user_history",
+                            lambda uid: ["灰泽满（回甲）：温温在呢", "灰泽满（回甲）：温温早"])
+        monkeypatch.setattr(core, "_user_name_for", lambda uid: "温温")
+        monkeypatch.setattr(core, "get_user_history_timed", lambda uid: [])
+        monkeypatch.setattr(core, "get_last_turn_gap_seconds", lambda uid: None)
+        monkeypatch.setattr(core, "append_user_history", _noop)
+        monkeypatch.setattr(core, "update_memory_v2_shadow_task", _anoop)
+        monkeypatch.setattr(core, "get_llm_route", lambda: "")
+        monkeypatch.setattr(core, "log_corpus_hits", _noop)
+        monkeypatch.setattr(core, "log_block_hits", _noop)
+        monkeypatch.setattr(core.group_memory, "get_group", lambda gid: {})
+        monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
+        monkeypatch.setattr(core, "load_schedule", lambda: {})
+
+        await core.handle_chat("g1", "甲：大疲", is_group=True, group_addressed=True,
+                               record_text="甲：大疲", reply_to="甲")
+
+        assert seen.get("name_budget") == ""
+
+
+class TestNameBudget:
+    """称呼预算（2026-10-23）：最近 5 轮她叫对方名字太多次 → 这轮前置提醒。"""
+
+    def _note(self, monkeypatch, hist, name="温温", min_calls=None):
+        monkeypatch.setattr(core, "_user_name_for", lambda uid: name)
+        monkeypatch.setattr(core, "get_user_history", lambda uid: hist)
+        if min_calls is not None:
+            monkeypatch.setenv("NAME_BUDGET_MIN_CALLS", str(min_calls))
+        return core.name_budget_note("u1")
+
+    def test_no_name_returns_empty(self, monkeypatch):
+        note = self._note(monkeypatch, ["灰泽满：在呢"], name="")
+        assert note == ""
+
+    def test_no_call_returns_empty(self, monkeypatch):
+        note = self._note(monkeypatch, ["用户：温温在吗", "灰泽满：在呢"])
+        assert note == ""
+
+    def test_single_call_fires_by_default(self, monkeypatch):
+        """默认档 = 5 轮内出现过就提醒（A/B 里最有效的一档，2026-10-23）。"""
+        note = self._note(monkeypatch, ["灰泽满：温温在呢", "用户：嗯"])
+        assert "温温" in note and "1 次" in note
+        assert "尽量别再叫" in note
+
+    def test_only_her_lines_count(self, monkeypatch):
+        """用户自己提名字不算她称呼滥用。"""
+        note = self._note(monkeypatch, [
+            "用户：温温在吗", "用户：温温？", "灰泽满：在呢",
+        ])
+        assert note == ""
+
+    def test_group_style_bot_lines_count(self, monkeypatch):
+        """群聊历史行是「灰泽满（回甲）：…」，也认（函数本身与标签无关）。"""
+        note = self._note(monkeypatch, [
+            "灰泽满（回甲）：温温早", "灰泽满（回甲）：温温吃了吗",
+        ])
+        assert "温温" in note and "2 次" in note
+
+    def test_window_is_last_five_rounds(self, monkeypatch):
+        """只数最近 10 行（5 轮）；更早的叫过不算。"""
+        old = ["灰泽满：温温早"] * 4
+        recent = ["用户：嗯", "灰泽满：在呢"] * 5
+        assert self._note(monkeypatch, old + recent) == ""
+
+    def test_env_threshold_override(self, monkeypatch):
+        hist = ["灰泽满：温温在呢"]
+        assert self._note(monkeypatch, hist, min_calls=2) == ""
+        assert self._note(monkeypatch, hist + ["灰泽满：温温早"], min_calls=2) != ""
+        assert self._note(monkeypatch, hist, min_calls=0) == ""
+
+    def test_injection_order_after_profile(self, monkeypatch):
+        monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
+        monkeypatch.setattr(core, "load_schedule", lambda: {})
+        msgs = core.build_message_list(
+            "在吗", [], [],
+            profile_context="【和这个绿冻的相处方式】测试",
+            name_budget="【称呼】最近 5 轮里已经叫过他「温温」2 次，这轮尽量别再叫名字，直接说事。",
+        )
+        texts = [m["content"] for m in msgs if m["role"] == "system"]
+        idx_profile = next(i for i, t in enumerate(texts)
+                           if t.startswith("【和这个绿冻的相处方式】"))
+        idx_name = next(i for i, t in enumerate(texts) if t.startswith("【称呼】"))
+        assert idx_profile < idx_name
+
+    def test_not_injected_when_empty(self, monkeypatch):
+        monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
+        monkeypatch.setattr(core, "load_schedule", lambda: {})
+        msgs = core.build_message_list("在吗", [], [], name_budget="")
+        assert not any(m["content"].startswith("【称呼】") for m in msgs)
+
+
 class TestSceneBlock:
     """私聊/群聊场景（00_scene）：「现在在哪儿、对面是谁」只按 is_group 二选一。
 
@@ -1067,7 +1261,7 @@ class TestSceneBlock:
         assert "现在是群聊" in joined
         assert msgs[0]["content"].startswith(core.SYSTEM_PROMPT)
         assert "现在是群聊" in msgs[0]["content"]
-        assert "偶尔也可以插一句" in joined, "没点名也可能偶尔接一句，文案不能写成“只有点名”"
+        assert "也可以顺着话题接一句" in joined, "没点名也可能接一句，文案不能写成“只有点名”"
 
     def test_skeleton_keeps_one_on_one_scene(self):
         """私聊场景移回骨架：一对一场景句保留在骨架里（2026-10-21 用户定）。"""
@@ -1116,12 +1310,39 @@ class TestAssociationInjection:
             "甲：大疲", [], [], is_group=True,
             user_transcript="甲：大疲",
             group_context="在场成员：甲",
-            group_address_note="本批无人点名灰泽满：以上都是群友在互相聊。",
+            group_address_note="甲说「大疲」",
         )
-        hit = [m for m in msgs if m["content"].startswith("【本批点名情况】")]
-        assert hit and "本批无人点名" in hit[0]["content"]
+        hit = [m for m in msgs if m["content"].startswith("【有人在跟你说话】")]
+        assert hit and "甲说「大疲」" in hit[0]["content"]
         assert msgs[-1]["content"] == "甲：大疲"
         assert "[未点名]" not in msgs[-1]["content"]
+
+    def test_no_address_note_when_nobody_addressed(self, monkeypatch):
+        """没人点名 → **一个字都不注**（“本批无人点名”本身会被模型复述成元回复）。"""
+        monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
+        monkeypatch.setattr(core, "load_schedule", lambda: {})
+        msgs = core.build_message_list(
+            "甲：今天下雨了", [], [], is_group=True,
+            user_transcript="甲：今天下雨了",
+            group_context="在场成员：甲",
+            group_address_note="",
+        )
+        joined = "\n".join(m["content"] for m in msgs if m["role"] == "system")
+        assert "【有人在跟你说话】" not in joined
+        assert "本批无人点名" not in joined
+
+    def test_group_thread_note_injected(self, monkeypatch):
+        """群聊对话线（谁在对谁说）紧跟群块注入，让模型接在同一条线上。"""
+        monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
+        monkeypatch.setattr(core, "load_schedule", lambda: {})
+        msgs = core.build_message_list(
+            "甲：今天下雨了\n乙：真的假的", [], [], is_group=True,
+            user_transcript="甲：今天下雨了\n乙：真的假的",
+            group_context="在场成员：甲、乙",
+            group_thread_note="甲说下雨，乙在追问是不是真的。",
+        )
+        joined = "\n".join(m["content"] for m in msgs if m["role"] == "system")
+        assert "【群聊对话线】甲说下雨，乙在追问是不是真的。" in joined
 
 
 class TestAssociationWiring:
@@ -1225,7 +1446,7 @@ class TestLegendaryMemory:
     async def test_legendary_reply_records_memory(self, monkeypatch):
         captured = []
 
-        def fake_append(uid, user, reply):  # append_user_history 是同步函数
+        def fake_append(uid, user, reply, **kwargs):  # append_user_history 是同步函数
             captured.append((user, reply))
 
         async def _noop(*a, **k):
@@ -1272,7 +1493,7 @@ class TestMemoryStoresCleanedReply:
 
         captured = {}
 
-        def fake_append(uid, user, reply):
+        def fake_append(uid, user, reply, **kwargs):
             captured["reply"] = reply
 
         async def fake_reply(messages):

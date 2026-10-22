@@ -202,3 +202,42 @@ class TestPromptContent:
     def test_batch_not_single_message(self):
         # 判定粒度必须是"批"——逐条判会蹭余温（实测 0%→74%→7% 乱跳）
         assert "整批" in group_gate.GROUP_GATE_PROMPT
+
+
+class TestThreadNote:
+    """对话线（谁在对谁说）只补上下文，不改编判据（2026-10-23）。"""
+
+    async def _prompt_for(self, thread_note):
+        seen = {}
+
+        class _Cap(_StubClient):
+            async def create(self, **kwargs):
+                seen["prompt"] = kwargs["messages"][0]["content"]
+                return await super().create(**kwargs)
+
+        client = _Cap(content='{"reply": false}')
+        await should_reply_in_group(client, "历史", "你们吃了吗", thread_note=thread_note)
+        return seen["prompt"]
+
+    @pytest.mark.asyncio
+    async def test_thread_note_lands_before_batch(self):
+        p = await self._prompt_for("甲在问吃饭，没人接。")
+        assert "【对话线】" in p
+        assert "甲在问吃饭" in p
+        assert p.index("【对话线】") < p.rindex("【刚安静下来的一批】")
+
+    @pytest.mark.asyncio
+    async def test_empty_thread_note_leaves_no_block(self):
+        p = await self._prompt_for("")
+        assert "【对话线】" not in p
+
+    @pytest.mark.asyncio
+    async def test_addressed_batch_skips_llm_even_with_thread(self):
+        """点名仍是确定性放行——对话线不该把这条确定性信号拖进 LLM。"""
+
+        class _Boom(_StubClient):
+            async def create(self, **kw):
+                raise AssertionError("点名了不该调 LLM")
+
+        assert await should_reply_in_group(_Boom(), "历史", "灰泽满在吗",
+                                           thread_note="x") is True

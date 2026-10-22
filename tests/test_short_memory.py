@@ -87,6 +87,38 @@ class TestHistoryBackCompat:
         assert len(raw) == memory.SHORT_MEMORY_LINES
 
 
+class TestGroupLabels:
+    """群聊历史写成「群聊：甲：…」/「灰泽满（回乙）：…」（2026-10-23）。
+
+    好处：好几个群友的话不会糊成同一个“用户”，她也知道上一轮回的是谁。
+    私聊格式保持不变（下面 `TestHistoryBackCompat` 全部按「用户：」断言）。
+    """
+
+    def test_group_lines_use_group_and_reply_to_labels(self, tmp_memory):
+        memory.append_user_history("g1", "甲：今天下雨了\n乙：真的假的", "下雨也没事",
+                                   user_label="群聊", reply_label="灰泽满（回乙）")
+        assert memory.get_user_history("g1") == [
+            "群聊：甲：今天下雨了\n乙：真的假的",
+            "灰泽满（回乙）：下雨也没事",
+        ]
+
+    def test_is_bot_line_recognizes_reply_to_suffix(self):
+        assert memory.is_bot_line("灰泽满（回乙）：在呢")
+        assert memory.is_bot_line("[3分钟前] 灰泽满（回乙）：在呢")
+        assert not memory.is_bot_line("群聊：甲：在吗")
+        assert not memory.is_bot_line("用户：灰泽满在吗")
+
+    def test_bot_line_text_strips_prefixes(self):
+        assert memory.bot_line_text("[3分钟前] 灰泽满（回乙）：在呢") == "在呢"
+        assert memory.bot_line_text("灰泽满：早") == "早"
+        assert memory.bot_line_text("群聊：甲：早") == ""
+
+    def test_count_consecutive_requests_sees_group_lines(self, tmp_memory):
+        for _ in range(3):
+            memory.append_user_history("g1", "甲：给我讲个鬼故事", "", user_label="群聊")
+        assert memory.count_consecutive_requests("g1", "给我讲个鬼故事") >= 3
+
+
 class TestTimedHistory:
     """`get_user_history_timed`：每行带「距上一条多久」，没时间戳的老数据不加前缀。"""
 

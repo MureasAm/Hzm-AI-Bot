@@ -24,8 +24,10 @@ _CACHE_MAX = 3000
 _CACHE: dict[str, str] = {}
 _CACHE_LOADED = False
 
-# 历史行：[3小时前] 灰泽满：……
-_HER_LINE_RE = re.compile(r"^(?P<lead>(?:\[[^\]]*\]\s*)*)灰泽满：(?P<text>.*)$", re.S)
+# 历史行：[3小时前] 灰泽满：…… ／ 群聊：[3小时前] 灰泽满（回甲）：……
+_HER_LINE_RE = re.compile(
+    r"^(?P<lead>(?:\[[^\]]*\]\s*)*)灰泽满(?:（[^）]*）)?：(?P<text>.*)$", re.S
+)
 # 引用块：[引用灰泽满自己说的：「……」] / [引用灰泽满说的：「……」（带图）]
 _SELF_QUOTE_RE = re.compile(
     r"\[引用灰泽满(?:自己)?说的：「(?P<text>.*?)」(?P<tail>[^\]]*)\]", re.S

@@ -204,7 +204,11 @@ class TestWiring:
             log_cache_usage(resp, "批量归纳")
             return ""
 
-        async def fake_gate(client, hist, batch):
+        async def fake_group_summarize(items):
+            log_cache_usage(resp, "群聊归纳")
+            return ""
+
+        async def fake_gate(client, hist, batch, thread_note=""):
             log_cache_usage(resp, "接话门")
             return True
 
@@ -223,6 +227,7 @@ class TestWiring:
             return "小王"
 
         monkeypatch.setattr(cw, "summarize_batch", fake_summarize)
+        monkeypatch.setattr(cw, "summarize_group_batch", fake_group_summarize)
         monkeypatch.setattr(cw, "should_reply_in_group", fake_gate)
         monkeypatch.setattr(cw, "handle_chat", fake_handle)
         monkeypatch.setattr(cw, "send_voice", fake_voice)
@@ -241,7 +246,7 @@ class TestWiring:
 
     async def test_group_turn_tagged_group(self, monkeypatch, tmp_path):
         recs = await self._flush_once(monkeypatch, tmp_path, is_group=True)
-        assert [r["tag"] for r in recs] == ["批量归纳", "接话门", "主回复"]
+        assert [r["tag"] for r in recs] == ["群聊归纳", "接话门", "主回复"]
         assert {r["route"] for r in recs} == {"群"}
 
     async def test_private_turn_tagged_private(self, monkeypatch, tmp_path):
