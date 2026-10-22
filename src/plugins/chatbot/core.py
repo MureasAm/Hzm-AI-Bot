@@ -249,7 +249,11 @@ def build_terms_note(user_msg: str, denied_terms: set | None = None,
         keys = [kw] + [str(a) for a in t.get("aliases", []) if a]
         pattern = t.get("pattern")
         usage = t.get("usage")
-        key_hit = any(k in msg for k in keys) or (pattern and re.search(pattern, msg))
+        if t.get("pattern_only") and pattern:
+            # 单字/短词（如“养”）只走正则，避免 keyword 子串撞“养生/养成/养宠物”
+            key_hit = bool(re.search(pattern, msg))
+        else:
+            key_hit = any(k in msg for k in keys) or (pattern and re.search(pattern, msg))
         concept_hit = any(w in msg for w in (t.get("usage_triggers") or []))
         hit = t.get("priority") == "always" or key_hit
         if hit:
@@ -290,7 +294,10 @@ def _hits_on_demand_term(msg: str) -> bool:
             continue
         keys = [kw] + [str(a) for a in t.get("aliases", []) if a]
         pattern = t.get("pattern")
-        if any(k in msg for k in keys) or (pattern and re.search(pattern, msg)):
+        if t.get("pattern_only") and pattern:
+            if re.search(pattern, msg):
+                return True
+        elif any(k in msg for k in keys) or (pattern and re.search(pattern, msg)):
             return True
     return False
 
@@ -315,7 +322,11 @@ async def confirm_ambiguous_terms(user_msg: str, deepseek_client=None) -> set:
             continue
         keys = [kw] + [str(a) for a in t.get("aliases", []) if a]
         pattern = t.get("pattern")
-        if any(k in msg for k in keys) or (pattern and re.search(pattern, msg)):
+        if t.get("pattern_only") and pattern:
+            hit = bool(re.search(pattern, msg))
+        else:
+            hit = any(k in msg for k in keys) or (pattern and re.search(pattern, msg))
+        if hit:
             candidates.append(t)
     if not candidates:
         return set()
