@@ -118,7 +118,7 @@ def load_days(path: Path, days: int) -> dict:
 
 
 async def _call(client, prompt: str, max_tokens: int = 1600) -> str:
-    from src.plugins.chatbot.config import _get_model_name
+    from src.plugins.chatbot.config import _get_model_name, log_cache_usage
     from src.plugins.chatbot.constants import THINKING_DISABLED
 
     resp = await client.chat.completions.create(
@@ -128,6 +128,7 @@ async def _call(client, prompt: str, max_tokens: int = 1600) -> str:
         max_tokens=max_tokens,
         **THINKING_DISABLED,
     )
+    log_cache_usage(resp, "记忆反思")
     return resp.choices[0].message.content or ""
 
 
