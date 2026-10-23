@@ -83,3 +83,33 @@ def test_unsupported_kind_and_empty_value():
     assert item is None and why == "unsupported_kind"
     item, why = mr.candidate_to_item({"kind": "fact", "key": "x", "value": "  "})
     assert item is None and why == "empty_value"
+
+
+def test_apply_mapped_writes_only_mapped(tmp_path, monkeypatch):
+    """--from-file：只写 review 过的 mapped，不碰 candidates/rejected。"""
+    import json
+
+    from src.plugins.chatbot import memory_v2
+
+    class _FakeStore:
+        def __init__(self):
+            self.state_file = tmp_path / "nope.json"
+            self.calls = []
+
+        def ingest(self, user, items, source):
+            self.calls.append((user, items, source))
+            return items
+
+    fake = _FakeStore()
+    monkeypatch.setattr(memory_v2, "ShadowMemoryStore", lambda: fake)
+    path = tmp_path / "cand.json"
+    path.write_text(json.dumps({
+        "mapped": [{"candidate": {"evidence": "每天跑操"},
+                    "item": {"kind": "fact", "key": "habit_run", "value": "每天跑操"}}],
+        "rejected": [{"candidate": {"key": "x"}, "reason": "unknown"}],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    out = mr.apply_mapped("u1", str(path))
+    assert out["mapped"] == 1
+    assert len(fake.calls) == 1
+    assert fake.calls[0][1][0]["key"] == "habit_run"

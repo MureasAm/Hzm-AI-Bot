@@ -264,8 +264,48 @@ async def reflect_user(user: str, days: int, *,
             "applied": applied, "backup": backup, "out": str(out)}
 
 
+def apply_mapped(user: str, path: str) -> dict:
+    """把**人工 review 过**的候选文件里的 `mapped` 写进真实 Memory V2。
+
+    这是 `--apply` 的推荐用法：先 dry-run 生成 `outputs/reflection/<user>.json`，
+    人删掉重复/不对的 `mapped` 条目（或修正 item 的 value），再 `--from-file` 应用。
+    只写 `mapped`，不写 `candidates`/`rejected`；写前自动备份。
+    """
+    from src.plugins.chatbot.memory_v2 import ShadowMemoryStore
+
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    mapped = data.get("mapped") or []
+    store = ShadowMemoryStore()
+    backup = ""
+    if store.state_file.exists():
+        backup = str(store.state_file.with_name(
+            store.state_file.name + f".bak-reflect-{datetime.now():%Y%m%d-%H%M%S}"))
+        shutil.copy2(store.state_file, backup)
+        print(f"[reflect] 写库前已备份：{backup}")
+    applied = []
+    observed = datetime.now().isoformat()
+    for m in mapped:
+        item = m.get("item") or {}
+        cand = m.get("candidate") or {}
+        src = {
+            "session_id": f"reflect-{user}-review",
+            "observed_at": observed,
+            "user_text": str(cand.get("evidence") or cand.get("value") or "")[:300],
+            "assistant_text": "",
+        }
+        try:
+            accepted = store.ingest(user, [item], source=src)
+            applied.append({"key": item.get("key"), "accepted": bool(accepted)})
+        except Exception as e:
+            applied.append({"key": item.get("key"), "error": repr(e)})
+    return {"user": user, "from_file": str(path), "mapped": len(mapped),
+            "applied": applied, "backup": backup}
+
+
 def run(args) -> dict:
     _bootstrap()
+    if getattr(args, "from_file", None):
+        return apply_mapped(args.user, args.from_file)
     return asyncio.run(reflect_user(
         args.user, args.days, apply=args.apply, refresh=args.refresh,
         out_dir=Path(args.out)))
@@ -276,6 +316,8 @@ def main(argv=None) -> int:
     ap.add_argument("--user", required=True, help="QQ 号")
     ap.add_argument("--days", type=int, default=30, help="回看多少天（默认 30）")
     ap.add_argument("--apply", action="store_true", help="把候选写进真实 Memory V2（默认只出候选）")
+    ap.add_argument("--from-file", default=None,
+                    help="应用人工 review 过的候选文件（只写 mapped；隐含 --apply）")
     ap.add_argument("--refresh", action="store_true", help="忽略 digest 缓存，重跑所有天")
     ap.add_argument("--out", default=str(OUT_DIR), help="候选输出目录（默认 outputs/reflection）")
     args = ap.parse_args(argv)

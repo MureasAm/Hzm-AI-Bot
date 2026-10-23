@@ -571,6 +571,8 @@ def _add_memory_reflect(sub):
     p.add_argument("--days", type=int, default=30, help="回看多少天（默认 30）")
     p.add_argument("--apply", action="store_true",
                    help="把候选写进真实 Memory V2（默认只写 outputs/reflection）")
+    p.add_argument("--from-file", default=None,
+                   help="应用人工 review 过的候选文件（只写 mapped；隐含 --apply）")
     p.add_argument("--refresh", action="store_true", help="忽略 digest 缓存，重跑所有天")
     p.add_argument("--out", default=str(_common.OUTPUTS_DIR / "reflection"),
                    help="候选输出目录")
