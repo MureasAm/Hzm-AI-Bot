@@ -123,7 +123,7 @@ class TestNewPostPush:
         _patch(monkeypatch, m, post_id="p1")
         pushed = []
 
-        async def fake_push(bot, content, image_paths=None, record=True):
+        async def fake_push(bot, content, image_paths=None, record=True, voice=False):
             pushed.append(content)
 
         monkeypatch.setattr(m, "_push", fake_push)
@@ -142,7 +142,7 @@ class TestNewPostPush:
         _patch(monkeypatch, m, post_id="p1")
         pushed = []
 
-        async def fake_push(bot, content, image_paths=None, record=True):
+        async def fake_push(bot, content, image_paths=None, record=True, voice=False):
             pushed.append(content)
 
         monkeypatch.setattr(m, "_push", fake_push)
@@ -154,7 +154,7 @@ class TestNewPostPush:
         _patch(monkeypatch, m, post_id="")
         pushed = []
 
-        async def fake_push(bot, content, image_paths=None, record=True):
+        async def fake_push(bot, content, image_paths=None, record=True, voice=False):
             pushed.append(content)
 
         monkeypatch.setattr(m, "_push", fake_push)
@@ -337,7 +337,7 @@ class TestPrime:
         _patch(monkeypatch, m, post_id="p1")
         pushed = []
 
-        async def fake_push(bot, content, image_paths=None, record=True):
+        async def fake_push(bot, content, image_paths=None, record=True, voice=False):
             pushed.append(content)
 
         monkeypatch.setattr(m, "_push", fake_push)
@@ -352,7 +352,7 @@ class TestPrime:
         _patch(monkeypatch, m, post_id="停机期间发的")
         pushed = []
 
-        async def fake_push(bot, content, image_paths=None, record=True):
+        async def fake_push(bot, content, image_paths=None, record=True, voice=False):
             pushed.append(content)
 
         monkeypatch.setattr(m, "_push", fake_push)
@@ -364,7 +364,7 @@ class TestPrime:
         _patch(monkeypatch, m, post_id="p2")
         pushed = []
 
-        async def fake_push(bot, content, image_paths=None, record=True):
+        async def fake_push(bot, content, image_paths=None, record=True, voice=False):
             pushed.append(content)
 
         monkeypatch.setattr(m, "_push", fake_push)

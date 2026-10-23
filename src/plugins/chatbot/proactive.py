@@ -235,6 +235,48 @@ async def _describe_first_image(vision_client, image_paths) -> str:
         return ""
 
 
+async def deliver_proactive(bot, user_id, text: str,
+                            image_paths: list | None = None, *,
+                            voice: bool = False) -> str:
+    """把一条主动发言送到一个用户；返回 "voice" / "text"。
+
+    2026-10-23 用户定：触发主动发言时**直接走语音**，不再推动态/微博原文；
+    配图随语音一起发。TTS 合成失败或内容不适合念（长英文/链接残留）→ 发文字版
+    （仍然不推原文）。所有异常由调用方按“单个好友失败不中断”处理。
+    """
+    from nonebot.adapters.onebot.v11 import Message, MessageSegment
+
+    from .voice import prepare_proactive_tts, send_voice
+
+    if voice:
+        prepared, why = prepare_proactive_tts(text)
+        if prepared:
+            try:
+                ok = await send_voice(bot, str(user_id), True, prepared)
+            except Exception as e:
+                print(f"⚠️ 主动语音发送异常（改发文字）: {e}")
+                ok = False
+            if ok:
+                if image_paths:
+                    try:
+                        msg = Message()
+                        for p in image_paths:
+                            msg += MessageSegment.image(file=str(p))
+                        await bot.send_private_msg(user_id=user_id, message=msg)
+                    except Exception as e:
+                        print(f"⚠️ 主动语音配图发送失败（语音已发）: {e}")
+                return "voice"
+            print("[主动] 语音合成/发送失败 → 改发文字版")
+        else:
+            print(f"[主动] 内容不适合语音（{why}）→ 改发文字版")
+
+    msg = Message(text)
+    for p in (image_paths or []):
+        msg += MessageSegment.image(file=str(p))
+    await bot.send_private_msg(user_id=user_id, message=msg)
+    return "text"
+
+
 async def compose_proactive(content: str, source: str = "B站",
                             image_paths: list | None = None) -> str | None:
     """把一条动态/微博转成她会主动说的私聊消息；不适合主动说返回 None。

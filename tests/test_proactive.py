@@ -462,3 +462,69 @@ class TestTrailingEmoji:
                             lambda: (_C(gen="又熬夜了，明天见"), object()))
         out = await compose_proactive("晚安🌙 （又熬夜了…", "B站")
         assert out == "又熬夜了，明天见🌙"
+
+
+class _FakeBot:
+    def __init__(self):
+        self.sent = []
+
+    async def send_private_msg(self, user_id, message):
+        self.sent.append((user_id, message))
+
+
+class TestDeliverProactiveVoice:
+    """主动发言：语音优先、失败/不适合退回文字；不推原文（2026-10-23）。"""
+
+    async def test_voice_success_sends_voice_then_images(self, monkeypatch):
+        from src.plugins.chatbot import voice
+
+        calls = []
+
+        async def fake_voice(bot, target, is_private, text):
+            calls.append((target, is_private, text))
+            return True
+
+        monkeypatch.setattr(voice, "send_voice", fake_voice)
+        bot = _FakeBot()
+        mode = await proactive.deliver_proactive(
+            bot, 123, "B站18:00见，mua", image_paths=["a.jpg"], voice=True)
+        assert mode == "voice"
+        assert calls and calls[0][2].find("十八点") >= 0
+        assert len(bot.sent) == 1
+        assert [seg.type for seg in bot.sent[0][1]] == ["image"]
+
+    async def test_voice_failure_falls_back_to_text_with_images(self, monkeypatch):
+        from src.plugins.chatbot import voice
+
+        async def fake_voice(*a, **k):
+            return False
+
+        monkeypatch.setattr(voice, "send_voice", fake_voice)
+        bot = _FakeBot()
+        mode = await proactive.deliver_proactive(
+            bot, 123, "晚安", image_paths=["a.jpg"], voice=True)
+        assert mode == "text"
+        assert len(bot.sent) == 1
+        assert [seg.type for seg in bot.sent[0][1]] == ["text", "image"]
+
+    async def test_unspeakable_text_skips_voice(self, monkeypatch):
+        from src.plugins.chatbot import voice
+
+        calls = []
+
+        async def fake_voice(*a, **k):
+            calls.append(1)
+            return True
+
+        monkeypatch.setattr(voice, "send_voice", fake_voice)
+        bot = _FakeBot()
+        mode = await proactive.deliver_proactive(
+            bot, 123, "VirtuaReal 18:00", voice=True)
+        assert mode == "text" and calls == []
+        assert bot.sent
+
+    async def test_plain_text_path(self):
+        bot = _FakeBot()
+        mode = await proactive.deliver_proactive(bot, 123, "原文通知", voice=False)
+        assert mode == "text"
+        assert [seg.type for seg in bot.sent[0][1]] == ["text"]

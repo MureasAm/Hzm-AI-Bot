@@ -450,6 +450,101 @@ class TestSelfPronounCleanup:
         assert "她" in out
 
 
+class TestSelfAsObjectFix:
+    """「真拿灰泽满没办法」→「真拿你没办法」（2026-10-23）。
+
+    她的第三人称自称偶尔会挤进“真拿你没办法”的**对象槽**，把“你”挤掉，语义直接反转。
+    只改**无主语**的“真(是)拿…”；带主语的“你也拿灰泽满没办法”是对的（对方拿她没办法）。
+    """
+
+    def test_fixes_subjectless_true_frame(self):
+        assert reply_style.clean_reply("真拿灰泽满没办法，别哭了啊……") == \
+            "真拿你没办法，别哭了啊……"
+
+    def test_fixes_variants(self):
+        assert reply_style.clean_reply("可真拿灰泽满没辙了是吧") == "可真拿你没辙了是吧"
+        assert reply_style.clean_reply("嗯，真是拿灰泽满没办法。") == "嗯，真是拿你没办法。"
+
+    def test_keeps_correct_object_usage(self):
+        # 带主语：对方拿她没办法，是对的
+        assert reply_style.clean_reply("反正你也拿灰泽满没办法。") == \
+            "反正你也拿灰泽满没办法。"
+        assert reply_style.clean_reply("就吃你们拿灰泽满没办法这套。") == \
+            "就吃你们拿灰泽满没办法这套。"
+
+    def test_keeps_ambiguous_bare_form(self):
+        # 句首裸露的“拿灰泽满没办法”也可能是“（你）拿她没办法”，有歧义，不动
+        assert reply_style.clean_reply("拿灰泽满没办法呢，真受不了你。") == \
+            "拿灰泽满没办法呢，真受不了你。"
+
+
+class TestSelfReferenceMetrics:
+    """自称方式改写的体检指标（skeleton-ab --check 用的那套）。"""
+
+    def _m(self, replies):
+        return reply_style.self_reference_metrics(replies)
+
+    def test_person_and_negation_rates(self):
+        m = self._m(["灰泽满才不去呢", "我觉得不行", "我们走吧", "好"])
+        assert m["第一人称率"] == 0.25          # “我们”不算第一人称自称
+        assert m["第三人称自指率"] == 0.25
+        assert m["才不才没率"] == 0.25
+
+    def test_name_initial_ignores_leading_paren(self):
+        m = self._m(["（心虚）灰泽满才没有", "hzm不知道", "行吧"])
+        assert m["名字起手率"] == round(2 / 3, 3)
+
+    def test_pronoun_slip_counts_only_subjectless(self):
+        m = self._m(["真拿灰泽满没办法，别哭了",
+                     "反正你也拿灰泽满没办法", "别哭了"])
+        assert m["代词错位率"] == round(1 / 3, 3)
+
+    def test_opener_homogeneity(self):
+        m = self._m(["好啊好啊", "好啊好啊", "行吧"])
+        assert m["开头同质率"] == round(2 / 3, 3)
+
+    def test_empty(self):
+        assert self._m([]) == {}
+
+
+class TestSelfReferenceCheck:
+    """`skeleton-ab --check` 的闸门是纯函数，单测覆盖“基线通过 / 恶化失败 / 相对提醒”。"""
+
+    BASE = {"第一人称率": 0.0, "第三人称自指率": 0.90, "名字起手率": 0.34,
+            "才不才没率": 0.24, "代词错位率": 0.0, "开头同质率": 0.06}
+    MAX = {"第一人称率": 0.10, "名字起手率": 0.45, "才不才没率": 0.55,
+           "代词错位率": 0.0, "开头同质率": 0.30}
+    MIN = {"第三人称自指率": 0.60}
+
+    def _check(self, cand):
+        return reply_style.self_reference_check(self.BASE, cand, self.MAX, self.MIN)
+
+    def test_baseline_noise_passes(self):
+        # 2026-10-23 实测：同一版骨架两次独立采样（名字起手 34%/38%、才不 24%/42%）
+        cand = {**self.BASE, "第三人称自指率": 0.96,
+                "名字起手率": 0.38, "才不才没率": 0.42}
+        fails, warns = self._check(cand)
+        assert fails == []
+        # 才不 24%→42% 会触发相对提醒（>15%），但**不判死**——噪声范围内
+        assert any("才不才没率" in w for w in warns)
+
+    def test_regressions_fail(self):
+        cand = {**self.BASE, "名字起手率": 0.60, "代词错位率": 0.02,
+                "第三人称自指率": 0.50, "第一人称率": 0.20}
+        fails, _ = self._check(cand)
+        text = " ".join(fails)
+        assert "名字起手率" in text
+        assert "代词错位率" in text
+        assert "第三人称自指率" in text
+        assert "第一人称率" in text
+
+    def test_relative_jump_warns_not_fails(self):
+        cand = {**self.BASE, "才不才没率": 0.45}   # 45% 未超 55% 上限，但比基线高 21%
+        fails, warns = self._check(cand)
+        assert fails == []
+        assert any("才不才没率" in w for w in warns)
+
+
 class TestHistoryGapNote:
     """时间不再以「一行汇总」拼在历史顶部，而是**每条消息自带 [多久前]**。
 
@@ -1270,6 +1365,18 @@ class TestSceneBlock:
         assert "你是在直接与对方聊天" in text
         assert "你就是灰泽满本人" in text
         assert "不是在撰写关于灰泽满的旁白" in text
+
+    def test_skeleton_scopes_third_person_to_self(self):
+        """第三人称只指自己；指对方仍用“你”（2026-10-23）。
+
+        ⚠️ 原句“句子开头可以是…再把名字放进去”**必须保留**：A/B 实测把它改弱成
+        “需要自称时，可以先…”后，名字起手率从 2.8% 跳到 52.8%。指代规则只能**追加**，
+        不能动这半句（见 交接文档 2026-10-23）。
+        """
+        text = core.SYSTEM_PROMPT
+        assert "句子开头可以是接话、反问、判断或直接陈述，再把名字放进去" in text
+        assert "指对方时仍然用" in text
+        assert "不要把指代对方的" in text
 
 
 class TestAssociationInjection:

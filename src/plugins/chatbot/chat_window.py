@@ -37,6 +37,7 @@ from .constants import (
     AT_SELF_MARK,
 )
 from . import group_memory
+from . import session_memory
 
 
 class _UserWindow:
@@ -447,13 +448,27 @@ _sticker_state: dict[str, dict] = {}
 
 def _sticker_st(target_id: str) -> dict:
     return _sticker_state.setdefault(
-        target_id, {"turns": STICKER_COOLDOWN_TURNS, "recent": []})
+        target_id, {"turns": STICKER_COOLDOWN_TURNS, "recent": [],
+                    "topic": None, "sent": False})
 
 
 async def _maybe_send_sticker(win: _UserWindow, reply: str) -> None:
-    """冷却到点 + 有十分对应的表情 → 补发一张。全程不影响已经发出去的文字。"""
+    """冷却到点 + 这个话题还没发过 + 有十分对应的表情 → 补发一张。
+
+    ⚠️ 2026-10-23 用户定：**同一个话题只发一张**（不是每 3 轮一张）。
+    话题标识用 session_memory 的 `topic_since`：转话题/冷场后重置，允许下一张。
+    原来的“每 3 轮”冷却保留，只作为“同一个话题里没匹配到就隔几轮再试”的节流。
+    """
     st = _sticker_st(win.target_id)
     kind = "private" if win.is_private else "group"
+    topic = str(session_memory.get_session(win.target_id).get("topic_since") or "")
+    if st.get("topic") != topic:
+        st["topic"] = topic
+        st["sent"] = False
+        st["turns"] = STICKER_COOLDOWN_TURNS   # 新话题允许立刻试一次
+    if st.get("sent"):
+        log_event("topic_used", session=win.target_id, kind=kind)
+        return
     if st["turns"] < STICKER_COOLDOWN_TURNS:
         st["turns"] += 1
         log_event("cooldown", session=win.target_id, kind=kind)
@@ -478,6 +493,7 @@ async def _maybe_send_sticker(win: _UserWindow, reply: str) -> None:
         print(f"⚠️ 表情包发送失败（忽略）: {e}")
         log_event("sent_failed", session=win.target_id, kind=kind, sticker=hit, why=str(e))
     st["turns"] = 0
+    st["sent"] = True
     st["recent"] = ([hit.get("group") or hit["id"]] + st["recent"])[:STICKER_RECENT_KEEP]
 
 

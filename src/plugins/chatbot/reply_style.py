@@ -5,6 +5,7 @@
 """
 import random
 import re
+from collections import Counter
 
 from .constants import (
     SPLIT_MIN_LEN, SPLIT_MAX_PARTS, SPLIT_MERGE_MIN_CHARS,
@@ -153,6 +154,76 @@ def starts_with_name(reply: str, name: str) -> bool:
     return text.startswith(name)
 
 
+def _metric_opener(reply: str) -> str:
+    """回复开头（剥掉开头括号后的前 8 个字，到第一个标点为止）——量开头同质用。"""
+    t = _LEADING_PAREN_RE.sub("", (reply or "").lstrip())
+    m = re.match(r"[^，,。；;！!？?…\s]{1,8}", t)
+    return m.group(0) if m else ""
+
+
+def self_reference_metrics(replies: list) -> dict:
+    """自称方式改写的**确定性体检指标**（供 `skeleton-ab --check` 用）。
+
+    为什么需要它（2026-10-23 用户提出）：他试过好几版「自称方式」提示词，都出现两种副作用——
+    ① 名字起手（每句都用“灰泽满”开头）；② 固定否定句式（“灰泽满才不/才没”很频繁）。
+    改这段提示词时必须能量化“有没有把这两样带回来”，不能只看单条像不像。
+
+    指标（都是比例，0–1）：
+      · 第一人称率：出现“我”（不含“我们”）的比例——她应该用第三人称自称，越低越好
+      · 第三人称自指率：出现“灰泽满/hzm”的比例——改提示词不能把它改没
+      · 名字起手率：剥掉开头括号后以“灰泽满/hzm”开头的比例
+      · 才不才没率：出现“才不/才没”的比例
+      · 代词错位率：无主语“真拿灰泽满没办法/没辙”的比例（指对方的“你”被自称名顶掉）
+      · 开头同质率：最常见开头（前 8 字）占全部回复的比例
+    """
+    rs = [str(r or "") for r in replies]
+    if not rs:
+        return {}
+
+    def rate(pred) -> float:
+        return round(sum(1 for r in rs if pred(r)) / len(rs), 3)
+
+    openers = Counter(op for op in (_metric_opener(r) for r in rs) if op)
+    top = openers.most_common(1)[0][1] if openers else 0
+    return {
+        "第一人称率": rate(lambda r: bool(re.search(r"我(?!们)", r))),
+        "第三人称自指率": rate(lambda r: bool(re.search(r"灰泽满|hzm", r, re.I))),
+        "名字起手率": rate(lambda r: bool(re.match(r"(灰泽满|hzm)", _LEADING_PAREN_RE.sub(
+            "", r.lstrip()), re.I))),
+        "才不才没率": rate(lambda r: "才不" in r or "才没" in r),
+        "代词错位率": rate(lambda r: bool(_SELF_AS_OBJECT_RE.search(r))),
+        "开头同质率": round(top / len(rs), 3) if rs else 0.0,
+    }
+
+
+def self_reference_check(baseline: dict, candidate: dict,
+                         max_limits: dict, min_limits: dict,
+                         rel_warn: float = 0.15) -> tuple:
+    """把两版 `self_reference_metrics` 的结果比对，返回 (fails, warns)。
+
+    纯函数：阈值由调用方给（`scripts/skeleton_ab.py` 的 `--check`），这里只做比较，
+    这样阈值调整和单测都不需要起 NoneBot / 调模型。
+    """
+    fails, warns = [], []
+    for key, limit in max_limits.items():
+        val = candidate.get(key)
+        if val is not None and val > limit:
+            fails.append(f"{key} {val:.0%} > 上限 {limit:.0%}")
+    for key, floor in min_limits.items():
+        val = candidate.get(key)
+        if val is not None and val < floor:
+            fails.append(f"{key} {val:.0%} < 下限 {floor:.0%}")
+    # 相对基线只提醒不判死：这些是模型级口癖，单次采样噪声本来就大。
+    for key in ("第一人称率", "名字起手率", "才不才没率", "开头同质率"):
+        a, b = baseline.get(key, 0), candidate.get(key, 0)
+        if b - a > rel_warn:
+            warns.append(f"{key} 比基线高 {b - a:.0%}（{a:.0%}→{b:.0%}）")
+    drop = baseline.get("第三人称自指率", 0) - candidate.get("第三人称自指率", 0)
+    if drop > rel_warn:
+        warns.append(f"第三人称自指率 比基线低 {drop:.0%}")
+    return fails, warns
+
+
 def is_echo_reply(reply: str, recent_bot_replies: list, min_ratio: float = 0.6,
                   window: int = 3) -> bool:
     """判断新回复是否复读了最近自己说过的话（复读机防护）。
@@ -200,6 +271,17 @@ def is_meta_silence(reply: str) -> bool:
     """
     t = (reply or "").strip()
     return bool(t) and bool(_META_SILENCE_RE.search(t))
+
+
+# 「真拿灰泽满没办法」→「真拿你没办法」：她偶尔把“真拿你没办法”的对象“你”写成自己的名字
+# （2026-10-23，真实日志 4 例；“拿灰泽满没办法呢，真受不了你”同一句里“你”还用对了，
+# 是**局部槽位被自称名挤掉**，不是把对方认错）。
+# ⚠️ 只在**没有主语**的“真(是)拿…”固定句式里改：
+#    “你也拿灰泽满没办法”“你们拿灰泽满没办法”是对的（对方拿她没办法），别动；
+#    句首裸露的“拿灰泽满没办法”也可能是“（你）拿她没办法”，有歧义，同样不动。
+_SELF_AS_OBJECT_RE = re.compile(
+    r"(?P<lead>^|[，,。；;！!？?…\s])(?P<adv>可?真(?:是)?)拿灰泽满(?P<tail>没办法|没辙)"
+)
 
 
 def _split_sentences(text: str) -> list:
@@ -372,6 +454,9 @@ def clean_reply(reply: str) -> str:
     if ("灰泽满" in text or "hzm" in text.lower()) and \
             not any(n in text for n in _get_other_person_names()):
         text = re.sub(r"(?<=[，,。；;！!？?、…\n])\s*[她他](?!们|俩|的|和|家)", "", text)
+    # 代词错位兜底（2026-10-23）：只在“真拿灰泽满没办法”这一种无主语句式里改，
+    # 见 _SELF_AS_OBJECT_RE 的说明——带主语的“你们拿灰泽满没办法”是对的。
+    text = _SELF_AS_OBJECT_RE.sub(r"\g<lead>\g<adv>拿你\g<tail>", text)
     return text
 
 

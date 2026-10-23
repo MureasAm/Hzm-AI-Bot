@@ -48,7 +48,7 @@ class TestLiveTransition:
         m = _make_monitor(uid="1298779265", state={"last_live_status": False})
         pushed = []
 
-        async def fake_push(bot, content, image_paths=None, record=True):
+        async def fake_push(bot, content, image_paths=None, record=True, voice=False):
             pushed.append(content)
 
         monkeypatch.setattr(m, "_push", fake_push)
@@ -74,7 +74,7 @@ class TestLiveTransition:
         pushed = []
         download_called = []
 
-        async def fake_push(bot, content, image_paths=None, record=True):
+        async def fake_push(bot, content, image_paths=None, record=True, voice=False):
             pushed.append((content, image_paths))
 
         async def fake_download(url):
@@ -100,7 +100,7 @@ class TestLiveTransition:
         m = _make_monitor(uid="1298779265", state={"last_live_status": False})
         pushed = []
 
-        async def fake_push(bot, content, image_paths=None, record=True):
+        async def fake_push(bot, content, image_paths=None, record=True, voice=False):
             pushed.append((content, image_paths))
 
         async def fake_download(url):
@@ -123,7 +123,7 @@ class TestLiveTransition:
         m = _make_monitor(uid="1", state={"last_live_status": True})
         pushed = []
 
-        async def fake_push(bot, content, image_paths=None, record=True):
+        async def fake_push(bot, content, image_paths=None, record=True, voice=False):
             pushed.append(content)
 
         monkeypatch.setattr(m, "_push", fake_push)
@@ -140,7 +140,7 @@ class TestLiveTransition:
         m = _make_monitor(uid="1", state={"last_live_status": False})
         pushed = []
 
-        async def fake_push(bot, content, image_paths=None, record=True):
+        async def fake_push(bot, content, image_paths=None, record=True, voice=False):
             pushed.append(content)
 
         monkeypatch.setattr(m, "_push", fake_push)
@@ -193,18 +193,15 @@ class TestLiveMessage:
 
 
 class TestProactiveDynamic:
-    """动态推**两条**：先原文通知，再"她会主动说的那句话"。
-
-    锁的是"原文不许被主动发言顶掉"——曾经写的是 `said or notice` 二选一，
-    主动发言一成功，**原文就整条消失**（粉丝只剩一条没头没尾的私聊）。
-    """
+    """动态推送（2026-10-23 用户改定）：主动发言一成功，**只发她那句（语音优先）**，
+    不再推原文；她不发时才退回原文通知。信息不丢的兜底仍在（said=None → 通知）。"""
 
     def _setup(self, monkeypatch, said):
         m = _make_monitor(uid="1", sessdata="sess", state={"last_dynamic_id": "old"})
         pushed = []
 
-        async def fake_push(bot, content, image_paths=None, record=True):
-            pushed.append(content)
+        async def fake_push(bot, content, image_paths=None, record=True, voice=False):
+            pushed.append((content, voice))
 
         monkeypatch.setattr(m, "_push", fake_push)
         monkeypatch.setattr(m, "_format_dynamic_push", lambda text: f"通知:{text}")
@@ -220,25 +217,24 @@ class TestProactiveDynamic:
         monkeypatch.setattr(bb, "compose_proactive", _compose)
         return m, pushed
 
-    async def test_notice_first_then_her_sentence(self, monkeypatch):
-        # 两条都要有，且**原文在前**（先"转发给你"，再补一句）
+    async def test_only_her_sentence_when_proactive_succeeds(self, monkeypatch):
         m, pushed = self._setup(monkeypatch, "灰泽满今天收拾到半夜，累死了。")
         await m._check_dynamic(FakeBot())
-        assert pushed == ["通知:正文", "灰泽满今天收拾到半夜，累死了。"]
+        assert pushed == [("灰泽满今天收拾到半夜，累死了。", True)]
 
     async def test_falls_back_to_notice_when_not_suitable(self, monkeypatch):
         # 不适合主动说（纯转发/抽奖）→ 只发原文通知，**信息不能丢**
         m, pushed = self._setup(monkeypatch, None)
         await m._check_dynamic(FakeBot())
-        assert pushed == ["通知:正文"]
+        assert pushed == [("通知:正文", False)]
 
-    async def test_images_go_with_the_notice_not_her_sentence(self, monkeypatch):
-        """配图只跟着原文那条走——她那句是纯文字，否则同一批图会发两遍。"""
+    async def test_images_go_with_her_sentence(self, monkeypatch):
+        """配图跟着她那句（语音）一起走；原文不再推。"""
         m, _ = self._setup(monkeypatch, "明天来玩啊")
         calls = []
 
-        async def fake_push(bot, content, image_paths=None, record=True):
-            calls.append((content, image_paths))
+        async def fake_push(bot, content, image_paths=None, record=True, voice=False):
+            calls.append((content, image_paths, voice))
 
         async def fake_download(url):
             from pathlib import Path
@@ -252,9 +248,8 @@ class TestProactiveDynamic:
         monkeypatch.setattr(m, "_fetch_latest_dynamic", _dyn)
 
         await m._check_dynamic(FakeBot())
-        assert len(calls) == 2
-        assert calls[0][0] == "通知:正文" and calls[0][1]        # 原文那条带图
-        assert calls[1][0] == "明天来玩啊" and not calls[1][1]    # 她那句不带图
+        assert len(calls) == 1
+        assert calls[0][0] == "明天来玩啊" and calls[0][1] and calls[0][2]
 
 
 class TestDynamic:
@@ -262,7 +257,7 @@ class TestDynamic:
         m = _make_monitor(uid="1", sessdata="sess", state={"last_dynamic_id": "old"})
         pushed = []
 
-        async def fake_push(bot, content, image_paths=None, record=True):
+        async def fake_push(bot, content, image_paths=None, record=True, voice=False):
             pushed.append(content)
 
         monkeypatch.setattr(m, "_push", fake_push)
@@ -322,7 +317,7 @@ class TestDynamicRetraction:
         m = self._monitor(monkeypatch, "1246839524441456643", {"last_dynamic_id": "1246839524441456000"})
         pushed = []
 
-        async def fake_push(bot, content, image_paths=None, record=True):
+        async def fake_push(bot, content, image_paths=None, record=True, voice=False):
             pushed.append(content)
 
         monkeypatch.setattr(m, "_push", fake_push)
@@ -335,7 +330,7 @@ class TestDynamicRetraction:
         m = self._monitor(monkeypatch, "1246311690117578769", {"last_dynamic_id": "1246839524441456643"})
         pushed = []
 
-        async def fake_push(bot, content, image_paths=None, record=True):
+        async def fake_push(bot, content, image_paths=None, record=True, voice=False):
             pushed.append(content)
 
         monkeypatch.setattr(m, "_push", fake_push)
@@ -348,7 +343,7 @@ class TestDynamicRetraction:
         m = self._monitor(monkeypatch, "1246839524441456643", {"last_dynamic_id": "1246839524441456643"})
         pushed = []
 
-        async def fake_push(bot, content, image_paths=None, record=True):
+        async def fake_push(bot, content, image_paths=None, record=True, voice=False):
             pushed.append(content)
 
         monkeypatch.setattr(m, "_push", fake_push)
@@ -390,7 +385,7 @@ class TestPrime:
         m = _make_monitor(uid="1", sessdata="sess", state={})
         pushed = []
 
-        async def fake_push(bot, content, image_paths=None, record=True):
+        async def fake_push(bot, content, image_paths=None, record=True, voice=False):
             pushed.append(content)
 
         async def _live():
@@ -429,7 +424,7 @@ class TestPrime:
         assert m._primed is False
         pushed = []
 
-        async def fake_push(bot, content, image_paths=None, record=True):
+        async def fake_push(bot, content, image_paths=None, record=True, voice=False):
             pushed.append(content)
 
         # 停机期间灰泽满开播了 + 发了新动态（都比 state 里的旧记录新）
@@ -456,7 +451,7 @@ class TestPrime:
             "last_live_status": False, "last_dynamic_id": "old"})
         pushed = []
 
-        async def fake_push(bot, content, image_paths=None, record=True):
+        async def fake_push(bot, content, image_paths=None, record=True, voice=False):
             pushed.append(content)
 
         async def _live():
@@ -696,7 +691,7 @@ class TestRepostDynamicSkipped:
         m = _make_monitor(uid="1", sessdata="sess", state={"last_dynamic_id": "old"})
         pushed = []
 
-        async def fake_push(bot, content, image_paths=None, record=True):
+        async def fake_push(bot, content, image_paths=None, record=True, voice=False):
             pushed.append(content)
         monkeypatch.setattr(m, "_push", fake_push)
         monkeypatch.setattr(bb, "_save_state", lambda s: None)
@@ -714,7 +709,7 @@ class TestRepostDynamicSkipped:
         m = _make_monitor(uid="1", sessdata="sess", state={"last_dynamic_id": "old"})
         pushed = []
 
-        async def fake_push(bot, content, image_paths=None, record=True):
+        async def fake_push(bot, content, image_paths=None, record=True, voice=False):
             pushed.append(content)
         monkeypatch.setattr(m, "_push", fake_push)
         monkeypatch.setattr(bb, "_save_state", lambda s: None)

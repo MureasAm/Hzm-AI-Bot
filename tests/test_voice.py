@@ -711,3 +711,43 @@ class TestSendVoiceBudget:
         bot = _FakeBot()
         assert await v.send_voice(bot, "1", False, _LONG) is False
         assert not bot.sent
+
+
+class TestProactiveTtsNumbers:
+    """主动发言强制走语音前的数字/字符预处理（2026-10-23）。"""
+
+    def test_time_readings(self):
+        assert v.numbers_to_chinese("18:00") == "十八点"
+        assert v.numbers_to_chinese("18:30") == "十八点半"
+        assert v.numbers_to_chinese("7:05") == "七点零五分"
+
+    def test_range_percent_decimal_year(self):
+        assert v.numbers_to_chinese("3-5个") == "三到五个"
+        assert v.numbers_to_chinese("50%") == "百分之五十"
+        assert v.numbers_to_chinese("3.5") == "三点五"
+        assert v.numbers_to_chinese("2026年") == "二零二六年"
+        assert v.numbers_to_chinese("-3度") == "零下三度"
+
+    def test_date_readings(self):
+        assert v.numbers_to_chinese("2026-10-23") == "二零二六年十月二十三日"
+        assert v.numbers_to_chinese("10月23日") == "十月二十三日"
+
+    def test_basic_integers(self):
+        assert v.numbers_to_chinese("100") == "一百"
+        assert v.numbers_to_chinese("101") == "一百零一"
+        assert v.numbers_to_chinese("2026") == "二零二六"   # 4 位按年份逐位
+
+    def test_prepare_keeps_common_latin_and_converts(self):
+        text, why = v.prepare_proactive_tts("B站18:00见，mua")
+        assert why == ""
+        assert "十八点" in text and not any(ch.isdigit() for ch in text)
+
+    def test_prepare_rejects_long_latin(self):
+        text, why = v.prepare_proactive_tts("VirtuaReal 18:00 见")
+        assert text == "" and why.startswith("latin:")
+
+    def test_prepare_strips_links(self):
+        text, why = v.prepare_proactive_tts("看这个 https://example.com/a")
+        assert why == "" and "http" not in text
+        text, why = v.prepare_proactive_tts("https://example.com/a")
+        assert text == "" and why == "empty"

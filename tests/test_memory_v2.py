@@ -671,6 +671,49 @@ class TestPreferenceDimensions:
                 assert behavior, f"缺少行为句：{key}={value}"
 
 
+class TestRitualPreference:
+    """固定仪式（2026-10-23）：晚安仪式这类长期要求，只在触发场景出现时注入。"""
+
+    def _ingest(self, store, clock, value="晚安：晚安+喜欢你+爱绿冻+mua"):
+        return store.ingest(
+            "u1",
+            [{"kind": "interaction_preference", "key": "ritual_goodnight", "value": value,
+              "explicit": True, "confidence": 0.95}],
+            source=_source(now=clock), now=clock,
+        )
+
+    def test_ritual_validates(self, store, clock):
+        accepted = self._ingest(store, clock)
+        assert len(accepted) == 1
+        assert accepted[0]["key"] == "ritual_goodnight"
+
+    def test_ritual_without_cue_is_rejected(self, store, clock):
+        # 没有「场景：内容」就无法按场景触发，直接拒收
+        assert self._ingest(store, clock, value="晚安喜欢你") == []
+
+    def test_injected_only_at_cue(self, store, clock):
+        self._ingest(store, clock)
+        night = store.build_preference_context("u1", "晚安哦", now=clock)
+        assert "【他的固定期待】" in night and "喜欢你" in night
+        day = store.build_preference_context("u1", "今天中午吃什么", now=clock)
+        assert "【他的固定期待】" not in day
+
+    def test_used_ids_only_when_injected(self, store, clock):
+        self._ingest(store, clock)
+        night_ids, day_ids = [], []
+        store.build_preference_context("u1", "晚安", now=clock, used_ids=night_ids)
+        store.build_preference_context("u1", "吃了吗", now=clock, used_ids=day_ids)
+        assert night_ids and not day_ids
+
+    def test_extract_prompt_teaches_ritual(self):
+        """提取提示词必须留着 ritual 规则：单次“晚安”不记，固定仪式要记。"""
+        from src.plugins.chatbot import memory_v2
+        prompt = memory_v2.MEMORY_V2_EXTRACT_PROMPT
+        assert "ritual_goodnight" in prompt
+        assert "固定仪式" in prompt
+        assert "仪式感的晚安" in prompt
+
+
 class TestContextSegments:
     """`build_context` 拆成两段：靠前相处方式 / 中段约定（情绪已搬去会话记忆）。"""
 

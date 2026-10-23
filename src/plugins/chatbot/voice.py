@@ -107,6 +107,108 @@ def voice_requested(user_msg: str) -> bool:
     return any(w in (user_msg or "") for w in _VOICE_REQUEST_WORDS)
 
 
+_CN_DIGITS = "零一二三四五六七八九"
+_CN_UNITS = ((100000000, "亿"), (10000, "万"), (1000, "千"), (100, "百"), (10, "十"))
+
+
+def _cn_int(n: int) -> str:
+    """整数 → 中文读法（0–亿级）。用于主动发言强制走语音时的数字预处理。"""
+    if n < 0:
+        return "负" + _cn_int(-n)
+    if n < 10:
+        return _CN_DIGITS[n]
+    if n < 20:
+        return "十" + (_CN_DIGITS[n - 10] if n > 10 else "")
+    for unit, name in _CN_UNITS:
+        if n >= unit:
+            q, r = divmod(n, unit)
+            s = _cn_int(q) + name
+            if r == 0:
+                return s
+            if r < unit // 10:
+                s += "零"
+            return s + _cn_int(r)
+    return str(n)
+
+
+def _cn_number(raw: str) -> str:
+    if "." in raw:
+        whole, frac = raw.split(".", 1)
+        return _cn_int(int(whole)) + "点" + "".join(_CN_DIGITS[int(d)] for d in frac)
+    return _cn_int(int(raw))
+
+
+def _cn_time(m) -> str:
+    h, mi = int(m.group(1)), int(m.group(2))
+    s = _cn_int(h) + "点"
+    if mi == 0:
+        return s
+    if mi == 30:
+        return s + "半"
+    if mi < 10:
+        return s + "零" + _CN_DIGITS[mi] + "分"
+    return s + _cn_int(mi) + "分"
+
+
+def numbers_to_chinese(text: str) -> str:
+    """把阿拉伯数字转成 TTS 念得对的读法（时间/百分比/范围/小数/年份/整数）。
+
+    只做"读法"，不动语义：18:00→十八点、3-5→三到五、50%→百分之五十、3.5→三点五、
+    2026 年→二零二六年（年份逐位读）；7 位以上的长串也逐位读。
+    """
+    t = text
+    t = re.sub(r"(?<!\d)(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?!\d)",
+               lambda m: ("".join(_CN_DIGITS[int(d)] for d in m.group(1)) + "年"
+                          + _cn_int(int(m.group(2))) + "月"
+                          + _cn_int(int(m.group(3))) + "日"), t)
+    t = re.sub(r"(?<!\d)(\d{1,2})月(\d{1,2})[日号]",
+               lambda m: _cn_int(int(m.group(1))) + "月" + _cn_int(int(m.group(2))) + "日", t)
+    t = re.sub(r"(?<!\d)(\d{1,2})[:：](\d{2})(?!\d)", _cn_time, t)
+    t = re.sub(r"(?<!\d)-(\d+)(?!\d)", lambda m: "零下" + _cn_int(int(m.group(1))), t)
+    t = re.sub(r"(\d+(?:\.\d+)?)%", lambda m: "百分之" + _cn_number(m.group(1)), t)
+    t = re.sub(r"(?<!\d)(\d+)\s*[-~～—]\s*(\d+)(?!\d)",
+               lambda m: _cn_int(int(m.group(1))) + "到" + _cn_int(int(m.group(2))), t)
+    t = re.sub(r"(?<!\d)(\d+)\.(\d+)(?!\d)",
+               lambda m: _cn_int(int(m.group(1))) + "点"
+               + "".join(_CN_DIGITS[int(d)] for d in m.group(2)), t)
+    t = re.sub(r"(?<!\d)((?:19|20)\d{2})(?!\d)",
+               lambda m: "".join(_CN_DIGITS[int(d)] for d in m.group(1)), t)
+    t = re.sub(r"(?<!\d)(\d{7,})(?!\d)",
+               lambda m: "".join(_CN_DIGITS[int(d)] for d in m.group(1)), t)
+    t = re.sub(r"(?<!\d)(\d+)(?!\d)", lambda m: _cn_int(int(m.group(1))), t)
+    return t
+
+
+# 主动发言里可以保留的常见英文/字母词（TTS 能念或她常这么说）。
+# 其它较长的拉丁串（人名/模型名/网址残留）→ 退回文字，别让 TTS 逐字母乱念。
+_TTS_LATIN_OK = {"b", "up", "mua", "hzm", "ok", "qq", "v", "ai"}
+
+
+def prepare_proactive_tts(text: str) -> tuple[str, str]:
+    """主动发言强制走语音前的预处理；返回 (可读文本, 不能读的原因)。
+
+    - 链接/邮箱直接删；
+    - 数字转中文；
+    - hzm 等常见词保留，其它长拉丁串 → 返回空串，由调用方改发文字。
+    """
+    t = (text or "").strip()
+    if not t:
+        return "", "empty"
+    t = re.sub(r"https?://\S+|www\.\S+|\S+@\S+\.\S+", "", t)
+    if not t.strip():
+        return "", "empty"
+    t = numbers_to_chinese(t)
+    bad = [x for x in re.findall(r"[A-Za-z]+", t) if x.lower() not in _TTS_LATIN_OK]
+    if bad:
+        return "", f"latin:{bad[0]}"
+    if re.search(r"\d", t):
+        return "", "digit_left"
+    cleaned = _tts_text(t)
+    if not cleaned:
+        return "", "empty_after_clean"
+    return cleaned, ""
+
+
 def _tts_text(reply: str) -> str:
     """清洗成"TTS 该念的那串字"：笑声明读、括号剥掉、符号过滤、破折号转停顿。
 

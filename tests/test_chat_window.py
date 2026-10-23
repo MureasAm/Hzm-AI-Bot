@@ -646,3 +646,47 @@ class TestBatchCommitOnInterrupt:
         await cw._flush(win)
         assert sent == [], "元回复不能发出去"
         assert win.pending == [], "这批已经处理完（当作没说），要提交"
+
+
+class TestStickerPerTopic:
+    """2026-10-23：同一个话题只发一张表情包；换话题才允许下一张。"""
+
+    async def _setup(self, monkeypatch, topic_box):
+        win = cw._UserWindow("u1")
+        win.bot = _StickerBot()
+        monkeypatch.setattr(cw, "_sticker_state", {})
+        monkeypatch.setattr(cw.session_memory, "get_session",
+                            lambda uid: {"topic_since": topic_box["v"]})
+        monkeypatch.setattr(cw, "_get_clients", lambda: (object(), None))
+        monkeypatch.setattr(cw, "log_event", lambda *a, **k: None)
+        calls = []
+
+        async def fake_pick(client, reply, avoid_groups=None, **kwargs):
+            calls.append(1)
+            return {"id": "s1", "file": "x.png", "group": "无语"} if len(calls) == 1 else None
+
+        monkeypatch.setattr(cw, "pick_sticker", fake_pick)
+        return win, calls
+
+    async def test_second_send_in_same_topic_is_skipped(self, monkeypatch):
+        box = {"v": "topic-1"}
+        win, calls = await self._setup(monkeypatch, box)
+        await cw._maybe_send_sticker(win, "无语了")
+        await cw._maybe_send_sticker(win, "无语了")
+        assert len(calls) == 1, "同一话题第二次不该再判定/发送"
+
+    async def test_new_topic_allows_another(self, monkeypatch):
+        box = {"v": "topic-1"}
+        win, calls = await self._setup(monkeypatch, box)
+        await cw._maybe_send_sticker(win, "无语了")
+        box["v"] = "topic-2"
+        await cw._maybe_send_sticker(win, "无语了")
+        assert len(calls) == 2, "换话题后应允许再判定一次"
+
+
+class _StickerBot:
+    async def send_private_msg(self, **kwargs):
+        pass
+
+    async def send_group_msg(self, **kwargs):
+        pass

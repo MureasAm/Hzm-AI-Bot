@@ -193,13 +193,18 @@ class TestRecentStoresGroup:
 
         monkeypatch.setattr(cw, "STICKER_COOLDOWN_TURNS", 0)
         monkeypatch.setattr(cw, "_sticker_state", {})
+        topic = {"v": "t1"}
+        monkeypatch.setattr(cw.session_memory, "get_session",
+                            lambda uid: {"topic_since": topic["v"]})
         monkeypatch.setattr(cw, "_get_clients", lambda: (object(), object()))
         monkeypatch.setattr(cw, "_to_qq_image", lambda rel: "file:///x.png")
         hit = {"id": "st_x", "file": "assets/stickers/st_x.png", "group": "吐槽"}
         seen = {}
+        calls = []
 
         async def fake_pick(client, reply, avoid_groups=None, **kwargs):
             seen["avoid"] = avoid_groups
+            calls.append(avoid_groups)
             return hit
         monkeypatch.setattr(cw, "pick_sticker", fake_pick)
 
@@ -212,5 +217,9 @@ class TestRecentStoresGroup:
         assert seen["sent"]
         assert cw._sticker_st("u1")["recent"] == ["吐槽"]   # 记的是类别
 
+        # 同话题不再发；换话题后才允许下一张（并把 recent 带回去拦同类）
         await cw._maybe_send_sticker(win, "草")
-        assert seen["avoid"] == ["吐槽"]                    # 下一轮带着它去拦
+        assert len(calls) == 1
+        topic["v"] = "t2"
+        await cw._maybe_send_sticker(win, "草")
+        assert len(calls) == 2 and calls[-1] == ["吐槽"]

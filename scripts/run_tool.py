@@ -564,6 +564,25 @@ def _run_memory_rebuild(args):
     memory_v2_tool.run_rebuild(args)
 
 
+def _add_memory_reflect(sub):
+    p = sub.add_parser("memory-reflect",
+                       help="批量反思：扫多天聊天记录，找固定仪式/习惯/偏好（默认只出候选）")
+    p.add_argument("--user", required=True, help="QQ 号")
+    p.add_argument("--days", type=int, default=30, help="回看多少天（默认 30）")
+    p.add_argument("--apply", action="store_true",
+                   help="把候选写进真实 Memory V2（默认只写 outputs/reflection）")
+    p.add_argument("--refresh", action="store_true", help="忽略 digest 缓存，重跑所有天")
+    p.add_argument("--out", default=str(_common.OUTPUTS_DIR / "reflection"),
+                   help="候选输出目录")
+    p.set_defaults(func=_run_memory_reflect)
+
+
+def _run_memory_reflect(args):
+    import json
+    import memory_reflect
+    print(json.dumps(memory_reflect.run(args), ensure_ascii=False, indent=2))
+
+
 def _add_memory_migrate_moments(sub):
     p = sub.add_parser("memory-migrate-moments",
                        help="把 v1 卡的 significant_moments 并进 v2 库（只搬这一类）")
@@ -660,6 +679,8 @@ def _add_skeleton_ab(sub):
     p.add_argument("--runs", type=int, default=1, help="每条跑几轮（默认 1）")
     p.add_argument("--seed", type=int, default=7)
     p.add_argument("--b", default=None, help="B 版骨架文件（缺省 outputs/_sp_v3.txt）")
+    p.add_argument("--check", action="store_true",
+                   help="自称方式体检：B 版超阈值就退出码 1")
     p.set_defaults(func=_run_skeleton_ab)
 
 
@@ -669,6 +690,8 @@ def _run_skeleton_ab(args):
     argv = ["--n", str(args.n), "--runs", str(args.runs), "--seed", str(args.seed)]
     if args.b:
         argv += ["--b", args.b]
+    if args.check:
+        argv.append("--check")
     sys.exit(asyncio.run(skeleton_ab.main(argv)))
 
 
@@ -743,7 +766,7 @@ def build_parser() -> argparse.ArgumentParser:
                     "  【向量】precompute\n"
                     "  【评测】regression · persona-eval · retrieval-eval · problems\n"
                     "  【工具】bili-check · bili-login · vision-test · mine-theme · llm-cost · proactive-ab\n"
-                    "          memory-audit · memory-replay · memory-rebuild · memory-migrate-moments · memory-dedupe\n"
+                    "          memory-audit · memory-replay · memory-rebuild · memory-reflect · memory-migrate-moments · memory-dedupe\n"
                     "          weekly-review（只读周报：确定性指标 + 问题轮次 + 候选）",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -769,6 +792,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_memory_audit(sub)
     _add_memory_replay(sub)
     _add_memory_rebuild(sub)
+    _add_memory_reflect(sub)
     _add_memory_migrate_moments(sub)
     _add_skeleton_ab(sub)
     _add_sticker_stats(sub)

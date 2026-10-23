@@ -2,8 +2,8 @@
 
 启动时注册后台任务，周期性轮询灰泽满本人的 B站账号：
 - 开播：状态翻转（未播→直播）才推送一次，带上直播间标题
-- 动态：出现新动态 ID 才推送，**两条**——先原文（结构化通知：真实内容 + 个人空间链接，
-  含配图时连图一起发），再"她会主动说的那句话"（proactive，转不出来就只有原文那条）
+- 动态：出现新动态 ID 才推送。**能转成“她会主动说的那句话”时，只发那句（语音优先），
+  不再推动态原文/链接**（2026-10-23 用户定）；转不出来/不适合时才发结构化原文通知。
 推送目标：灰泽满 QQ 号的所有好友（私聊），NOTIFY_FRIENDS_WHITELIST 可收窄为白名单。
 去重状态（last_live_status / last_dynamic_id / 好友缓存）持久化到 data/bili_state.json，
 重启不重复推送。所有外部调用失败都降级为日志，绝不让监听任务崩溃。
@@ -19,12 +19,11 @@ import httpx
 from PIL import Image
 
 from nonebot import get_bot, get_driver
-from nonebot.adapters.onebot.v11 import Message, MessageSegment
 
 from .bg import spawn
 from .constants import BILI_STATE_FILE
 from .memory import append_bot_message
-from .proactive import compose_proactive
+from .proactive import compose_proactive, deliver_proactive
 from . import _bridge_common
 from .config import get_bili_uid, get_bili_sessdata, get_notify_whitelist, get_push_interval
 
@@ -403,23 +402,22 @@ class BiliMonitor:
             if image_paths:
                 print(f"[B站] 纯表情动态：表情 {len(image_paths)} 张（已压到 ≤{_EMOJI_MAX_SIDE}px）")
 
-        # **原文通知 + 她会说的那句，两条都发**（与微博 weibo_bridge._check_posts 一致）。
-        # 原来写的是 `said or notice` 二选一：主动发言一旦成了，**原文就整条不见了**——
-        # 而她转写质量不稳（会漏细节、会跑偏），粉丝就只剩一条没头没尾的私聊。
-        # 顺序不能反：先原文（带配图），再她那句（纯文字），像"转发给你 + 补一句"。
+        # **2026-10-23 用户改定**：主动发言一旦生成，就**只发她那句语音**，
+        # 不再推动态原文/链接（与旧版“原文 + 她那句”相反；旧理由是她转写可能漏细节，
+        # 用户现在接受这个取舍：有她那句就不看原文）。
+        # 她不发/不适合发时，才退回结构化原文通知（信息不丢）。
         notice = self._format_dynamic_push(dyn["text"])
         # 配图传给她看：内容里的"⬇️/这个/图片里那个"指的就是它。
         # **只传真配图**（photos）——纯表情动态那一堆 emoji 图不是"配图"，
         # 传过去只会让视觉模型描述一个小表情，反而误导。
         said = await compose_proactive(dyn["text"], "B站",
                                        image_paths=image_paths if photos else None)
-        print(f"[B站] 检测到新动态 -> 原文通知"
-              f"{(' + 主动发言：' + said) if said else '（主动发言未生成，只发原文）'}")
-        # 通知只在"她那句没发出去"时才写进记忆——她那句已经覆盖了同一件事，
-        # 再记一条机器复述是白占窗口（用户 2026-09-29 的建议）
-        await self._push(bot, notice, image_paths=image_paths, record=not said)
         if said:
-            await self._push(bot, said)
+            print(f"[B站] 检测到新动态 -> 主动发言（语音优先，不推原文）：{said}")
+            await self._push(bot, said, image_paths=image_paths, voice=True)
+        else:
+            print("[B站] 检测到新动态 -> 主动发言未生成，只发原文")
+            await self._push(bot, notice, image_paths=image_paths, record=True)
         self.state["last_dynamic_id"] = dyn["id"]
         _save_state(self.state)
 
@@ -453,12 +451,12 @@ class BiliMonitor:
         return friends
 
     async def _push(self, bot, content: str, image_paths: list | None = None,
-                    record: bool = True) -> None:
+                    record: bool = True, voice: bool = False) -> None:
         """私聊广播给全部好友（白名单非空则只发白名单）。单好友失败不中断。
 
-        image_paths 提供时，消息附带这些图片（动态配图 + 表情图）。
-        `record=False` = 这条不用写进记忆（动态推送里"她那句"已经记过了，
-        通知只是同一件事的机器复述，再记一条是重复占窗口）。
+        `voice=True`：这条主动发言优先走 TTS（`deliver_proactive`），失败/不适合
+        再发文字版；配图随语音发。
+        `record=False`：这条不写进记忆（目前只在“原文通知”路径用得到）。
         """
         friends = await self._get_friends(bot)
         whitelist = get_notify_whitelist()
@@ -470,10 +468,8 @@ class BiliMonitor:
         ok = 0
         for t in targets:
             try:
-                msg = Message(content)
-                for p in (image_paths or []):
-                    msg += MessageSegment.image(file=str(p))
-                await bot.send_private_msg(user_id=t["user_id"], message=msg)
+                await deliver_proactive(bot, t["user_id"], content,
+                                        image_paths=image_paths, voice=voice)
                 ok += 1
                 # **记进那个好友的短期记忆**：这条是机器人自己 API 发的，不会作为事件回来，
                 # 不记的话他顺着这句回她时，她的【最近对话记录】里没有这一句，
@@ -483,7 +479,8 @@ class BiliMonitor:
                                        _bridge_common.to_memory_line(content))
             except Exception as e:
                 print(f"⚠️ 推送失败 user={t.get('user_id')}: {e}")
-        print(f"[B站] 已推送 {ok}/{len(targets)} 位好友")
+        mode = "语音/文字" if voice else "文字"
+        print(f"[B站] 已推送 {ok}/{len(targets)} 位好友（{mode}）")
 
 
 # ==================== 启动注册 ====================

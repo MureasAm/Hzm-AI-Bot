@@ -1,6 +1,8 @@
 """微博动态监听 + 私聊广播（镜像 bili_bridge 的 B站动态模式）。
 
 启动时注册后台任务，周期性轮询灰泽满本人的微博账号，出现新微博就私聊广播给好友：
+- 能转成“她会主动说的那句话”时，**只发那句（语音优先），不推微博原文**（2026-10-23 用户定）；
+  转不出来/不适合时才发结构化原文通知
 - 需要 WEIBO_UID（微博 UID）+ WEIBO_COOKIE（浏览器登录后的完整 Cookie，无登录会被微博风控挡 403/432）
 - 去重状态 last_post_id 持久化到 data/weibo_state.json，重启不重复推送
 - 推送目标：灰泽满 QQ 号的所有好友（私聊），NOTIFY_FRIENDS_WHITELIST 可收窄为白名单
@@ -17,12 +19,11 @@ from pathlib import Path
 import httpx
 
 from nonebot import get_bot, get_driver
-from nonebot.adapters.onebot.v11 import Message, MessageSegment
 
 from .bg import spawn
 from .constants import WEIBO_STATE_FILE
 from .memory import append_bot_message
-from .proactive import compose_proactive
+from .proactive import compose_proactive, deliver_proactive
 from . import _bridge_common
 from .config import get_weibo_uid, get_weibo_cookie, get_notify_whitelist, get_push_interval
 
@@ -309,16 +310,17 @@ class WeiboMonitor:
         if image_paths:
             print(f"[微博] 配图已下载 {len(image_paths)} 张")
 
-        # 同 B站：优先转成"她会主动说的那句话"，转不了/失败就退回结构化通知
-        # 同 B站：原文 + 她会说的那句话，两条都发（转写失败就只发原文）
+        # 同 B站 2026-10-23 改定：主动发言生成后只发她那句（语音优先），不推原文；
+        # 只有她没话说时才退回结构化通知。
         notice = self._format_post_push(post["text"], post["url"])
         # 配图传给她看（同 B站）：内容里的"⬇️/这个/图片里那个"指的就是它
         said = await compose_proactive(post["text"], "微博", image_paths=image_paths)
-        print(f"[微博] 检测到新微博 -> {'原文 + 主动发言' if said else '原文（转写失败）'}")
-        # 同 B站：通知只在"她那句没发出去"时写进记忆
-        await self._push(bot, notice, image_paths=image_paths, record=not said)
         if said:
-            await self._push(bot, said)
+            print(f"[微博] 检测到新微博 -> 主动发言（语音优先，不推原文）：{said}")
+            await self._push(bot, said, image_paths=image_paths, voice=True)
+        else:
+            print("[微博] 检测到新微博 -> 主动发言未生成，只发原文")
+            await self._push(bot, notice, image_paths=image_paths, record=True)
         self.state["last_post_id"] = post["id"]
         _save_state(self.state)
 
@@ -341,10 +343,10 @@ class WeiboMonitor:
         return friends
 
     async def _push(self, bot, content: str, image_paths: list | None = None,
-                    record: bool = True) -> None:
+                    record: bool = True, voice: bool = False) -> None:
         """私聊广播给全部好友（白名单非空则只发白名单）。单好友失败不中断。
 
-        `record=False` = 这条不用写进记忆（"她那句"已经记过了，通知是同一件事的机器复述）。
+        `voice=True`：主动发言优先走 TTS，失败/不适合再发文字版；配图随语音发。
         """
         friends = await self._get_friends(bot)
         whitelist = get_notify_whitelist()
@@ -356,10 +358,8 @@ class WeiboMonitor:
         ok = 0
         for t in targets:
             try:
-                msg = Message(content)
-                for p in (image_paths or []):
-                    msg += MessageSegment.image(file=str(p))
-                await bot.send_private_msg(user_id=t["user_id"], message=msg)
+                await deliver_proactive(bot, t["user_id"], content,
+                                        image_paths=image_paths, voice=voice)
                 ok += 1
                 # 同 B站：记进那个好友的短期记忆，否则他顺着这句回她时她不知道在说什么
                 if record:
@@ -367,7 +367,8 @@ class WeiboMonitor:
                                        _bridge_common.to_memory_line(content))
             except Exception as e:
                 print(f"⚠️ 推送失败 user={t.get('user_id')}: {e}")
-        print(f"[微博] 已推送 {ok}/{len(targets)} 位好友")
+        mode = "语音/文字" if voice else "文字"
+        print(f"[微博] 已推送 {ok}/{len(targets)} 位好友（{mode}）")
 
 
 # ==================== 启动注册 ====================

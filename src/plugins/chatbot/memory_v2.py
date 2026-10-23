@@ -94,6 +94,12 @@ _PREFERENCE_VALUES = {
     "reply_length": {"short", "medium", "long"},
     "topic_preference": {"engage", "avoid"},
 }
+# 自由文本的相处方式键：值不是枚举，而是一句「场景：内容」（2026-10-23 加 ritual——
+# 固定仪式没法塞进上面那张枚举表；用户 905860780 每晚的“仪式感晚安”就是这么漏掉的）。
+# key 用 `ritual` 或 `ritual_<场景>`（如 ritual_goodnight）：每个场景一个槽，
+# 同一场景的新值顶掉旧值，不同场景互不影响。
+def _is_ritual_key(key: str) -> bool:
+    return key == "ritual" or key.startswith("ritual_")
 _SENSITIVE_KEYS = {
     "phone", "phone_number", "email", "exact_address", "home_address",
     "id_number", "identity_number", "bank_account", "finance_account",
@@ -169,6 +175,12 @@ MEMORY_V2_EXTRACT_PROMPT = """你是灰泽满私聊机器人的记忆候选提�
    · **习惯类（`habit_*`）要把「频率 + 原因」一起写进去**：不是"早上要跑步"，
      而是"每天早上要去跑早操（学校要求）"。（2026-10-17 实测：只记了前者的半截，
      她连着几天都在问"你起这么早干嘛去"——用户已经说过好几遍是学校要求的。）
+   · ⚠️ **同一活动有多个频率时必须分开记**：不要把它们合成一条。
+     实测踩坑（2026-10-21，用户 2151983431）：原话是"早上跑的是早操，这个是一周三次的"，
+     模型写成"早上跑早操是一周三次的"——把**每天早上的跑操**和**每周三次的 3 公里跑**
+     合并了，之后早起对话全接不上。正确写法是两条：
+     `habit_morning_run=每天早上起床后都要跑操（学校要求）`、
+     `habit_run_3km=每周还有三次 3 公里跑`。
    · 判据：同一个人、同一个类别下面，两件不同的事必须能用名字分开。
      后半截写不出具体的东西，就说明这条本来就不该记。
    · ⛔ **不许用 `moment` / `info` / `situation` / `experience` / `thing` 这类空壳名**：
@@ -199,6 +211,18 @@ MEMORY_V2_EXTRACT_PROMPT = """你是灰泽满私聊机器人的记忆候选提�
    address_style=nickname|plain|casual                **他希望灰泽满怎么称呼他自己**
    reply_length=short|medium|long                     回复长度偏好
    topic_preference=engage|avoid                      话题偏好与雷区
+   ritual_<场景>=自由文本                              **固定场景的长期仪式**（见下）
+   · **ritual（固定仪式）**：用户在某个固定场景规定灰泽满以后都这样说/做——晚安、早安、
+     出门、上线。key 用 `ritual_<场景>`（如 `ritual_goodnight`，每个场景一个槽，
+     不同场景互不顶替），value 写成「场景：要说的内容」，如
+     `ritual_goodnight` = 「晚安/睡前/要睡：晚安+喜欢你+爱绿冻+mua」。
+     场景词写用户实际会用到的说法（用 / 分隔），不然他说“要睡了”时不会触发。
+     判据：用户是在**规定以后都这样**（"要有仪式感的晚安""睡前必做""以后都…"），
+     不是这一晚的玩笑。哪怕单轮看起来像寒暄，只要是在立这个规矩就记。
+     **更新时**：清单里已有同一场景的 ritual，这轮只提到一半内容 → 沿用旧值、
+     不要缩水（新 value 必须包含旧值里的具体内容）；只是催一句、没提内容 → 不更新。
+     实测漏记（2026-10-15，用户 905860780）：连着十几天每晚要"仪式感的晚安"，
+     单轮提取把它当寒暄跳过，她从没主动想起过这件事。
    用户明确说喜欢/不喜欢时 explicit=true；仅从互动表现推断时 explicit=false。
    ⚠️ **用户嫌她"阴阳怪气／挤兑人／说话冲／不好好讲话"，要她改语气 → `banter_tolerance=low`。**
       （2026-10-17 实测漏了：用户 3498594329 明说"以后能保证好好讲话、不要冲人、不要阴阳怪气"，
@@ -226,6 +250,8 @@ MEMORY_V2_EXTRACT_PROMPT = """你是灰泽满私聊机器人的记忆候选提�
   大货，A2证…"，被当真存成 occupation/location/age/income/savings 五条，之后她张口就是
   "明天还得握方向盘的人"。
 - 单次闲聊、寒暄、玩梗（"在吗""哈哈哈""晚安"）。
+  ⚠️ **例外（ritual）**：单次"晚安"不记；但"每天晚安都要有仪式感／睡前必做"是
+  **固定仪式**，归 `interaction_preference/ritual`，不要因为出现"晚安"就跳过。
 - **称呼需求的方向搞反**：`address_style` 填的是「**用户希望灰泽满怎么称呼他自己**」。
   他说"我想叫你宝宝""我能不能叫你满姐"——那是**他想叫她**，方向相反，**不要填 address_style**。
   （实测踩坑 2026-10-16：同一个句式"我想叫你宝宝"，两条记录分别被填成 `nickname` 和 `plain`，
@@ -614,6 +640,20 @@ def _period_words(now: datetime | None) -> tuple:
     return _TIME_PERIOD_WORDS["night"]
 
 
+def _ritual_matches(memory: dict, query: str) -> bool:
+    """固定仪式只在**触发场景**出现时注入。
+
+    value 约定写成「场景：内容」（如「晚安：晚安+喜欢你+爱绿冻+mua」），
+    场景那半截按 +、/、逗号等切开；用户消息里出现任一个场景词才注入。
+    这样“晚安仪式”不会在白天每条消息里都冒出来。
+    """
+    value = str(memory.get("value") or "")
+    head = re.split(r"[：:]", value, maxsplit=1)[0]
+    cues = [t for t in re.split(r"[+＋、,，/|\s]+", head) if t]
+    q = query or ""
+    return any(c in q for c in cues)
+
+
 def _name_fact_rejection(key: str, value: str, source: dict) -> str:
     """名字类事实的代码闸门：必须由用户明确要求称呼，且 value 本身像名字。"""
     if key not in _NAME_KEYS:
@@ -750,8 +790,13 @@ class ShadowMemoryStore:
             if reason:
                 return None, reason
         if kind == "interaction_preference":
-            if key not in _PREFERENCE_VALUES or value not in _PREFERENCE_VALUES[key]:
+            if key not in _PREFERENCE_VALUES and not _is_ritual_key(key):
                 return None, "invalid_preference_dimension"
+            if key in _PREFERENCE_VALUES and value not in _PREFERENCE_VALUES[key]:
+                return None, "invalid_preference_dimension"
+            if _is_ritual_key(key) and ("：" not in value and ":" not in value):
+                # 固定仪式必须写成「场景：内容」，否则注入时无法按场景触发。
+                return None, "ritual_needs_cue"
         if kind == "commitment":
             if item.get("actor") != "assistant" or not explicit:
                 return None, "assistant_commitment_required"
@@ -989,14 +1034,19 @@ class ShadowMemoryStore:
         """
         preferences = [m for m in active if m.get("kind") == "interaction_preference"]
         lines: list[str] = []
-        if preferences:
+        pref_lines: list[tuple[str, dict]] = []
+        for memory in preferences[:MAX_PREFERENCE_ITEMS]:
+            behavior = inj.behavior_sentence(memory.get("key"), memory.get("value"))
+            if behavior:
+                pref_lines.append((behavior, memory))
+            elif _is_ritual_key(str(memory.get("key"))) and _ritual_matches(memory, query):
+                pref_lines.append((inj.T("profile", "ritual", value=memory.get("value")), memory))
+        if pref_lines:
             lines.append(inj.T("profile", "head"))
-            for memory in preferences[:MAX_PREFERENCE_ITEMS]:
-                behavior = inj.behavior_sentence(memory.get("key"), memory.get("value"))
-                if behavior:
-                    lines.append(behavior)
-                    if used_out is not None and memory.get("id"):
-                        used_out.append(str(memory["id"]))
+            for text, memory in pref_lines:
+                lines.append(text)
+                if used_out is not None and memory.get("id"):
+                    used_out.append(str(memory["id"]))
         facts = self._select_facts(active, query)
         selected_ids = set()
         if facts:
