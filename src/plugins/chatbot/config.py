@@ -256,14 +256,13 @@ def _chain_layers(global_config):
     # 给每层贴个好看的名字：主层用真实模型名，方便日志一眼看出"这轮是谁答的"
     if layers:
         client, m, label = layers[0]
-        # 主层的名字要等 `_get_model_name()` 才拿得到，所以它的标签和参数覆盖都只能在这补。
-        # **端点名要跟其它层一样带上**——三个端点之后，只有第 1 层不带的话，
-        # 日志上根本分不出"这轮是哪个站答的"。
+        # 主层的名字从**传入的 global_config** 取，而不是 `_get_model_name()` 的全局 driver：
+        # 这样测试能用自己的配置拼链，主层标签/参数也不会跟调用方的配置脱节。
+        name = getattr(global_config, "openai_model", None) or _get_model_name()
         if not label:
-            name = _get_model_name()
             host = str(getattr(global_config, "openai_api_base", "") or "").split("//")[-1].split("/")[0]
             label = f"{name}（{host}）" if host else name
-        layers[0] = (client, m, label, MODEL_EXTRA_PARAMS.get(_get_model_name()))
+        layers[0] = (client, m, label, MODEL_EXTRA_PARAMS.get(name))
     return layers
 
 
