@@ -15,7 +15,7 @@ import os
 from typing import Awaitable, Callable
 
 from .config import (_get_clients, _get_model_name, extract_chat_content,
-                     log_cache_usage)
+                     get_flag, log_cache_usage)
 from .constants import THINKING_DISABLED
 from . import recall as recall_mod
 
@@ -31,11 +31,11 @@ _capability_cache: dict[str, bool] = {}
 
 
 def tools_enabled() -> bool:
-    return os.environ.get("RECALL_TOOLS", "0").strip().lower() not in ("0", "false", "no", "off")
+    return get_flag("RECALL_TOOLS", "0").strip().lower() not in ("0", "false", "no", "off")
 
 
 def _capable_models() -> set[str]:
-    raw = os.environ.get("TOOL_CAPABLE_MODELS", "").strip()
+    raw = get_flag("TOOL_CAPABLE_MODELS", "").strip()
     if raw:
         return {m.strip() for m in raw.split(",") if m.strip()}
     return set(_DEFAULT_CAPABLE)
@@ -67,7 +67,7 @@ async def ensure_tool_capable(client=None, model: str | None = None) -> bool:
     model = (model or _get_model_name()).strip()
     if model in _capability_cache:
         return _capability_cache[model]
-    probe = os.environ.get("TOOL_PROBE", "0").strip().lower() in ("1", "true", "on", "yes")
+    probe = get_flag("TOOL_PROBE", "0").strip().lower() in ("1", "true", "on", "yes")
     if not probe:
         return tool_capable(model)
     client = client or _get_clients()[0]
@@ -151,12 +151,6 @@ async def generate_with_tools(
 
     log_cache_usage(resp, "工具选择")
     calls = calls[:_MAX_TOOL_CALLS]
-    # assistant 的 tool_calls 必须先回到消息里，tool 结果才有归属。
-    messages = list(messages) + [{
-        "role": "assistant",
-        "content": getattr(msg, "content", "") or "",
-        "tool_calls": [_tool_call_dict(tc) for tc in calls],
-    }]
     tasks = []
     for tc in calls:
         fn = getattr(tc, "function", None)
@@ -168,11 +162,23 @@ async def generate_with_tools(
     except Exception:
         tool_msgs = [{"role": "tool", "tool_call_id": getattr(tc, "id", "") or "",
                       "content": "没有查到；不要编造。"} for tc in calls]
-    messages += list(tool_msgs)
+
+    # ⚠️ **不把 assistant(tool_calls)+tool 消息回给上游**（2026-10-27 实测）：
+    # Gemini 走中转站的 OpenAI 兼容层时，`role:"tool"` 的结果会被忽略——
+    # 工具明明查到了 26℃，最终回复仍说“哪知道几度”。改成把结果作为一条 system 消息
+    # 放在用户消息前：所有 provider 都看得见，也不需要伪造 tool_call 配对。
+    result_text = "【工具结果】" + "\n".join(
+        str(m.get("content") or "") for m in tool_msgs
+    ) + "\n（这是你刚查到的；直接用，查不到不要编。）"
+    result_msg = {"role": "system", "content": result_text[:1200]}
+    if messages and messages[-1].get("role") == "user":
+        messages2 = list(messages[:-1]) + [result_msg, messages[-1]]
+    else:
+        messages2 = list(messages) + [result_msg]
 
     # 第二轮不再给 tools：max_rounds=1，避免工具循环；它只负责把工具结果织进回复。
     try:
-        final = await client.chat.completions.create(**{**kwargs, "messages": messages})
+        final = await client.chat.completions.create(**{**kwargs, "messages": messages2})
     except Exception:
         return (getattr(msg, "content", "") or "").strip()
     log_cache_usage(final, "主回复")

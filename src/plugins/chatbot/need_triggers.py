@@ -28,6 +28,26 @@ _WEATHER_RE = re.compile(
 _TODAY_RE = re.compile(r"(我今天|我早上|我中午|我晚上|我今天干嘛|我今天干啥|吃了什么|干啥了|做了什么)")
 _PERCEPTION_RE = re.compile(r"(现在几点|几点了|你那边几点|农历|初几|节气|什么日子)")
 
+# 从“X天气/气温/几度”里抠出地点；probe 的扩写句通常会把“坡县”规范成“新加坡”。
+_PLACE_RE = re.compile(
+    r"([一-龥]{2,8})(?:那边|那里|的)?(?:天气|气温|几度|多少度|冷不冷|热不热)"
+)
+_PLACE_NOISE = ("现在", "今天", "明天", "昨天", "那边", "那里", "这里", "用户", "问", "查", "在", "户")
+# 常见昵称 → 和风能解析的城市名（只收天气问句里会出现的）
+_PLACE_ALIASES = {"坡县": "新加坡", "坡坡": "新加坡", "袋鼠国": "澳大利亚"}
+
+
+def place_from_text(text: str) -> str:
+    """从天气问句/扩写句里抠地名；扣不出来返回空串。"""
+    m = _PLACE_RE.search(text or "")
+    if not m:
+        return ""
+    place = m.group(1)
+    for w in _PLACE_NOISE:
+        place = place.replace(w, "")
+    place = _PLACE_ALIASES.get(place, place)
+    return place if 1 < len(place) <= 8 else ""
+
 
 def _weather_subject(msg: str) -> str:
     if any(k in msg for k in ("你那边", "你那里", "你那", "澳洲", "墨尔本")):

@@ -31,7 +31,7 @@ from .retrieval import (
 )
 from .corpus_judge import judge_corpus
 from .chatlog import log_corpus_hits, log_block_hits, log_injection_trace
-from .config import get_llm_route
+from .config import get_llm_route, get_flag
 from .constants import SPLIT_DELAY_MIN_MS, SPLIT_DELAY_MAX_MS  # noqa: F401 — test_core 校验分段延迟上下限时读它
 from . import context_probe
 from . import group_memory
@@ -57,10 +57,16 @@ from .session_memory import (
 
 _MEMORY_V2_STORE = memory_v2.ShadowMemoryStore()
 
+_TOOL_NOTE = (
+    "【工具】需要查“对方记得的事、你自己的事、今天的事、天气、精确时间”时，"
+    "可以调用 recall；不确定就不调用，查不到不要编。"
+    "不要把查到的内容当成每轮话题复述。"
+)
+
 
 def injection_v3_enabled() -> bool:
     """注入 v3（registry/frame + recall）。默认 0：旧链路逐字不变，便于回退。"""
-    return os.environ.get("INJECTION_V3", "0").strip().lower() not in ("0", "false", "no", "off")
+    return get_flag("INJECTION_V3", "0").strip().lower() not in ("0", "false", "no", "off")
 
 
 # ==================== 🎭 基础人设提示词 ====================
@@ -433,7 +439,8 @@ def build_message_list(user_msg: str, fused_items: list,
                        is_group: bool = False, group_address_note: str = "",
                        group_thread_note: str = "", name_budget: str = "",
                        habit_hint: str = "", now_context: str = "",
-                       time_hint: str = "", prefetch_context: str = "") -> list:
+                       time_hint: str = "", prefetch_context: str = "",
+                       tool_note: str = "") -> list:
     """按优先级组装发送给模型的消息列表。
 
     fused_items 为融合后的 RetrievalItem 列表（corpus + behavior），按源分组注入。
@@ -767,6 +774,13 @@ def build_message_list(user_msg: str, fused_items: list,
         messages.append({"role": "system", "content": habit_hint})
         hit_blocks.append("habit_hint")
         _mark("habit_hint")
+
+    # 工具能力提示：只在 tools 真的会随请求发出、且模型探测通过时出现。
+    # 放在用户消息前最后一条，提示“需要时再查”，不把工具变成每轮必用的动作。
+    if tool_note:
+        messages.append({"role": "system", "content": tool_note})
+        hit_blocks.append("tool_note")
+        _mark("tool_note")
 
     # 运行时块级开火留痕（scene_* / 12–19；真实聊天路径才写，离线实验/回归不污染）
     if log_hits and get_llm_route() in ("私", "群"):
@@ -1253,6 +1267,13 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         evtxt = "；".join(events) or "（刚进群，还没太熟）"
         group_context = f"在场成员：{names}。群内近况：{evtxt}"
     weather_city = _weather_city_for(user_id)
+    # v3 天气 owner=user 时，**这一句明确提到的地点优先于 V2 旧 location**
+    # （如用户问“坡县几度”，probe 扩写成“新加坡…”，不能拿旧城市答）。
+    weather_city_turn = weather_city
+    if v3:
+        weather_city_turn = (need_triggers.place_from_text(retrieval_query)
+                             or need_triggers.place_from_text(query_text)
+                             or weather_city)
 
     # 注入 v3：显式触发预取（系统侧，不占工具轮）；时间拆成 date/live 常驻 + 本场时段一次。
     prefetch_context = ""
@@ -1263,7 +1284,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
             prefetch_context, _ = await asyncio.wait_for(
                 need_triggers.prefetch(
                     user_id=user_id, msg=query_text, store=_MEMORY_V2_STORE,
-                    user_city=weather_city, deepseek_client=deepseek_client,
+                    user_city=weather_city_turn, deepseek_client=deepseek_client,
                     zhipu_client=zhipu_client, is_group=is_group,
                 ),
                 timeout=3.0,
@@ -1329,6 +1350,25 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
             user_history_timed, user_msg, deepseek_client)
     v3_fused = ([it for it in fused_items if getattr(it, "source", "") == "behavior"]
                 if v3 else fused_items)
+    # v3：模型可调用 recall 取记忆/感知；显式预取已在 frame 里，不依赖工具能力。
+    tool_executor = None
+    tool_note = ""
+    if v3:
+        async def _tool_exec(name, arguments, call_id):
+            if name != recall_mod.TOOL_NAME:
+                return "没有查到；不要编造。"
+            text, _ = await recall_mod.recall_for_tool(
+                arguments, user_id=user_id, store=_MEMORY_V2_STORE,
+                user_city=weather_city_turn, deepseek_client=deepseek_client,
+                zhipu_client=zhipu_client, is_group=is_group,
+            )
+            return text
+
+        tool_executor = _tool_exec
+        if tool_loop.tools_enabled() and await tool_loop.ensure_tool_capable():
+            tool_note = _TOOL_NOTE
+        else:
+            tool_executor = None
     messages = build_message_list(
         gen_user_msg, v3_fused, hist_for_injection,
         vision_desc=vision_desc, weather_city=weather_city, batch_summary=batch_summary,
@@ -1346,24 +1386,10 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         is_group=is_group, group_address_note=group_address_note,
         group_thread_note=group_thread_note, name_budget=name_budget,
         habit_hint=habit_hint, now_context=now_context, time_hint=time_hint,
-        prefetch_context=prefetch_context,
+        prefetch_context=prefetch_context, tool_note=tool_note,
     )
 
     # --- 🤖 调用大模型 ---
-    # v3：模型可调用 recall 取记忆/感知；显式预取已在 frame 里，不依赖工具能力。
-    tool_executor = None
-    if v3:
-        async def _tool_exec(name, arguments, call_id):
-            if name != recall_mod.TOOL_NAME:
-                return "没有查到；不要编造。"
-            text, _ = await recall_mod.recall_for_tool(
-                arguments, user_id=user_id, store=_MEMORY_V2_STORE,
-                user_city=weather_city, deepseek_client=deepseek_client,
-                zhipu_client=zhipu_client, is_group=is_group,
-            )
-            return text
-
-        tool_executor = _tool_exec
     if tool_executor is not None:
         reply = await generate_reply(messages, tool_executor=tool_executor)
     else:

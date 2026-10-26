@@ -52,7 +52,7 @@ def test_no_tool_call_is_one_call(monkeypatch):
     assert len(client.chat.completions.calls) == 1
 
 
-def test_tool_call_adds_second_call_and_tool_message(monkeypatch):
+def test_tool_call_adds_second_call_and_system_result(monkeypatch):
     client = FakeClient([_resp(tool_calls=[_call(1)]), _resp(content="好的")])
     monkeypatch.setattr(tool_loop, "_get_clients", lambda: (client, None))
     monkeypatch.setattr(tool_loop, "log_cache_usage", lambda *a, **k: None)
@@ -70,8 +70,12 @@ def test_tool_call_adds_second_call_and_tool_message(monkeypatch):
     assert len(calls) == 2
     assert "tools" in calls[0] and "tools" not in calls[1]
     msgs = calls[1]["messages"]
-    assert any(m.get("role") == "tool" for m in msgs)
-    assert any(m.get("tool_calls") for m in msgs if m.get("role") == "assistant")
+    # 结果走 system（Gemini 兼容层会忽略 role:"tool"），且放在用户消息前
+    assert msgs[-1]["role"] == "user"
+    assert msgs[-2]["role"] == "system"
+    assert msgs[-2]["content"].startswith("【工具结果】")
+    assert "小温" in msgs[-2]["content"]
+    assert not any(m.get("role") == "tool" for m in msgs)
 
 
 def test_tool_failure_still_generates(monkeypatch):
@@ -85,8 +89,9 @@ def test_tool_failure_still_generates(monkeypatch):
     out = _run(tool_loop.generate_with_tools([{"role": "user", "content": "hi"}],
                                              executor=executor, **_kwargs()))
     assert out == "查不到也没关系"
-    tool_msgs = [m for m in client.chat.completions.calls[1]["messages"] if m.get("role") == "tool"]
-    assert "没有查到" in tool_msgs[0]["content"]
+    system_msgs = [m for m in client.chat.completions.calls[1]["messages"]
+                   if m.get("role") == "system"]
+    assert "没有查到" in system_msgs[-1]["content"]
 
 
 def test_at_most_two_tool_calls(monkeypatch):

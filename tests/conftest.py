@@ -5,9 +5,16 @@ src.plugins.chatbot 包时会执行 __init__.py → core.py → get_driver()。
 core.py 的 API 客户端是惰性初始化的，测试不会真正调用外部 API。
 """
 import sys
+import os
 from pathlib import Path
 
 import pytest
+
+# 注入 v3 的开关会从 `.env.prod` 进 NoneBot config；测试必须显式关掉，
+# 否则本地开着 v3 时整份旧路径测试都会走新分支（2026-10-27）。
+os.environ.setdefault("INJECTION_V3", "0")
+os.environ.setdefault("RECALL_TOOLS", "0")
+os.environ.setdefault("TOOL_PROBE", "0")
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:

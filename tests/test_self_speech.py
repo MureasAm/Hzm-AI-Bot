@@ -35,6 +35,7 @@ def _isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(self_speech, "config", SimpleNamespace(
         _get_model_name=lambda: "fake",
         extract_chat_content=lambda r: r.choices[0].message.content,
+        log_cache_usage=lambda *a, **k: None,
     ), raising=False)
 
 

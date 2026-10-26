@@ -148,6 +148,7 @@ async def gist_texts(texts: list[str], client=None) -> dict[str, str]:
                 **THINKING_DISABLED,
             )
             content = config.extract_chat_content(resp)
+            config.log_cache_usage(resp, "自述转述")
             gists = _parse_gists(content)
             if gists and len(gists) == len(chunk):
                 bad = 0

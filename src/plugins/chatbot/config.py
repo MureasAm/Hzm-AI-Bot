@@ -29,6 +29,19 @@ def get_config(name: str, default=None):
         return default
 
 
+def get_flag(name: str, default: str = "0") -> str:
+    """读布尔/字符串开关：先看 os.environ，再看 NoneBot config（小写属性）。
+
+    为什么需要（2026-10-27）：`.env.prod` 的值只会进 NoneBot 的 config，
+    不会自动写进 `os.environ`。只读 os.environ 的开关（如 INJECTION_V3）
+    在 `.env.prod` 里写了等于没写。
+    """
+    value = os.environ.get(name)
+    if value is None:
+        value = get_config(name.lower())
+    return default if value is None else str(value)
+
+
 # ==================== API 客户端（惰性初始化） ====================
 # 延迟到首次使用时才读取 config 并创建客户端，
 # 保证模块可被独立导入（便于测试），不依赖 NoneBot 已初始化。

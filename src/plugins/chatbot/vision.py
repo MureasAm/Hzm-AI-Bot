@@ -20,7 +20,7 @@ from pathlib import Path
 import httpx
 from PIL import Image
 
-from .config import get_vision_model, extract_chat_content
+from .config import get_vision_model, extract_chat_content, log_cache_usage
 from .constants import VISION_MAX_TOKENS, VISION_EXTRA_PARAMS
 
 VISION_PROMPT = (
@@ -192,6 +192,7 @@ async def describe_image_bytes(client, data: bytes, model: str = None) -> str:
             max_tokens=VISION_MAX_TOKENS,
             **_extra_params(model),
         )
+        log_cache_usage(resp, "看图")
         return extract_chat_content(resp)
     except Exception as e:
         print(f"⚠️ 视觉模型调用失败: {e}")
@@ -216,6 +217,7 @@ async def describe_image(client, source: str, model: str = None) -> str:
                 max_tokens=VISION_MAX_TOKENS,
                 **_extra_params(model),
             )
+            log_cache_usage(resp, "看图")
             return extract_chat_content(resp)
         except Exception as e:
             print(f"⚠️ 视觉模型调用失败: {e}")

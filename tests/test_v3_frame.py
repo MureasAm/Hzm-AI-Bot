@@ -31,11 +31,16 @@ def test_build_message_list_uses_v3_contexts():
         now_context="【现在】10月27日 周二，灰泽满现在没有在直播。",
         time_hint="【本场时段】现在是深夜。",
         prefetch_context="【预取】[{\"text\":\"名字是小温\"}]",
+        tool_note="【工具】需要时调用 recall；不确定就不调用。",
     )
     joined = "\n".join(m["content"] for m in msgs if isinstance(m.get("content"), str))
     assert "【现在】" in joined
     assert "【本场时段】" in joined
     assert "【预取】" in joined
+    assert "【工具】" in joined
+    # 工具提示在用户消息之前
+    assert msgs[-1]["role"] == "user"
+    assert msgs[-2]["content"].startswith("【工具】")
     # 不再出现旧的完整感知行（骨架正文里提到这个词不算）
     assert not any(m.get("content", "").startswith("【当前时间】") for m in msgs)
 

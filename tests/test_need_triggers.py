@@ -33,3 +33,11 @@ def test_today_and_perception():
 def test_no_false_positive():
     for msg in ("我好想你", "晚安", "我每天跑步", "我喜欢的颜色是蓝色", "冷静一下"):
         assert nt.requests_for(msg) == [], msg
+
+
+def test_place_from_text():
+    assert nt.place_from_text("坡县几度啊") == "新加坡"
+    assert nt.place_from_text("用户在问新加坡现在的气温是多少度") == "新加坡"
+    assert nt.place_from_text("广东今天天气怎么样") == "广东"
+    assert nt.place_from_text("今天天气不错") == ""
+    assert nt.place_from_text("你那边天气好吗") == ""
