@@ -39,6 +39,9 @@ from . import injection as inj
 from . import daily_memory
 from . import memory_v2
 from . import self_speech
+from . import recall as recall_mod
+from . import need_triggers
+from . import tool_loop
 from .routing import (
     LEGENDARY_REPLIES, LEGENDARY_CONFIRMS, legendary_confirmed, legendary_hit, classify_l3,
 )
@@ -53,6 +56,11 @@ from .session_memory import (
 
 
 _MEMORY_V2_STORE = memory_v2.ShadowMemoryStore()
+
+
+def injection_v3_enabled() -> bool:
+    """注入 v3（registry/frame + recall）。默认 0：旧链路逐字不变，便于回退。"""
+    return os.environ.get("INJECTION_V3", "0").strip().lower() not in ("0", "false", "no", "off")
 
 
 # ==================== 🎭 基础人设提示词 ====================
@@ -423,7 +431,9 @@ def build_message_list(user_msg: str, fused_items: list,
                        log_hits: bool = False, trace: dict | None = None,
                        association_context: str = "", association_entities: list | None = None,
                        is_group: bool = False, group_address_note: str = "",
-                       group_thread_note: str = "", name_budget: str = "") -> list:
+                       group_thread_note: str = "", name_budget: str = "",
+                       habit_hint: str = "", now_context: str = "",
+                       time_hint: str = "", prefetch_context: str = "") -> list:
     """按优先级组装发送给模型的消息列表。
 
     fused_items 为融合后的 RetrievalItem 列表（corpus + behavior），按源分组注入。
@@ -459,6 +469,9 @@ def build_message_list(user_msg: str, fused_items: list,
 
     name_budget：称呼预算提醒（`name_budget_note` 渲染好的整句）。
     位置紧跟相处方式——它是对“怎么称呼这个人”的当场修正，不该被后面的素材盖过。
+
+    habit_hint：这个用户当前时段/话题相关的`habit_*`记忆提示（`build_habit_hint`）。
+    只对拥有该习惯的用户有值；放在用户消息前，让短问候也能接住个人习惯。
     """
     # 场景（第 00 块）：**只有群聊注入**。
     # 私聊场景已移回骨架（2026-10-21 用户定：骨架保持原句
@@ -705,7 +718,16 @@ def build_message_list(user_msg: str, fused_items: list,
     # **放在最后**：它是唯一"每分钟必变"的块，而 DeepSeek 的缓存按**前缀**匹配——
     # 它放中间会把后面所有块（行为/直播记忆/长期短期记忆…）一起拖成 miss。
     # 语义上也更顺：紧挨着用户这句，"现在几点"最贴近此刻。
-    now_context = context_probe.get_now_context(city=weather_city)
+    # v3：now_context 由调用方传入（只含日期/星期/直播状态；精确时间/天气走 recall）。
+    if prefetch_context:
+        messages.append({"role": "system", "content": prefetch_context})
+        hit_blocks.append("prefetch")
+        _mark("prefetch")
+    if time_hint:
+        messages.append({"role": "system", "content": time_hint})
+        hit_blocks.append("time_hint")
+        _mark("time_hint")
+    now_context = now_context or context_probe.get_now_context(city=weather_city)
     if now_context:
         messages.append({"role": "system", "content": now_context})
         hit_blocks.append("now")
@@ -738,6 +760,13 @@ def build_message_list(user_msg: str, fused_items: list,
         _mark("daily")
         if trace is not None:
             trace.setdefault("values", {})["daily"] = True
+
+    # 个人固定习惯（`habit_*` 记忆）：**只对拥有这条记忆的用户**出现在用户消息前，
+    # 让“早/起床了”这类短问候也能接住（不是全局 behaviors）。
+    if habit_hint:
+        messages.append({"role": "system", "content": habit_hint})
+        hit_blocks.append("habit_hint")
+        _mark("habit_hint")
 
     # 运行时块级开火留痕（scene_* / 12–19；真实聊天路径才写，离线实验/回归不污染）
     if log_hits and get_llm_route() in ("私", "群"):
@@ -775,8 +804,26 @@ def is_fallback_reply(text: str) -> bool:
     return t in (_FALLBACK_REPLY, _FALLBACK_SILENT) or t in _LEGACY_FALLBACKS
 
 
-async def generate_reply(messages: list) -> str:
-    """调用 DeepSeek 生成回复；失败时返回兜底文案（调用方负责"别把它记进记忆"）。"""
+async def generate_reply(messages: list, tool_executor=None) -> str:
+    """调用 DeepSeek 生成回复；失败时返回兜底文案（调用方负责"别把它记进记忆"）。
+
+    tool_executor 非空且当前模型在工具白名单里时，走一次原生 recall 工具轮；
+    工具轮失败会回落到无工具生成，绝不让整轮变哑巴。
+    """
+    if tool_executor is not None and tool_loop.tools_enabled() and await tool_loop.ensure_tool_capable():
+        try:
+            reply = await tool_loop.generate_with_tools(
+                messages,
+                executor=tool_executor,
+                temperature=CHAT_TEMPERATURE,
+                frequency_penalty=CHAT_FREQUENCY_PENALTY,
+                max_tokens=CHAT_MAX_TOKENS,
+            )
+        except Exception as e:
+            print(f"⚠️ 工具轮失败（回落无工具生成）: {e}")
+        else:
+            if reply:
+                return reply
     try:
         deepseek_client, _ = _get_clients()
         response = await deepseek_client.chat.completions.create(
@@ -958,7 +1005,8 @@ def name_budget_note(user_id: str) -> str:
 async def gather_retrieval(query_text: str, retrieval_query: str, history_text: str,
                            deepseek_client, zhipu_client,
                            is_user_msg: bool = True,
-                           extra_preference_ids: list | None = None) -> dict:
+                           extra_preference_ids: list | None = None,
+                           v3_tools: bool = False) -> dict:
     """规范取素材：一段文本该配的东西一次捞齐（人设 + 行为/措辞 + 直播记忆 + 风格样本 + 偏好 + 核心记忆）。
 
     **聊天和主动发言共用这一份**。抽出来的原因：主动发言原来是自己在
@@ -994,7 +1042,7 @@ async def gather_retrieval(query_text: str, retrieval_query: str, history_text: 
     try:
         await _fill_retrieval(result, query_text, retrieval_query, history_text,
                               deepseek_client, zhipu_client, behaviors, is_user_msg,
-                              extra_preference_ids)
+                              extra_preference_ids, v3_tools)
     except Exception as e:
         # **检索层炸了不能让她变哑巴**：素材按"没检索到"处理，回复/主动发言继续。
         # 踩坑（2026-09-27）：智谱 embedding key 过期 → 检索层抛
@@ -1007,7 +1055,8 @@ async def gather_retrieval(query_text: str, retrieval_query: str, history_text: 
 
 async def _fill_retrieval(result: dict, query_text: str, retrieval_query: str, history_text: str,
                           deepseek_client, zhipu_client, behaviors, is_user_msg: bool,
-                          extra_preference_ids: list | None = None) -> None:
+                          extra_preference_ids: list | None = None,
+                          v3_tools: bool = False) -> None:
     """`gather_retrieval` 的干活部分（单独一层，方便上面统一兜底）。结果写进 result。"""
     behavior_items, corpus_items = [], []
     # L3：归属用 LLM 判意图（不再用 embedding 猜——embedding 按句式聚团，
@@ -1018,10 +1067,15 @@ async def _fill_retrieval(result: dict, query_text: str, retrieval_query: str, h
     # 省一次串行往返；两个函数都自己兜底异常，结果和先后 await 完全一样。
     embed_text = retrieval_query or query_text
     if is_user_msg:
-        l3, query_vector = await asyncio.gather(
-            classify_l3(deepseek_client, query_text, history_text, behaviors),
-            embed_query(zhipu_client, embed_text),
-        )
+        if v3_tools:
+            # v3：只要 L3 行为分类；corpus/preference/core_story 走 recall。
+            l3 = await classify_l3(deepseek_client, query_text, history_text, behaviors)
+            query_vector = None
+        else:
+            l3, query_vector = await asyncio.gather(
+                classify_l3(deepseek_client, query_text, history_text, behaviors),
+                embed_query(zhipu_client, embed_text),
+            )
         if l3["behavior"]:
             print(f"[行为] LLM 判定: {l3['behavior']}")
         sr = l3.get("same_request") or {}
@@ -1033,7 +1087,7 @@ async def _fill_retrieval(result: dict, query_text: str, retrieval_query: str, h
     else:
         query_vector = await embed_query(zhipu_client, embed_text)
 
-    if is_user_msg:
+    if is_user_msg and not v3_tools:
         # corpus：**全部交 LLM 判**。门/钩子只决定"把哪些条递过去看"，**不再有直通**。
         # 为什么取消直通（2026-09-29）：实测词重叠这把尺子分不开"说的是谁"——
         #   误报 n7「宝宝我明天要早起我先去睡了」（用户说**自己**）对 #271：ov=0.40
@@ -1052,6 +1106,8 @@ async def _fill_retrieval(result: dict, query_text: str, retrieval_query: str, h
         result["fused_items"] = fuse_and_truncate(corpus_items) + behavior_items
     else:
         result["fused_items"] = fuse_and_truncate(corpus_items, behavior_items)
+    if v3_tools:
+        return   # preference/core_story 走 recall；不再预先检索
     # 第 5 路：偏好（关键词命中）／核心记忆（结晶）
     # 关联边（has_preference）指过来的偏好排最前——"顺着作品/作者落到她的喜好上"比碰巧撞词更该带
     result["preference_items"] = retrieve_preferences(
@@ -1090,6 +1146,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     # --- 会话级记忆：对话前同步探测（判断话题延续/转换 + 短 query 扩充） ---
     # 必须在组装消息前完成，这样本轮注入的就是本轮自己的话题，不滞后一轮。
     query_text = user_msg.strip()
+    v3 = injection_v3_enabled()
     # ⚠️ 带每条时间戳的版本（2026-10-05）：让模型看出"刚说完"和"三小时前说的"。
     #    两个消费者都用它：① 注入层（【最近对话记录】）② L3 判 same_request
     #    ——L3 必须知道那几轮之间隔了多久，否则隔 8 小时的一句会被算成"连着"。
@@ -1169,7 +1226,8 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     # 素材统一从 gather_retrieval 取（主动发言也走同一个入口，别再各拼一套）
     ctx = await gather_retrieval(query_text, retrieval_query, history_text,
                                  deepseek_client, zhipu_client,
-                                 extra_preference_ids=_assoc["preference_ids"])
+                                 extra_preference_ids=_assoc["preference_ids"],
+                                 v3_tools=v3)
     fused_items = ctx["fused_items"]
     preference_items = ctx["preference_items"]
     core_stories = ctx["core_stories"]
@@ -1196,16 +1254,38 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         group_context = f"在场成员：{names}。群内近况：{evtxt}"
     weather_city = _weather_city_for(user_id)
 
+    # 注入 v3：显式触发预取（系统侧，不占工具轮）；时间拆成 date/live 常驻 + 本场时段一次。
+    prefetch_context = ""
+    now_context = ""
+    time_hint = ""
+    if v3:
+        try:
+            prefetch_context, _ = await asyncio.wait_for(
+                need_triggers.prefetch(
+                    user_id=user_id, msg=query_text, store=_MEMORY_V2_STORE,
+                    user_city=weather_city, deepseek_client=deepseek_client,
+                    zhipu_client=zhipu_client, is_group=is_group,
+                ),
+                timeout=3.0,
+            )
+        except Exception:
+            prefetch_context = ""
+        now_context = context_probe.frame_now()
+        is_new_session = (not user_history_timed) or (_gap_sec is None) or (_gap_sec > 3 * 3600)
+        time_hint = context_probe.session_time_hint(
+            user_msg=query_text, is_new_session=is_new_session)
+
     # --- 🧠 Memory V2 注入（可选；与影子提取分开的开关，默认关，见 docs/记忆v2设计.md §上线路径）---
     # 两段分开放：相处方式靠前 / 未完成约定中段。
     profile_context = commitment_context = daily_context = ""
     memory_ids: list = []   # 本轮实际注入的记忆 id（注入轨迹用；群聊为 空）
     if not is_group and memory_v2.injection_enabled():
         profile_context = _MEMORY_V2_STORE.build_preference_context(
-            user_id, retrieval_query, used_ids=memory_ids)
+            user_id, retrieval_query, used_ids=memory_ids,
+            include_facts=not v3)   # v3：fact 走 recall；这里只留相处方式行为句
         commitment_context = _MEMORY_V2_STORE.build_commitment_context(
             user_id, retrieval_query, used_ids=memory_ids)
-        if daily_memory.enabled():
+        if daily_memory.enabled() and not v3:
             daily_context = daily_memory.context(user_id)
     # 称呼提示：用户这轮叫了 her_nickname 才注入；不做长期自称偏好。
     nickname_hint = ""
@@ -1214,13 +1294,25 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     # 称呼预算：最近几轮她叫对方名字太多 → 这轮前置提醒别再叫。
     # **只对私聊**：群聊没有“单独对某个人称呼”的语境，切进来只会让她更奇怪。
     name_budget = "" if is_group else name_budget_note(user_id)
+    # 个人固定习惯：只对私聊、且这个用户确实有相关 habit_* 记忆时出现。
+    # 2026-10-26 起按结构化字段（作息/互动、频率、时段、线索）判断；
+    # 把最近几轮她自己的话一起传进去，已经提过的习惯这轮不再提示，免得每句短问候都追问。
+    habit_hint = ""
+    if not is_group and memory_v2.injection_enabled():
+        recent_bot_text = "\n".join(
+            bot_line_text(ln) for ln in get_user_history(user_id) if is_bot_line(ln)
+        )
+        habit_hint = _MEMORY_V2_STORE.build_habit_hint(
+            user_id, query_text, recent_bot_text=recent_bot_text)
     # 当下情绪住在**会话记忆**里（2026-10-10 从长期记忆搬来），跟话题一起 3h 消散。
     # 它**不受 v2 开关控制**——情绪是会话级感知，生产里就该生效；注入位置仍是紧挨用户消息。
     emotion_context = "" if is_group else mood_note(user_id)
 
     # --- 🧩 构建消息列表 ---
     # 天气预热：组消息前异步把城市 LocationID+天气取进缓存，build 时同步读缓存零阻塞
-    await context_probe.warm_weather(weather_city)
+    # v3 的天气走 recall（工具/预取自己预热），不再无条件请求。
+    if not v3:
+        await context_probe.warm_weather(weather_city)
     # query_hint：短消息（≤4字）的语境扩充，仅当扩充句与原文不同时传入，帮模型理解短句
     query_hint = retrieval_query if (retrieval_query and retrieval_query != query_text) else ""
     # 术语语境确认：confirm:true 的命中做一次便宜 LLM 判断，剔除误触词条（词→意思守卫）
@@ -1235,10 +1327,13 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     if self_speech.enabled():
         hist_for_injection, gen_user_msg = await self_speech.annotate_turn(
             user_history_timed, user_msg, deepseek_client)
+    v3_fused = ([it for it in fused_items if getattr(it, "source", "") == "behavior"]
+                if v3 else fused_items)
     messages = build_message_list(
-        gen_user_msg, fused_items, hist_for_injection,
+        gen_user_msg, v3_fused, hist_for_injection,
         vision_desc=vision_desc, weather_city=weather_city, batch_summary=batch_summary,
-        preference_items=preference_items, core_stories=core_stories,
+        preference_items=[] if v3 else preference_items,
+        core_stories=[] if v3 else core_stories,
         session_context=session_context, query_hint=query_hint,
         denied_terms=denied_terms, group_context=group_context,
         history_gap_note=history_gap_note, prev_session_note=_prev_session_note,
@@ -1250,10 +1345,29 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         association_context=_assoc["note"], association_entities=_assoc["entities"],
         is_group=is_group, group_address_note=group_address_note,
         group_thread_note=group_thread_note, name_budget=name_budget,
+        habit_hint=habit_hint, now_context=now_context, time_hint=time_hint,
+        prefetch_context=prefetch_context,
     )
 
     # --- 🤖 调用大模型 ---
-    reply = await generate_reply(messages)
+    # v3：模型可调用 recall 取记忆/感知；显式预取已在 frame 里，不依赖工具能力。
+    tool_executor = None
+    if v3:
+        async def _tool_exec(name, arguments, call_id):
+            if name != recall_mod.TOOL_NAME:
+                return "没有查到；不要编造。"
+            text, _ = await recall_mod.recall_for_tool(
+                arguments, user_id=user_id, store=_MEMORY_V2_STORE,
+                user_city=weather_city, deepseek_client=deepseek_client,
+                zhipu_client=zhipu_client, is_group=is_group,
+            )
+            return text
+
+        tool_executor = _tool_exec
+    if tool_executor is not None:
+        reply = await generate_reply(messages, tool_executor=tool_executor)
+    else:
+        reply = await generate_reply(messages)
 
     # --- 🔁 复读机防护 ---
     # 模型会对情境相关句执着复读：自己上轮的话进短期记忆后，用户把同一抱怨又说一遍时，

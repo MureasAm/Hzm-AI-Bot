@@ -181,6 +181,21 @@ MEMORY_V2_EXTRACT_PROMPT = """你是灰泽满私聊机器人的记忆候选提�
      合并了，之后早起对话全接不上。正确写法是两条：
      `habit_morning_run=每天早上起床后都要跑操（学校要求）`、
      `habit_run_3km=每周还有三次 3 公里跑`。
+   · **习惯类还要填一个 `habit` 对象**（只填在 habit_* 上，其它 fact 不要填）：
+     `type`：`routine`＝作息/日程（起床、上课、跑步）；`interaction`＝他和你的互动习惯
+       （表情包撒娇、情话、念诗、睡前摸摸）。**不要把所有习惯都叫 routine。**
+     `cadence`：`daily`（每天）/`weekly`（每周）/`monthly`（每月）/`regular`（经常、平时）/
+       `once`（今晚、明天、这次——**一次性计划不是固定习惯**）/`unknown`。
+     `period`：`morning`/`noon`/`afternoon`/`evening`/`night`/`any`/`unknown`。
+       只有**作息类且每天**的习惯才会按这个时段触发；不确定就写 `any`。
+     `cues`：他实际会说的 2–8 个触发短语（如"跑操""早八""摸摸""表情包"）。
+       **不要把"每天/早上/晚上"这类时间词写进 cues**——时段由 period 管。
+     例子：
+       `habit_morning_run`：`habit={{"type":"routine","cadence":"daily","period":"morning","cues":["跑操","跑步","早操"]}}`
+       `habit_expression_sticker`：`habit={{"type":"interaction","cadence":"daily","period":"any","cues":["表情包","撒娇","语音"]}}`
+       `habit_send_poetry`：`habit={{"type":"interaction","cadence":"regular","period":"any","cues":["念诗","诗歌","歌词"]}}`
+     ⚠️ "今晚要熬夜看比赛"只是一次性计划：要么不记，要么 `cadence":"once"`；
+       不要让它每天早上/晚上都被当成固定习惯翻出来。
    · 判据：同一个人、同一个类别下面，两件不同的事必须能用名字分开。
      后半截写不出具体的东西，就说明这条本来就不该记。
    · ⛔ **不许用 `moment` / `info` / `situation` / `experience` / `thing` 这类空壳名**：
@@ -292,7 +307,8 @@ temporal_scope 必须是 past/current/future/timeless：用户过去经历用 pa
       "valid_for": "none|3d|14d|90d（仅时效性近况填，其余 none）",
       "explicit": true,
       "confidence": 0.0,
-      "actor": "assistant"
+      "actor": "assistant",
+      "habit": {{"type": "routine|interaction", "cadence": "daily|weekly|monthly|regular|once|unknown", "period": "morning|noon|afternoon|evening|night|any|unknown", "cues": ["2-8个短触发词"]}}
     }}
   ],
   "daily": [
@@ -627,17 +643,341 @@ _TIME_PERIOD_WORDS = {
 }
 
 
-def _period_words(now: datetime | None) -> tuple:
+def _period_key(now: datetime | None) -> str:
+    """当前小时的粗时段名（和 `_TIME_PERIOD_WORDS` 的键一一对应）。"""
     h = (now or datetime.now()).hour
     if 5 <= h < 11:
-        return _TIME_PERIOD_WORDS["morning"]
+        return "morning"
     if 11 <= h < 14:
-        return _TIME_PERIOD_WORDS["noon"]
+        return "noon"
     if 14 <= h < 18:
-        return _TIME_PERIOD_WORDS["afternoon"]
+        return "afternoon"
     if 18 <= h < 23:
-        return _TIME_PERIOD_WORDS["evening"]
-    return _TIME_PERIOD_WORDS["night"]
+        return "evening"
+    return "night"
+
+
+def _period_words(now: datetime | None) -> tuple:
+    return _TIME_PERIOD_WORDS[_period_key(now)]
+
+
+# ===========================================================================
+# 结构化习惯（2026-10-26）
+#
+# 为什么不再靠 key/value 的字符串猜（2026-10-24 的临时版）：
+# 旧版只要 `habit_*` 的 value 里出现“早上/凌晨”等时段词，就在对应时段把这条
+# 记忆塞到用户消息前。它解决了“早”这种短问候捞不到事实的问题，但也把
+# `habit_expression_sticker_usage`（表情包撒娇）、`habit_user_bedtime_comfort`
+# （睡前摸摸）这类**互动习惯**当成作息，在晚安时也会提醒；还分不清
+# “每天早上跑操”和“每周三次 3 公里”，更分不清“今晚要熬夜看比赛”只是一次性计划。
+#
+# 现在每条 habit_* 带一个可选的结构化对象：
+#   {"type": "routine|interaction", "cadence": "daily|weekly|monthly|regular|once|unknown",
+#    "period": "morning|noon|afternoon|evening|night|any|unknown",
+#    "cues": ["跑操", "跑步"]}
+# - type=routine（作息/日程）才可能按“当前时段 + 问候”触发；
+# - type=interaction（表情包/情话/摸摸）只按他这句话里的线索触发，不按时段；
+# - cadence=once（今晚/明天/这次）不当作固定习惯，直接跳过；
+# - 旧数据没有这个对象时，按 value 里的词惰性推导，行为不中断。
+#
+# 这不是“多写几个关键词”，而是把原来藏在自然语言里的
+# 「什么时候相关、什么算同一类」变成可检索的字段。
+# ===========================================================================
+_HABIT_TYPES = {"routine", "interaction"}
+_HABIT_CADENCES = {"daily", "weekly", "monthly", "regular", "once", "unknown"}
+_HABIT_PERIODS = {"morning", "noon", "afternoon", "evening", "night", "any", "unknown"}
+
+_HABIT_TYPE_ALIASES = {
+    "routine": "routine", "作息": "routine", "日常": "routine", "活动": "routine",
+    "日程": "routine", "习惯": "routine", "作息习惯": "routine",
+    "interaction": "interaction", "互动": "interaction", "相处": "interaction",
+    "情感": "interaction", "撒娇": "interaction", "互动习惯": "interaction",
+}
+_HABIT_CADENCE_ALIASES = {
+    "daily": "daily", "每天": "daily", "每日": "daily", "天天": "daily",
+    "每晚": "daily", "每早": "daily", "几乎每天": "daily",
+    "weekly": "weekly", "每周": "weekly", "一周": "weekly", "每周末": "weekly",
+    "monthly": "monthly", "每月": "monthly",
+    "regular": "regular", "经常": "regular", "平时": "regular", "频繁": "regular",
+    "常常": "regular", "多次": "regular", "多天多次": "regular", "时常": "regular",
+    "once": "once", "今晚": "once", "明天": "once", "这次": "once",
+    "一次性": "once", "仅这次": "once", "仅此一次": "once",
+    "unknown": "unknown", "未知": "unknown", "不确定": "unknown",
+}
+_HABIT_PERIOD_ALIASES = {
+    "morning": "morning", "早上": "morning", "早晨": "morning", "上午": "morning",
+    "清晨": "morning", "早": "morning",
+    "noon": "noon", "中午": "noon", "午间": "noon",
+    "afternoon": "afternoon", "下午": "afternoon", "傍晚": "afternoon",
+    "evening": "evening", "晚上": "evening", "晚间": "evening", "晚饭": "evening",
+    "night": "night", "半夜": "night", "凌晨": "night", "深夜": "night",
+    "夜里": "night", "睡前": "night", "熬夜": "night",
+    "any": "any", "任意": "any", "不限": "any", "随时": "any", "无": "any",
+    "unknown": "unknown", "未知": "unknown",
+}
+_HABIT_PERIOD_TEXT = {
+    "morning": ("早上", "早晨", "上午", "清晨", "早八", "早操", "晨跑", "早起", "早饭", "每早"),
+    "noon": ("中午", "午饭", "午休", "午间"),
+    "afternoon": ("下午", "傍晚"),
+    "evening": ("晚上", "晚饭", "晚自习", "晚间"),
+    "night": ("半夜", "凌晨", "深夜", "夜里", "睡前", "熬夜", "晚安", "每晚"),
+}
+_HABIT_INTERACTION_RE = re.compile(
+    r"表情包|撒娇|情话|肉麻|念诗|诗歌|歌词|摸摸|抚慰|求语音|索要|称呼|夸|黏|表达心意"
+)
+_HABIT_SLEEP_CUES = (
+    "晚安", "要睡", "睡了", "困了", "好困", "困死", "熬夜", "没睡", "还没睡", "失眠",
+)
+_HABIT_MORNING_PREFIXES = (
+    "早安", "早上好", "上午好", "早啊", "早呀", "早哦", "早哇", "早早早",
+)
+_HABIT_MORNING_STATE_CUES = ("起床了", "刚起床", "刚起", "刚醒", "醒了", "睡醒")
+_HABIT_TIME_ONLY = {
+    "每天", "每日", "天天", "每晚", "每早", "每周", "每月", "一周", "平时",
+    "经常", "频繁", "常常", "多次", "几乎", "日常", "多天多次",
+}
+_HABIT_GENERIC_TERMS = {
+    "每天", "每日", "天天", "每周", "每月", "平时", "经常", "频繁", "常常",
+    "多次", "几乎", "用户", "自己", "今天", "现在", "什么", "这个", "那个",
+    "时候", "已经", "还有", "都要", "起床", "早上", "晚上", "睡前", "凌晨",
+    "深夜", "半夜", "日常",
+}
+_HABIT_CUE_STRIP = (
+    "对话里", "每天", "每日", "天天", "每晚", "每早", "每周", "每月", "一周",
+    "平时", "经常", "频繁", "常常", "多次", "多天多次", "几乎", "通常", "一般",
+    "习惯", "用户", "他", "她", "还要", "还有", "都要", "三次", "每次",
+    "今晚", "明天", "这次", "仍然", "仍", "也", "常带", "常", "并", "在",
+    "于", "会", "要", "去", "有", "的", "了", "和", "或", "与", "向", "用",
+    "发", "找", "给", "早上", "早晨", "上午", "中午", "下午",
+    "晚上", "深夜", "凌晨", "半夜", "睡前", "起床后", "起床", "除", "除了",
+    "日常", "外",
+)
+_HABIT_CUE_BAD = (
+    "灰泽满", "机器人", "原因", "频率", "因为", "要求", "时候",
+    "每天", "每周", "每月", "三次", "多次", "几乎", "还有",
+    "凌晨", "深夜", "半夜", "睡前", "早上", "晚上", "起床",
+    "今晚", "明天", "增强", "语气", "称呼",
+)
+_HABIT_EXCEPTION_RE = re.compile(
+    r"(?:取消|请假|改天|休息|算了|不去了|不跑了|不练了|不背了|不喝了|不做了|"
+    r"不上了|没去|没跑|没练|没背|没喝|没做|没上|不想去|不想跑|不想做|不想练|"
+    r"不熬夜|没熬夜|不想熬夜|"
+    r"(?:今天|今晚|明天|这周|早上|这次)?(?:不|没)(?:去|跑|做|练|上|背|喝|吃|起))"
+)
+
+
+def _compact_text(text: Any) -> str:
+    return re.sub(r"[^一-鿿A-Za-z0-9]+", "", str(text or "")).lower()
+
+
+def _alias(value: Any, table: dict) -> str:
+    text = str(value or "").strip().lower()
+    return table.get(text, "") if text else ""
+
+
+def _derive_habit_cadence(text: str) -> str:
+    # 先认“每天”：同一句里出现“每天晚上…今晚也…”时，主频率仍是每天。
+    if re.search(r"每天|每日|天天|每晚|每早|几乎每天", text):
+        return "daily"
+    if re.search(r"今晚|明天|这次|这一次|仅此一次|一次性", text):
+        return "once"
+    if re.search(r"每周|一周|每周末", text):
+        return "weekly"
+    if re.search(r"每月", text):
+        return "monthly"
+    if re.search(r"经常|平时|频繁|常常|多次|多天多次|时常", text):
+        return "regular"
+    return "unknown"
+
+
+def _derive_habit_period(text: str) -> str:
+    hits = {
+        period for period, words in _HABIT_PERIOD_TEXT.items()
+        if any(w in text for w in words)
+    }
+    if len(hits) == 1:
+        return next(iter(hits))
+    # 一句话里跨了两个时段（“早上和晚上”）→ 不按时段触发，只按话题线索。
+    return "any" if hits else "unknown"
+
+
+def _strip_cue_prefixes(token: str) -> str:
+    changed = True
+    while token and changed:
+        changed = False
+        for prefix in _HABIT_CUE_STRIP:
+            if token.startswith(prefix):
+                token = token[len(prefix):]
+                changed = True
+                break
+    return token
+
+
+def _derive_habit_cues(value: str) -> list[str]:
+    """从自然语言里抠出“他说什么时这条习惯相关”的短语。
+
+    只做保守的切分/去时间词；抠不出来就返回空，检索仍会退回二字组匹配。
+    时间词（早上/每天）不进 cues——时段由 `period` 管，别让“早”既当时间又当线索。
+    """
+    cues: list[str] = []
+    for chunk in re.split(r"[，。；、（）()\[\]【】{}<>《》“”\"'「」/／|]+", str(value or "")):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        for part in re.split(r"[和及或]", chunk):
+            token = _strip_cue_prefixes(part)
+            token = _compact_text(token)
+            if not (2 <= len(token) <= 8):
+                continue
+            if any(bad in token for bad in _HABIT_CUE_BAD):
+                continue
+            if token in _HABIT_TIME_ONLY:
+                continue
+            if re.fullmatch(r"[0-9一二三四五六七八九十两]+次", token):
+                continue
+            if token.endswith(("外", "后", "时", "中", "的", "了")):
+                continue
+            if token not in cues:
+                cues.append(token)
+            if len(cues) >= 8:
+                return cues
+    return cues
+
+
+def _derive_habit_metadata(key: str, value: str) -> dict:
+    text = f"{key} {value}".lower()
+    habit_type = "interaction" if _HABIT_INTERACTION_RE.search(value or "") else "routine"
+    return {
+        "type": habit_type,
+        "cadence": _derive_habit_cadence(text),
+        "period": _derive_habit_period(text),
+        "cues": _derive_habit_cues(value),
+    }
+
+
+def _clean_habit_cues(raw: Any) -> list[str]:
+    if isinstance(raw, str):
+        parts = re.split(r"[，,、;；|/]+", raw)
+    elif isinstance(raw, list):
+        parts = raw
+    else:
+        parts = []
+    out: list[str] = []
+    for part in parts:
+        cue = _compact_text(part)[:12]
+        if len(cue) < 2 or cue in out:
+            continue
+        out.append(cue)
+        if len(out) >= 8:
+            break
+    return out
+
+
+def normalize_habit_metadata(raw: Any, *, key: str = "", value: str = "") -> dict:
+    """合并“模型给的结构化字段”和“从旧 value 惰性推导的字段”。
+
+    模型字段优先；缺哪项就用推导值补哪项。返回值永远是一个完整 dict，
+    所以新写入的 habit_* 都会带上 type/cadence/period/cues，旧数据则在读取时现推。
+    """
+    meta = _derive_habit_metadata(key, value)
+    if not isinstance(raw, dict):
+        return meta
+    habit_type = _alias(raw.get("type"), _HABIT_TYPE_ALIASES)
+    cadence = _alias(raw.get("cadence"), _HABIT_CADENCE_ALIASES)
+    period = _alias(raw.get("period"), _HABIT_PERIOD_ALIASES)
+    cues = _clean_habit_cues(raw.get("cues"))
+    if habit_type in _HABIT_TYPES:
+        meta["type"] = habit_type
+    if cadence in _HABIT_CADENCES:
+        meta["cadence"] = cadence
+    if period in _HABIT_PERIODS:
+        meta["period"] = period
+    if cues:
+        meta["cues"] = cues
+    return meta
+
+
+def _habit_meta(memory: dict) -> dict:
+    return normalize_habit_metadata(
+        memory.get("habit"),
+        key=str(memory.get("key") or ""),
+        value=str(memory.get("value") or ""),
+    )
+
+
+def _habit_display_value(value: Any) -> str:
+    """把记忆里的“用户…”改成“他…”，方便直接念给模型听。"""
+    text = str(value or "").strip().rstrip("。")
+    text = re.sub(r"^(?:该)?用户", "他", text)
+    if not text.startswith("他"):
+        text = "他" + text
+    return text
+
+
+def _habit_effective_period(query: str, now: datetime | None) -> str:
+    current = _period_key(now)
+    # “晚安/睡了”常发生在 22 点（evening 档），但对夜间习惯应按 night 处理。
+    if current in {"evening", "night"} and any(c in query for c in _HABIT_SLEEP_CUES):
+        return "night"
+    return current
+
+
+def _habit_greeting(query: str, now: datetime | None) -> bool:
+    """这句话是不是在打招呼/报状态——不用“字数少”猜，免得“在吗”也算。"""
+    q = str(query or "").strip()
+    q_compact = _compact_text(q)
+    period = _habit_effective_period(q, now)
+    if period == "morning":
+        if re.match(r"^早(?:\s|[,，。.!！~～]|$)", q) or q.startswith(_HABIT_MORNING_PREFIXES):
+            return True
+        if q_compact == "起床" or any(c in q for c in _HABIT_MORNING_STATE_CUES):
+            return True
+    if period in {"evening", "night"}:
+        if any(c in q for c in _HABIT_SLEEP_CUES):
+            return True
+        if "晚上好" in q:
+            return True
+    if period == "noon" and any(c in q for c in ("中午好", "午安")):
+        return True
+    if period == "afternoon" and "下午好" in q:
+        return True
+    if period == "evening" and "晚上好" in q:
+        return True
+    return False
+
+
+def _habit_relevance(query: str, memory: dict) -> float:
+    """习惯的话题相关度：先剔掉“每天/今天”这类泛词，避免靠一个泛词蹭上。"""
+    q = str(query or "")
+    for term in _HABIT_GENERIC_TERMS:
+        q = q.replace(term, "|")
+    return _relevance(q, memory)
+
+
+def _habit_cue_hit(query: str, memory: dict, meta: dict) -> bool:
+    q = _compact_text(query)
+    if not q:
+        return False
+    for cue in meta.get("cues") or []:
+        if len(cue) >= 2 and cue in q:
+            return True
+    return _habit_relevance(query, memory) > 0
+
+
+def _habit_mentioned_recently(memory: dict, meta: dict, recent_text: str) -> bool:
+    """她最近几轮是不是已经提过这条习惯了——提过就别再塞提示，免得每轮都问。"""
+    recent = _compact_text(recent_text)
+    if not recent:
+        return False
+    for cue in meta.get("cues") or []:
+        if len(cue) >= 2 and cue in recent:
+            return True
+    for term in _ngrams(str(memory.get("value") or "")):
+        if len(term) < 2 or term in _HABIT_GENERIC_TERMS:
+            continue
+        if term in recent:
+            return True
+    return False
 
 
 def _ritual_matches(memory: dict, query: str) -> bool:
@@ -812,6 +1152,11 @@ class ShadowMemoryStore:
             "valid_for": valid_for,
             "source": normalized_source,
         }
+        # 习惯的结构化字段（2026-10-26）：模型没给就从 value 推导。
+        # 不是 key/value 之外的“另存一份事实”，只是把“什么时候相关、怎么触发”变成可检索的字段。
+        if kind == "fact" and key.startswith("habit_"):
+            normalized["habit"] = normalize_habit_metadata(
+                item.get("habit"), key=key, value=value)
         # 栏目名是"什么都能装"的那种 → 打标记（只记不拦，见 _GENERIC_FACT_KEYS 的说明）
         if kind == "fact" and key in _GENERIC_FACT_KEYS:
             normalized["generic_key"] = True
@@ -898,6 +1243,8 @@ class ShadowMemoryStore:
                         "last_observed_at": now.isoformat(),
                         "source": item["source"],
                     }
+                    if item.get("habit"):
+                        existing["habit"] = item["habit"]
                     expires_at = _fact_expires_at(item, now) or _commitment_expires_at(item, now)
                     if expires_at:
                         existing["expires_at"] = expires_at
@@ -926,6 +1273,9 @@ class ShadowMemoryStore:
                     existing["confidence"] = max(float(existing.get("confidence", 0)), item["confidence"])
                     existing["temporal_scope"] = item["temporal_scope"]
                     existing["valid_for"] = item["valid_for"]
+                    if item.get("habit"):
+                        # 同一条习惯又被提到：用最新的结构化字段（模型修正/人工补的覆盖旧推导）。
+                        existing["habit"] = item["habit"]
                     expires_at = _fact_expires_at(item, now) or _commitment_expires_at(item, now)
                     if expires_at:
                         existing["expires_at"] = expires_at   # 近况/承诺被再次提到 → 续期
@@ -939,6 +1289,8 @@ class ShadowMemoryStore:
 
                 # 只有"单值槽"才顶替：偏好（每维度一个值）、temporal_scope=current 的 fact（近况），
                 # 以及 `_SINGLE_VALUED_FACT_KEYS` 里那些**天然单值**的键（名字/地点/时区/职业）。
+                # `habit_*` 也按单值槽处理（2026-10-26）：一个具体 key 就是一项习惯，
+                # 新说法/新频率应顶掉旧的，不能同 key 并存两条。
                 # **其余 past / timeless 的 fact 仍累积，不倒旧的**——否则"小时候被霸凌"会被
                 # 后来的"高考车祸"顶掉（实测真丢过 3 条）。
                 if item["explicit"] and (
@@ -947,6 +1299,7 @@ class ShadowMemoryStore:
                     or (item["kind"] == "fact" and (
                         item["temporal_scope"] == "current"
                         or item["key"] in _SINGLE_VALUED_FACT_KEYS
+                        or item["key"].startswith("habit_")
                     ))
                 ):
                     for other in memories:
@@ -1012,7 +1365,10 @@ class ShadowMemoryStore:
         return active
 
     def _select_facts(self, active: list[dict], query: str) -> list[dict]:
-        facts = [m for m in active if m.get("kind") == "fact"]
+        # `habit_*` 单独走 `_preference_lines` 的“固定习惯”段——别混进通用事实里被
+        # 名字/地点挤掉，也别让“早上跑操”这种**个人习惯**看起来像全局设定。
+        facts = [m for m in active
+                 if m.get("kind") == "fact" and not str(m.get("key", "")).startswith("habit_")]
         facts.sort(key=lambda m: (m.get("key") not in _ALWAYS_ON_FACT_KEYS,
                                   -_fact_relevance(query, m)))
         return [
@@ -1024,9 +1380,67 @@ class ShadowMemoryStore:
             )
         ][:4]
 
+    def _matching_habits(self, active: list[dict], query: str,
+                         *, now: datetime | None = None, limit: int = 2) -> list[dict]:
+        """这个用户此刻真正相关的固定习惯（habit_*），按相关度排序。
+
+        2026-10-26 起按结构化字段判断，不再靠“消息短 + value 里有早上”猜：
+
+        - `type=interaction`（表情包/情话/摸摸）**只按他这句话的线索**召回，
+          不在晚上把所有互动习惯都翻出来；
+        - `type=routine` 且 `cadence=daily`，才可能按“当前时段 + 打招呼/报状态”召回；
+        - `cadence=once`（今晚/明天/这次）不是固定习惯，直接跳过；
+        - 他刚说“不跑了/取消了/请假了”时，routine 习惯不再追着问；
+        - 多条同时相关时按“线索命中 + 时段命中 + 文本重合”排序，不再取文件里第一条。
+        """
+        q = query or ""
+        effective_period = _habit_effective_period(q, now)
+        greeting = _habit_greeting(q, now)
+        negative = bool(_HABIT_EXCEPTION_RE.search(q))
+        scored: list[tuple[float, str, dict]] = []
+        for memory in active:
+            if memory.get("kind") != "fact" or not str(memory.get("key", "")).startswith("habit_"):
+                continue
+            meta = _habit_meta(memory)
+            if meta.get("cadence") == "once":
+                continue
+            cue_hit = _habit_cue_hit(q, memory, meta)
+            period_hit = (
+                meta.get("type") == "routine"
+                and meta.get("cadence") == "daily"
+                and meta.get("period") not in {"any", "unknown"}
+                and meta.get("period") == effective_period
+            )
+            if not (cue_hit or (period_hit and greeting)):
+                continue
+            # 否定/例外只压作息类习惯：他说“今天不跑操”，别再问“今天也去吗”。
+            # 互动类（例如“今天不摸摸”）不在这里压，避免把真正的互动线索一起吞掉。
+            if negative and meta.get("type") == "routine":
+                continue
+            score = 0.0
+            if cue_hit:
+                score += 3.0
+            if period_hit and greeting:
+                score += 2.0
+            score += _habit_relevance(q, memory)
+            scored.append((score, str(memory.get("last_observed_at") or ""), memory))
+        scored.sort(key=lambda pair: (pair[0], pair[1]), reverse=True)
+        out: list[dict] = []
+        seen: set[str] = set()
+        for _, _, memory in scored:
+            mid = str(memory.get("id") or memory.get("key"))
+            if mid in seen:
+                continue
+            seen.add(mid)
+            out.append(memory)
+            if len(out) >= limit:
+                break
+        return out
+
     def _preference_lines(self, active: list[dict], query: str,
                           used_out: list | None = None,
-                          now: datetime | None = None) -> list[str]:
+                          now: datetime | None = None,
+                          include_facts: bool = True) -> list[str]:
         """靠前段：相处方式（行为句）+ 话题相关事实 + **当前时段的固定安排**。
 
         used_out：传入 list 时追加**实际选中注入**的记忆 id（条目级注入轨迹用）。
@@ -1047,7 +1461,7 @@ class ShadowMemoryStore:
                 lines.append(text)
                 if used_out is not None and memory.get("id"):
                     used_out.append(str(memory["id"]))
-        facts = self._select_facts(active, query)
+        facts = self._select_facts(active, query) if include_facts else []
         selected_ids = set()
         if facts:
             rendered = "；".join(
@@ -1058,10 +1472,13 @@ class ShadowMemoryStore:
             if used_out is not None:
                 used_out.extend(str(m["id"]) for m in facts if m.get("id"))
             selected_ids = {str(m.get("id")) for m in facts if m.get("id")}
+        # `habit_*` 不在这里注：改由 `build_habit_hint` 放在用户消息前（只对拥有该记忆的用户），
+        # 避免和尾部的时段提示重复，也避免把个人习惯混进通用事实。
         # 当前时段的固定安排：和查询相关度无关。「你忘了吗」这类提醒句靠它接得住。
-        # 已经按查询注入过的不重复（同一件事一轮只说一次）。
+        # 已经按查询/习惯段注入过的不重复（同一件事一轮只说一次）。
         time_facts = [m for m in self._time_facts(active, now=now)
-                      if str(m.get("id")) not in selected_ids]
+                      if str(m.get("id")) not in selected_ids
+                      and not str(m.get("key", "")).startswith("habit_")]
         if time_facts:
             rendered = "；".join(f"{m.get('key')}：{m.get('value')}" for m in time_facts)
             lines.append(inj.T("profile", "time_fact", rendered=rendered))
@@ -1122,14 +1539,52 @@ class ShadowMemoryStore:
         now: datetime | None = None,
         session_id: str | None = None,
         used_ids: list | None = None,
+        include_facts: bool = True,
     ) -> str:
         """靠前注入：相处方式行为句 + 话题相关事实（system，个体适配）。
 
         used_ids：传入 list 时追加实际注入的记忆 id（条目级注入轨迹用）。
+        include_facts=False 用于注入 v3：fact 走 `recall`，这里只留相处方式行为句。
         """
         active = self._active_memories(user_id, now=now, session_id=session_id)
-        return self._fit(self._preference_lines(active, query or "", used_out=used_ids, now=now),
+        return self._fit(self._preference_lines(active, query or "", used_out=used_ids,
+                                                now=now, include_facts=include_facts),
                          PREFERENCE_BUDGET_CHARS)
+
+    def build_habit_hint(self, user_id: str, query: str,
+                         *, now: datetime | None = None,
+                         recent_bot_text: str = "") -> str:
+        """把“他此刻相关的固定习惯”渲染成**贴近用户消息**的一条提示；没有返回空串。
+
+        为什么单独有它（2026-10-24）：习惯放在靠前的档案里，模型在短问候里经常不看；
+        放到用户消息前、并且只对拥有这条习惯的用户出现，才能既生效又不串到别人。
+        这不是全局 behaviors——内容完全来自这个用户的 `habit_*` 记忆。
+
+        2026-10-26 起：
+        - 只渲染 value（不再把英文 key 念给模型），并把“用户…”改成“他…”；
+        - 作息/互动/一次性用不同文案；早间作息才用“今天还照常吗”的说法；
+        - `recent_bot_text` 里已经提过这条习惯 → 这轮不再提示，避免连着几轮追问。
+        """
+        active = self._active_memories(user_id, now=now)
+        habits = self._matching_habits(active, query, now=now, limit=1)
+        if not habits:
+            return ""
+        memory = habits[0]
+        meta = _habit_meta(memory)
+        if _habit_mentioned_recently(memory, meta, recent_bot_text):
+            return ""
+        rendered = _habit_display_value(memory.get("value"))
+        if meta.get("type") == "interaction":
+            key = "habit_hint_interaction"
+        elif (meta.get("type") == "routine"
+              and meta.get("cadence") == "daily"
+              and meta.get("period") == "morning"
+              and _period_key(now) == "morning"
+              and _habit_greeting(query, now)):
+            key = "habit_hint_morning"
+        else:
+            key = "habit_hint"
+        return inj.T("profile", key, rendered=rendered)
 
     def her_nickname(self, user_id: str, *, now: datetime | None = None) -> str:
         """用户给她起的外号（没有返回空串）。只用于识别/情境提示，不改变默认自称。"""

@@ -225,6 +225,23 @@ class DailyStore:
         body = "；".join(x for x in lines if x)
         return body[:MAX_CONTEXT_CHARS]
 
+    def recall_items(self, user_id: str, *, now: datetime | None = None) -> list[dict]:
+        """给注入 v3 的 `recall(kind=daily)` 用：返回今天仍在有效期内的原始条目。
+
+        不套 MIN_ENTRIES_TO_INJECT——工具查询是**按需**的，用户问“我今天干嘛了”时
+        只有一条也应当返回；渲染/截断由调用方做。
+        """
+        now = now or datetime.now()
+        if not user_id:
+            return []
+        with self._lock:
+            data = self._load(user_id)
+            entries = self._prune(data["entries"], now)
+            if len(entries) != len(data["entries"]):
+                data["entries"] = entries
+                self._save(user_id, data)
+        return list(entries[-MAX_ENTRIES_PER_DAY:])
+
 
 def enabled() -> bool:
     """默认开启。要临时关掉（回退排查）在 `.env.prod` 设 `DAILY_MEMORY=0`，不用改代码。"""
@@ -244,3 +261,8 @@ def add_events(user_id: str, texts: list[str], *, now: datetime | None = None) -
 def context(user_id: str, *, now: datetime | None = None) -> str:
     """渲染"他今天的日常"，顺便惰性清理过期条目（读路径）。"""
     return _DEFAULT_STORE.context(user_id, now=now)
+
+
+def recall_items(user_id: str, *, now: datetime | None = None) -> list[dict]:
+    """给 `recall(kind=daily)` 用：今天仍有效的原始条目（不套注入门槛）。"""
+    return _DEFAULT_STORE.recall_items(user_id, now=now)

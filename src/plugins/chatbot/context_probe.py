@@ -7,6 +7,7 @@ get_now_context() 生成一行注入文本，让灰泽满知道"现在是几点�
 """
 import asyncio
 import json
+import re
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -207,3 +208,64 @@ def get_now_context(city: str = "") -> str:
     if weather:
         parts.append(weather)
     return inj.T("now", "head") + "，".join(parts) + inj.T("now", "tail")
+
+
+def _cst(now: datetime | None) -> datetime:
+    if now is None:
+        return datetime.now(_CST)
+    return now.astimezone(_CST) if now.tzinfo else now.replace(tzinfo=_CST)
+
+
+def _period_label(dt: datetime) -> str:
+    h = dt.hour
+    if 5 <= h < 11:
+        return "早上"
+    if 11 <= h < 14:
+        return "中午"
+    if 14 <= h < 18:
+        return "下午"
+    if 18 <= h < 23:
+        return "晚上"
+    if h >= 23 or h < 5:
+        return "深夜" if h >= 23 else "凌晨"
+    return "深夜"
+
+
+_TIME_HINT_RE = re.compile(
+    r"(^早|早安|早上|晚安|睡了|睡了没|还没睡|没睡|这么晚|几点|熬夜|通宵|凌晨|起床|醒了)"
+)
+
+
+def frame_now(now: datetime | None = None) -> str:
+    """常驻 frame：日期 + 星期 + 直播状态。**不含精确时间/农历/天气**。
+
+    精确时间、农历、天气都走 `recall(kind=perception/weather)`；这样每轮不会有一个
+    现成的“都凌晨了”脚本摆在模型面前（2026-10-27 定）。
+    """
+    dt = _cst(now)
+    date = f"{dt.month}月{dt.day}日 {_WEEKDAYS[dt.weekday()]}"
+    live = _live_status_text()
+    return inj.T("now", "frame", date=date, live=(f"，{live}" if live else ""))
+
+
+def session_time_hint(now: datetime | None = None, user_msg: str = "",
+                      is_new_session: bool = False) -> str:
+    """本场时段：只在会话开场、问候/作息/问时间时注一次；不是每轮。"""
+    if not is_new_session and not _TIME_HINT_RE.search(user_msg or ""):
+        return ""
+    period = _period_label(_cst(now))
+    return inj.T("now", "time_hint", period=period)
+
+
+def weather_now(city: str = "") -> str:
+    """只读缓存，返回天气行；没有/过期返回空串（由 warm_weather 预热）。"""
+    return _weather_line(city)
+
+
+def perception_now(now: datetime | None = None) -> str:
+    """精确时间 + 农历/节气；查询驱动，不进常驻 frame。"""
+    dt_cn = _cst(now)
+    dt_mel = dt_cn.astimezone(_MEL)
+    return (f"北京时间 {_format_time(dt_cn)}"
+            f"（澳洲当地时间 {dt_mel.hour:02d}:{dt_mel.minute:02d}），"
+            f"{_format_lunar(dt_cn)}")

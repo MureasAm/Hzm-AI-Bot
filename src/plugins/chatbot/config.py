@@ -56,11 +56,17 @@ def _bad_shape_reason(resp) -> str:
 
     判据跟 `extract_chat_content` 保持一致（那边抛什么，这里就当哪类坏）：
     没有 choices / content 是 None / 正文是空的（思考吃光 max_tokens 那种）。
+
+    ⚠️ 原生 tool_calls 的响应 content 通常就是 None——它**不是坏响应**。
+    不认它，工具轮第一跳会被当成“模型抖了”软降级，整条工具路径静默失效。
     """
     choices = getattr(resp, "choices", None)
     if not choices:
         return "上游没返回 choices"
-    content = getattr(getattr(choices[0], "message", None), "content", None)
+    message = getattr(choices[0], "message", None)
+    if getattr(message, "tool_calls", None):
+        return ""
+    content = getattr(message, "content", None)
     if content is None:
         return "content 是 None"
     if not str(content).strip():
