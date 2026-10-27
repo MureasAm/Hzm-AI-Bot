@@ -884,9 +884,12 @@ async def update_memory_v2_shadow_task(
         return []
     try:
         deepseek_client, _ = _get_clients()
+        # 可选的提取模型覆盖（2026-10-27 成本 A/B）：
+        # 默认跟随主模型；设 MEMORY_EXTRACT_MODEL=... 可只给提取换模型，不动主回复。
+        model = get_flag("MEMORY_EXTRACT_MODEL", "") or _get_model_name()
         return await memory_v2.extract_and_ingest(
             client=deepseek_client,
-            model=_get_model_name(),
+            model=model,
             store=_MEMORY_V2_STORE,
             user_id=user_id,
             user_text=user_msg,
