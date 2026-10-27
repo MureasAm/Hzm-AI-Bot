@@ -44,7 +44,7 @@ class KindSpec:
 # 顺序 = 现有注入顺序（缓存/语义顺序，别随便动）。tool/guard 不在 frame 里渲染。
 FRAME_ORDER = (
     "scene", "identity", "schedule",
-    "interaction_preference", "name_budget", "preference", "core_story",
+    "interaction_preference", "name_budget", "request", "preference", "core_story",
     "group", "group_thread", "group_address", "terms", "association",
     "session", "prev_session", "behaviors", "corpus", "commitment",
     "history", "same_request", "batch", "query_hint",
@@ -64,6 +64,9 @@ REGISTRY: dict[str, KindSpec] = {s.kind: s for s in (
              "它是“怎么对她”，不是可查事实；默认 conditional，recall 可补充"),
     KindSpec("name_budget", "称呼预算", "user", "session", "generated", "conditional",
              "core.name_budget_note", "profile/name_budget", 80, "omit", ("profile",)),
+    KindSpec("request", "长期请求", "user", "stable", "user_stated", "conditional",
+             "memory_v2.request", "profile/request", 240, "omit", ("profile",),
+             "用户希望她以后怎么对待自己；背景事实，不是本轮待办；频率交给输出预算"),
     KindSpec("preference", "全局偏好", "her", "stable", "canon", "tool",
              "retrieval.retrieve_preferences", "preferences/main", 200, "empty", ("preferences",)),
     KindSpec("core_story", "核心记忆", "her", "past", "canon", "tool",

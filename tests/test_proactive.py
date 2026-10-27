@@ -10,6 +10,7 @@
 所以这里要钉住的是：**任何失败都必须干净地返回 None**，绝不能吐出半截话
 或者抛异常把整个监听循环带崩。
 """
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -528,3 +529,76 @@ class TestDeliverProactiveVoice:
         mode = await proactive.deliver_proactive(bot, 123, "原文通知", voice=False)
         assert mode == "text"
         assert [seg.type for seg in bot.sent[0][1]] == ["text"]
+
+
+class TestBroadcastProactive:
+    """300 人群发：TTS 只合成一次 + 有界并发（2026-10-24）。"""
+
+    async def test_synthesizes_once_and_sends_with_bounded_concurrency(self, monkeypatch):
+        from src.plugins.chatbot import voice
+
+        synth = []
+        sends = []
+        active = {"n": 0, "max": 0}
+        recorded = []
+
+        async def fake_synth(text):
+            synth.append(text)
+            return "x.wav"
+
+        async def fake_send_file(bot, uid, is_private, wav):
+            active["n"] += 1
+            active["max"] = max(active["max"], active["n"])
+            await asyncio.sleep(0.01)
+            sends.append(uid)
+            active["n"] -= 1
+            return True
+
+        monkeypatch.setattr(voice, "synthesize_voice", fake_synth)
+        monkeypatch.setattr(voice, "send_voice_file", fake_send_file)
+        monkeypatch.setattr(proactive, "append_bot_message",
+                            lambda uid, text: recorded.append(uid))
+        monkeypatch.setenv("PROACTIVE_PUSH_CONCURRENCY", "2")
+        bot = _FakeBot()
+        stats = await proactive.broadcast_proactive(
+            bot, [1, 2, 3, 4, 5, 6], "今晚播", image_paths=["a.jpg"], voice=True)
+        assert stats["voice"] == 6 and stats["failed"] == 0
+        assert len(synth) == 1, "同一句话只该合成一次"
+        assert len(sends) == 6
+        assert active["max"] <= 2, "并发必须受上限约束"
+        assert len(recorded) == 6
+        assert len(bot.sent) == 6, "每人一张配图"
+
+    async def test_voice_failure_falls_back_to_text(self, monkeypatch):
+        from src.plugins.chatbot import voice
+
+        async def fake_synth(text):
+            return "x.wav"
+
+        async def fake_send_file(*a, **k):
+            return False
+
+        monkeypatch.setattr(voice, "synthesize_voice", fake_synth)
+        monkeypatch.setattr(voice, "send_voice_file", fake_send_file)
+        monkeypatch.setattr(proactive, "append_bot_message", lambda *a: None)
+        bot = _FakeBot()
+        stats = await proactive.broadcast_proactive(
+            bot, [1, 2], "今晚播", voice=True)
+        assert stats["text"] == 2 and stats["voice"] == 0
+        assert len(bot.sent) == 2
+
+    async def test_unspeakable_text_skips_synthesis(self, monkeypatch):
+        from src.plugins.chatbot import voice
+
+        calls = []
+
+        async def fake_synth(text):
+            calls.append(1)
+            return "x.wav"
+
+        monkeypatch.setattr(voice, "synthesize_voice", fake_synth)
+        monkeypatch.setattr(proactive, "append_bot_message", lambda *a: None)
+        bot = _FakeBot()
+        stats = await proactive.broadcast_proactive(
+            bot, [1, 2], "VirtuaReal 18:00", voice=True)
+        assert calls == [] and stats["text"] == 2

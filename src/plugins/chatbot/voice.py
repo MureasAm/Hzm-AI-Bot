@@ -560,6 +560,42 @@ def _to_qq_voice(wav_path: str) -> str | None:
     return "file:///" + Path(wav_path).resolve().as_posix()
 
 
+async def synthesize_voice(reply_text: str, deadline: float | None = None) -> str | None:
+    """合成一条语音，返回 wav 路径；未启用/失败/超预算返回 None。
+
+    和 `send_voice` 拆开是为了**广播主动发言时只合成一次**：同一句话发给 300 个好友，
+    没必要每个好友都进一次 TTS 锁、复检一次缓存。
+    """
+    loop = asyncio.get_running_loop()
+    deadline = deadline or (loop.time() + _TTS_BUDGET_SEC)
+    async with _tts_lock:
+        left = deadline - loop.time()
+        if left <= 0:
+            print(f"[语音] 预算已被前一条合成占满（{_TTS_BUDGET_SEC:.0f}s），走文字")
+            return None
+        try:
+            # 外层 wait_for 是**兜底**：就算 httpx 的超时没生效（或 _synthesize
+            # 哪天被改坏），这一层也保证到点返回，不会一直挂着她不说话。
+            return await asyncio.wait_for(_synthesize(reply_text, deadline=deadline), left)
+        except asyncio.TimeoutError:
+            print(f"⚠️ 语音合成超预算（{_TTS_BUDGET_SEC:.0f}s），改走文字")
+            return None
+
+
+async def send_voice_file(bot, target_id: str, is_private: bool, wav_path: str) -> bool:
+    """把已经合成好的 wav 作为语音消息发给一个人；失败返回 False（不吞异常细节）。"""
+    voice_file = _to_qq_voice(wav_path)
+    if not voice_file:
+        return False
+    if is_private:
+        await bot.send_private_msg(user_id=target_id,
+                                   message=MessageSegment.record(file=voice_file))
+    else:
+        await bot.send_group_msg(group_id=target_id,
+                                 message=MessageSegment.record(file=voice_file))
+    return True
+
+
 async def send_voice(bot, target_id: str, is_private: bool, reply_text: str) -> bool:
     """朗读语音：合成 → 转 QQ 语音 → 发送。
 
@@ -570,34 +606,16 @@ async def send_voice(bot, target_id: str, is_private: bool, reply_text: str) -> 
     （timeout 120s × 最多 3 次重试，而文字兜底排在语音后面）。deadline 在**进锁之前**
     算好，所以"排队等锁"也算在预算里；到点就放弃语音、交给文字兜底。
     """
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + _TTS_BUDGET_SEC
     voice_file = None
     try:
-        async with _tts_lock:
-            left = deadline - loop.time()
-            if left <= 0:
-                print(f"[语音] 预算已被前一条合成占满（{_TTS_BUDGET_SEC:.0f}s），走文字")
-                return False
-            try:
-                # 外层 wait_for 是**兜底**：就算 httpx 的超时没生效（或 _synthesize
-                # 哪天被改坏），这一层也保证到点返回，不会一直挂着她不说话。
-                wav_path = await asyncio.wait_for(
-                    _synthesize(reply_text, deadline=deadline), left)
-            except asyncio.TimeoutError:
-                print(f"⚠️ 语音合成超预算（{_TTS_BUDGET_SEC:.0f}s），改走文字")
-                return False
+        wav_path = await synthesize_voice(reply_text)
         if not wav_path:
             return False
         voice_file = _to_qq_voice(wav_path)
         if not voice_file:
             return False
-        if is_private:
-            await bot.send_private_msg(user_id=target_id,
-                                       message=MessageSegment.record(file=voice_file))
-        else:
-            await bot.send_group_msg(group_id=target_id,
-                                     message=MessageSegment.record(file=voice_file))
+        if not await send_voice_file(bot, target_id, is_private, wav_path):
+            return False
         print(f"[语音] 已发送语音 {len(_tts_text(reply_text))}字 file={voice_file}")
         return True
     except Exception as e:

@@ -440,7 +440,8 @@ def build_message_list(user_msg: str, fused_items: list,
                        group_thread_note: str = "", name_budget: str = "",
                        habit_hint: str = "", now_context: str = "",
                        time_hint: str = "", prefetch_context: str = "",
-                       tool_note: str = "") -> list:
+                       tool_note: str = "", request_context: str = "",
+                       reminders_context: str = "") -> list:
     """按优先级组装发送给模型的消息列表。
 
     fused_items 为融合后的 RetrievalItem 列表（corpus + behavior），按源分组注入。
@@ -520,12 +521,19 @@ def build_message_list(user_msg: str, fused_items: list,
     if profile_context:
         messages.append({"role": "system", "content": profile_context})
         _mark("profile")
+        if trace is not None:
+            trace.setdefault("values", {})["profile"] = profile_context[:300]
 
     # 称呼预算（2026-10-23）：最近几轮叫得太多时，这轮前置提醒别再叫。
     # 紧跟在相处方式之后：`address_style.nickname` 会鼓励称呼，这里是对它的当场配平。
     if name_budget:
         messages.append({"role": "system", "content": name_budget})
         _mark("name_budget")
+
+    # 长期请求（2026-10-27）：用户希望她以后怎么对待自己；是背景事实，不是本轮待办。
+    if request_context:
+        messages.append({"role": "system", "content": request_context})
+        _mark("request")
 
     # 偏好档案（第 5 路语义检索）：聊到相关话题才注入；与语料/记忆冲突时以偏好为准
     if preference_items:
@@ -777,6 +785,12 @@ def build_message_list(user_msg: str, fused_items: list,
 
     # 工具能力提示：只在 tools 真的会随请求发出、且模型探测通过时出现。
     # 放在用户消息前最后一条，提示“需要时再查”，不把工具变成每轮必用的动作。
+    if reminders_context:
+        messages.append({"role": "system", "content": reminders_context})
+        hit_blocks.append("reminders")
+        _mark("reminders")
+        if trace is not None:
+            trace.setdefault("values", {})["reminders"] = reminders_context[:300]
     if tool_note:
         messages.append({"role": "system", "content": tool_note})
         hit_blocks.append("tool_note")
@@ -996,6 +1010,28 @@ NAME_BUDGET_WINDOW_LINES = 10
 NAME_BUDGET_MIN_CALLS = 1
 
 
+def _has_address_request(user_id: str) -> bool:
+    """这个用户有“以后多叫名字”的长期 request_address 吗？"""
+    try:
+        for m in _MEMORY_V2_STORE.snapshot(user_id).get("memories", []):
+            if m.get("kind") != "request" or m.get("key") != "request_address":
+                continue
+            if m.get("status") not in {"confirmed", "active"}:
+                continue
+            exp = m.get("expires_at")
+            if exp:
+                try:
+                    from datetime import datetime as _dt
+                    if _dt.fromisoformat(str(exp)) <= _dt.now():
+                        continue
+                except (TypeError, ValueError):
+                    pass
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def name_budget_note(user_id: str) -> str:
     """最近几轮她叫对方名字太多次 → 返回一条**前置提醒**；否则空串。
 
@@ -1016,6 +1052,9 @@ def name_budget_note(user_id: str) -> str:
         min_calls = NAME_BUDGET_MIN_CALLS
     if min_calls <= 0:
         return ""
+    # 用户明确要求“以后多叫名字”时，放宽预算：只在他已经连叫 3 次时才提醒。
+    if _has_address_request(user_id):
+        min_calls = max(min_calls, 3)
     hist = get_user_history(user_id)[-NAME_BUDGET_WINDOW_LINES:]
     calls = sum(bot_line_text(ln).count(name) for ln in hist if is_bot_line(ln))
     if calls < min_calls:
@@ -1306,6 +1345,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     # --- 🧠 Memory V2 注入（可选；与影子提取分开的开关，默认关，见 docs/记忆v2设计.md §上线路径）---
     # 两段分开放：相处方式靠前 / 未完成约定中段。
     profile_context = commitment_context = daily_context = ""
+    request_context = ""
     memory_ids: list = []   # 本轮实际注入的记忆 id（注入轨迹用；群聊为 空）
     if not is_group and memory_v2.injection_enabled():
         profile_context = _MEMORY_V2_STORE.build_preference_context(
@@ -1313,6 +1353,8 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
             include_facts=not v3)   # v3：fact 走 recall；这里只留相处方式行为句
         commitment_context = _MEMORY_V2_STORE.build_commitment_context(
             user_id, retrieval_query, used_ids=memory_ids)
+        request_context = _MEMORY_V2_STORE.build_request_context(
+            user_id, used_ids=memory_ids)
         if daily_memory.enabled() and not v3:
             daily_context = daily_memory.context(user_id)
     # 称呼提示：用户这轮叫了 her_nickname 才注入；不做长期自称偏好。
@@ -1335,6 +1377,18 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     # 当下情绪住在**会话记忆**里（2026-10-10 从长期记忆搬来），跟话题一起 3h 消散。
     # 它**不受 v2 开关控制**——情绪是会话级感知，生产里就该生效；注入位置仍是紧挨用户消息。
     emotion_context = "" if is_group else mood_note(user_id)
+
+    # v3 关系收口：稳定内容（相处方式 + 长期请求）并进 profile；
+    # 时效内容（约定/习惯/称呼预算/昵称提示）并成一条【本轮提醒】放用户消息前。
+    reminders_context = ""
+    if v3:
+        if request_context:
+            profile_context = (profile_context + "\n\n" + request_context).strip()
+            request_context = ""
+        parts = [x for x in (commitment_context, habit_hint, name_budget, nickname_hint) if x]
+        if parts:
+            reminders_context = "【本轮提醒】\n" + "\n".join(parts)
+        commitment_context = habit_hint = name_budget = nickname_hint = ""
 
     # --- 🧩 构建消息列表 ---
     # 天气预热：组消息前异步把城市 LocationID+天气取进缓存，build 时同步读缓存零阻塞
@@ -1394,6 +1448,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         group_thread_note=group_thread_note, name_budget=name_budget,
         habit_hint=habit_hint, now_context=now_context, time_hint=time_hint,
         prefetch_context=prefetch_context, tool_note=tool_note,
+        request_context=request_context, reminders_context=reminders_context,
     )
 
     # --- 🤖 调用大模型 ---

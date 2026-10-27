@@ -648,40 +648,51 @@ class TestBatchCommitOnInterrupt:
         assert win.pending == [], "这批已经处理完（当作没说），要提交"
 
 
-class TestStickerPerTopic:
-    """2026-10-23：同一个话题只发一张表情包；换话题才允许下一张。"""
+class TestStickerTopicAndTurns:
+    """2026-10-24 双闸：同一话题只一张；发过之后 5 轮内不再发。"""
 
     async def _setup(self, monkeypatch, topic_box):
         win = cw._UserWindow("u1")
         win.bot = _StickerBot()
         monkeypatch.setattr(cw, "_sticker_state", {})
-        monkeypatch.setattr(cw.session_memory, "get_session",
-                            lambda uid: {"topic_since": topic_box["v"]})
         monkeypatch.setattr(cw, "_get_clients", lambda: (object(), None))
         monkeypatch.setattr(cw, "log_event", lambda *a, **k: None)
+        monkeypatch.setattr(cw.session_memory, "get_session",
+                            lambda uid: {"topic_since": topic_box["v"]})
         calls = []
 
         async def fake_pick(client, reply, avoid_groups=None, **kwargs):
             calls.append(1)
-            return {"id": "s1", "file": "x.png", "group": "无语"} if len(calls) == 1 else None
+            return {"id": "s1", "file": "x.png", "group": "无语"}
 
         monkeypatch.setattr(cw, "pick_sticker", fake_pick)
         return win, calls
 
-    async def test_second_send_in_same_topic_is_skipped(self, monkeypatch):
+    async def test_same_topic_second_is_skipped(self, monkeypatch):
         box = {"v": "topic-1"}
         win, calls = await self._setup(monkeypatch, box)
         await cw._maybe_send_sticker(win, "无语了")
         await cw._maybe_send_sticker(win, "无语了")
         assert len(calls) == 1, "同一话题第二次不该再判定/发送"
 
-    async def test_new_topic_allows_another(self, monkeypatch):
+    async def test_new_topic_still_blocked_for_five_turns(self, monkeypatch):
         box = {"v": "topic-1"}
         win, calls = await self._setup(monkeypatch, box)
         await cw._maybe_send_sticker(win, "无语了")
         box["v"] = "topic-2"
+        for _ in range(5):                     # 发后 5 轮：只走冷却，不问模型
+            await cw._maybe_send_sticker(win, "无语了")
+        assert len(calls) == 1
+        await cw._maybe_send_sticker(win, "无语了")   # 第 6 轮才允许
+        assert len(calls) == 2
+
+    async def test_same_topic_never_resets_after_turns(self, monkeypatch):
+        box = {"v": "topic-1"}
+        win, calls = await self._setup(monkeypatch, box)
         await cw._maybe_send_sticker(win, "无语了")
-        assert len(calls) == 2, "换话题后应允许再判定一次"
+        for _ in range(8):
+            await cw._maybe_send_sticker(win, "无语了")
+        assert len(calls) == 1, "同一话题不该因为过了几轮就再发"
 
 
 class _StickerBot:

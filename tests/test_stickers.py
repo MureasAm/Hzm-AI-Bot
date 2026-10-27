@@ -220,6 +220,6 @@ class TestRecentStoresGroup:
         # 同话题不再发；换话题后才允许下一张（并把 recent 带回去拦同类）
         await cw._maybe_send_sticker(win, "草")
         assert len(calls) == 1
-        topic["v"] = "t2"
+        topic["v"] = "t2"   # 换话题；冷却 0，轮次闸不挡
         await cw._maybe_send_sticker(win, "草")
         assert len(calls) == 2 and calls[-1] == ["吐槽"]

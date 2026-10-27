@@ -8,6 +8,7 @@ import pytest
 
 from src.plugins.chatbot import _bridge_common as _bc
 from src.plugins.chatbot import bili_bridge as bb
+from src.plugins.chatbot import proactive as pr
 
 
 @pytest.fixture(autouse=True)
@@ -552,7 +553,7 @@ class TestPushRecordsIntoMemory:
     @pytest.fixture(autouse=True)
     def _spy(self, monkeypatch):
         self.recorded = []
-        monkeypatch.setattr(bb, "append_bot_message",
+        monkeypatch.setattr(pr, "append_bot_message",
                             lambda uid, text: self.recorded.append((uid, text)))
 
     async def test_success_records_per_friend(self, monkeypatch):
@@ -621,7 +622,7 @@ class TestNoticeOnlyRecordedWhenNoProactive:
     @pytest.fixture(autouse=True)
     def _spy(self, monkeypatch):
         self.recorded = []
-        monkeypatch.setattr(bb, "append_bot_message",
+        monkeypatch.setattr(pr, "append_bot_message",
                             lambda uid, text: self.recorded.append((uid, text)))
         monkeypatch.setattr(bb, "get_notify_whitelist", lambda: [])
 

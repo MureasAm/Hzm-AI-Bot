@@ -22,8 +22,7 @@ from nonebot import get_bot, get_driver
 
 from .bg import spawn
 from .constants import WEIBO_STATE_FILE
-from .memory import append_bot_message
-from .proactive import compose_proactive, deliver_proactive
+from .proactive import compose_proactive, broadcast_proactive
 from . import _bridge_common
 from .config import get_weibo_uid, get_weibo_cookie, get_notify_whitelist, get_push_interval
 
@@ -344,9 +343,10 @@ class WeiboMonitor:
 
     async def _push(self, bot, content: str, image_paths: list | None = None,
                     record: bool = True, voice: bool = False) -> None:
-        """私聊广播给全部好友（白名单非空则只发白名单）。单好友失败不中断。
+        """私聊广播给全部好友（白名单非空则只发白名单）。
 
-        `voice=True`：主动发言优先走 TTS，失败/不适合再发文字版；配图随语音发。
+        `voice=True`：TTS **只合成一次**，再按并发上限发给所有人；单好友失败不中断。
+        记忆写入也在 `broadcast_proactive` 里按发送成功逐人做。
         """
         friends = await self._get_friends(bot)
         whitelist = get_notify_whitelist()
@@ -355,20 +355,11 @@ class WeiboMonitor:
         if not targets:
             print("[微博] 无推送目标（好友为空或白名单过滤后为空）")
             return
-        ok = 0
-        for t in targets:
-            try:
-                await deliver_proactive(bot, t["user_id"], content,
-                                        image_paths=image_paths, voice=voice)
-                ok += 1
-                # 同 B站：记进那个好友的短期记忆，否则他顺着这句回她时她不知道在说什么
-                if record:
-                    append_bot_message(str(t["user_id"]),
-                                       _bridge_common.to_memory_line(content))
-            except Exception as e:
-                print(f"⚠️ 推送失败 user={t.get('user_id')}: {e}")
+        stats = await broadcast_proactive(
+            bot, [t["user_id"] for t in targets], content,
+            image_paths=image_paths, voice=voice, record=record)
         mode = "语音/文字" if voice else "文字"
-        print(f"[微博] 已推送 {ok}/{len(targets)} 位好友（{mode}）")
+        print(f"[微博] 已推送 {stats['voice'] + stats['text']}/{len(targets)} 位好友（{mode}）")
 
 
 # ==================== 启动注册 ====================

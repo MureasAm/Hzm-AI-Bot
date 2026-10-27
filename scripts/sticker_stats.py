@@ -9,13 +9,15 @@
 被反复用"全靠感觉。
 
 2026-10-15 起 `chat_window._maybe_send_sticker` 会把**每一次判断**写进
-`data/sticker_log.jsonl`（四种事件：cooldown / none / sent / sent_failed），
+`data/sticker_log.jsonl`（五种事件：cooldown / topic_used / none / sent / sent_failed），
 本脚本就是读它的那个。
 
 ## 事件口径
 
-- `cooldown`：冷却没到，**这一轮压根没问模型**（`STICKER_COOLDOWN_TURNS=3`）。
+- `cooldown`：冷却没到，**这一轮压根没问模型**（`STICKER_COOLDOWN_TURNS=5`）。
   它记录的是"被冷却吃掉的机会"——这个数大了，说明想统计"该发却没发"就无从谈起。
+- `topic_used`：这个话题已经发过一张，按规则跳过，**这一轮也没问模型**
+  （2026-10-24 起；同话题一张，另加发后 5 轮冷却）。
 - `none`：问了模型，但**没发**。三种原因：模型说 null / 模型给了个不存在的 id /
   判定选中了"最近发过的类别"被代码拦下（`avoid_group`）。
 - `sent`：真的发出去了。

@@ -19,13 +19,28 @@ def test_ritual_without_cue_rejected():
     assert item is None and why == "ritual_needs_cue"
 
 
-def test_habit_gets_prefix():
+def test_habit_gets_prefix_and_structured_meta():
     item, why = mr.candidate_to_item({
         "kind": "habit", "key": "morning_running",
         "value": "每天早上起床后都要跑操（学校要求）",
     })
     assert why == ""
     assert item["kind"] == "fact" and item["key"] == "habit_morning_running"
+    assert item["habit"]["type"] == "routine"
+    assert item["habit"]["cadence"] == "daily"
+    assert item["habit"]["period"] == "morning"
+    assert "跑操" in item["habit"]["cues"]
+
+
+def test_habit_structured_fields_pass_through():
+    item, why = mr.candidate_to_item({
+        "kind": "habit", "key": "sticker", "value": "每天都会用表情包撒娇",
+        "habit": {"type": "interaction", "cadence": "daily",
+                  "period": "any", "cues": ["表情包", "撒娇"]},
+    })
+    assert why == ""
+    assert item["habit"] == {"type": "interaction", "cadence": "daily",
+                             "period": "any", "cues": ["表情包", "撒娇"]}
 
 
 def test_habit_without_frequency_rejected():

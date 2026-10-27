@@ -39,10 +39,12 @@ DAY_PROMPT = """下面是一个用户和“灰泽满”在某一天的聊天记�
 - 只写当天真实出现的内容，标注出现次数或原话；一次性闲聊不要写。
 - 不要评价、不要脑补；不要记录角色扮演/玩梗里的设定。
 - 同一活动有**多个频率**时分开写（“每天早上跑操”和“每周三次 3 公里”不是一件事）。
+- habit 类额外给结构化字段：`habit` = {"type":"routine|interaction", "cadence":"daily|weekly|monthly|regular|once|unknown", "period":"morning|noon|afternoon|evening|night|any|unknown", "cues":["他实际会说的2-8个触发词"]}。
+  routine=作息/日程；interaction=表情包/情话/摸摸这类互动；cues 不要写“每天/早上”这种时间词。
 - 特别留意：反复要求同一件事（固定说法、固定流程）、固定时段的行为、称呼要求、
   雷区、明确的喜好/厌恶。
 只输出 JSON：
-{{"items":[{{"kind":"ritual|habit|preference|fact|boundary","value":"一句话","evidence":"原话/次数"}}]}}
+{{"items":[{{"kind":"ritual|habit|preference|fact|boundary","value":"一句话","evidence":"原话/次数","habit":{{"type":"routine|interaction","cadence":"daily|weekly|monthly|regular|once|unknown","period":"morning|noon|afternoon|evening|night|any|unknown","cues":["..."]}}}}]}}
 
 聊天记录：
 {chat}
@@ -58,6 +60,10 @@ REFLECT_PROMPT = """下面是同一个用户连续多天与“灰泽满”的聊
 - 角色扮演/玩梗里的设定不要当事实；
 - **habit 必须写清频率 + 原因**（每天/每周几次、为什么），不能只写“有…习惯”；
   同一活动多个频率要分开列（例如“每天早上跑操”和“每周三次 3 公里”是两条）；
+  并给结构化字段 `habit`：type=routine（作息）/interaction（表情包/情话/摸摸），
+  cadence=daily/weekly/monthly/regular/once，period=morning/noon/afternoon/evening/night/any，
+  cues=他实际会说的 2-8 个触发词（不要写“每天/早上”这类时间词）。
+  一次性计划（今晚熬夜看比赛）用 cadence=once，不要当成固定习惯。
 - 合并前检查：两条只差频率/原因时，它们很可能是两个事实，不要合成一条。
 
 输出 JSON：
@@ -66,6 +72,7 @@ REFLECT_PROMPT = """下面是同一个用户连续多天与“灰泽满”的聊
     "key":"小写英文键，具体到事",
     "value":"简洁中文；ritual 必须写成「场景：内容」",
     "days":出现天数,"count":出现次数,
+    "habit":{{"type":"routine|interaction","cadence":"daily|weekly|monthly|regular|once|unknown","period":"morning|noon|afternoon|evening|night|any|unknown","cues":["..."]}},
     "evidence":"跨天证据，引用不同天的说法"}}
 ]}}
 只输出 JSON，不要 markdown。
@@ -146,6 +153,15 @@ def candidate_to_item(cand: dict) -> tuple[dict | None, str]:
         "explicit": True, "confidence": float(cand.get("confidence") or 0.8),
         "actor": "user",
     }
+
+    def _as_habit(habit_key: str) -> tuple[dict, str]:
+        item = {**base, "kind": "fact", "key": habit_key,
+                "temporal_scope": "timeless"}
+        # 模型给的字段优先；没给就从 value 推导（旧候选也能直接应用）。
+        item["habit"] = mv.normalize_habit_metadata(
+            cand.get("habit"), key=habit_key, value=value)
+        return item, ""
+
     if kind == "ritual":
         if "：" not in value and ":" not in value:
             return None, "ritual_needs_cue"
@@ -157,8 +173,7 @@ def candidate_to_item(cand: dict) -> tuple[dict | None, str]:
             # 只写“有早起跑步的习惯”会把频率/原因丢掉，宁可不自动写，留给人看。
             return None, "habit_missing_frequency"
         key = key if key.startswith("habit") else f"habit_{key}"
-        return {**base, "kind": "fact", "key": key,
-                "temporal_scope": "timeless"}, ""
+        return _as_habit(key)
     if kind == "preference":
         # 名字类候选在反思里常被写成 preference；抽取引号里的裸名字，
         # 交给 store 的名字闸门校验（source 里有“叫我”才过）。
@@ -174,14 +189,15 @@ def candidate_to_item(cand: dict) -> tuple[dict | None, str]:
             # 没有频率就留给人看，别硬塞进封闭枚举。
             if re.search(r"每天|每周|一周|日常|平时|近期|最近|次", value):
                 habit_key = key if key.startswith("habit") else f"habit_{key}"
-                return {**base, "kind": "fact", "key": habit_key,
-                        "temporal_scope": "timeless"}, ""
+                return _as_habit(habit_key)
             return None, "unknown_preference_key"
         if key in mv._PREFERENCE_VALUES and value not in mv._PREFERENCE_VALUES[key]:
             return None, "invalid_preference_value"
         return {**base, "kind": "interaction_preference", "key": key,
                 "temporal_scope": "timeless"}, ""
     if kind in ("fact", "boundary"):
+        if key.startswith("habit_"):
+            return _as_habit(key)
         return {**base, "kind": "fact", "key": key,
                 "temporal_scope": "timeless"}, ""
     return None, "unsupported_kind"

@@ -79,9 +79,14 @@ _NAME_REQUEST_RE = re.compile(r"叫我|称呼我|喊我|管我叫|名字叫|我�
 _NAME_VALUE_OK_RE = re.compile(r"^[一-鿿A-Za-z0-9_\-·]{1,12}$")
 _NAME_VALUE_BAD_WORDS = ("用户", "希望", "称呼", "自称", "或者", "不叫")
 
-_KINDS = {"fact", "interaction_preference", "commitment"}
+_KINDS = {"fact", "interaction_preference", "commitment", "request"}
 _ACTIONS = {"upsert", "retract"}
 _TEMPORAL_SCOPES = {"past", "current", "future", "timeless"}
+# 长期请求（request）：用户希望灰泽满以后怎么对待自己——频率/方式类诉求。
+# 只收明确、长期的；一次性“现在抱抱我”不记。target 是有限的几种，不是按需求名穷举。
+_REQUEST_TARGETS = {"address", "affection", "initiative", "tone", "general"}
+_REQUEST_SCOPES = {"standing", "session"}
+REQUEST_SESSION_TTL_HOURS = 3
 # 每个维度都是"枚举值 → 行为句"，不存印象标签（黄金律第 2 条）。
 # 8 个维度：低落时怎么接 / 玩笑尺度 / 拒绝方式 / 主动关心阈值（原有 4 个）
 #         + 称呼偏好 / 回复长度 / 话题雷区 / 她怎么自称（2026-10-10 扩到 8 个）。
@@ -244,7 +249,15 @@ MEMORY_V2_EXTRACT_PROMPT = """你是灰泽满私聊机器人的记忆候选提�
        记忆里却只有 `address_style` 一条。这类是用户对相处方式的**明确要求**，必须记。）
 3. commitment：灰泽满本轮明确答应用户、需要以后兑现的事。承诺只从灰泽满回复中提取，
    用户自己的计划不是灰泽满的承诺；actor 必须是 assistant，explicit 必须为 true。
-4. daily：用户**当天很单纯的日常**——吃了什么、几点上课/下课、去哪、什么时候睡的这类
+4. request：用户希望灰泽满**以后**怎么对待他的长期请求（频率/方式类），但现有
+   interaction_preference 表达不了的。比如“以后多叫叫我名字”“每天多抱抱我”“你以后主动点”。
+   · key 固定 `request_<target>`，target 只能是 address / affection / initiative / tone / general；
+     value 写「他希望…」。scope 写 standing（长期）或 session（只本场）。
+   · **只记明确、长期的**；“现在抱抱我”“今天叫一声”是一次性，不记。
+   · 能用 interaction_preference 表达的（温柔/直接/称呼方式/回复长度/玩笑尺度）→ 用现有维度，
+     不要重复记 request。它不是她的承诺，也不是她的计划。
+   · 频率词（以后/每天/多/一直）是信号；一次/现在/今天不是。
+5. daily：用户**当天很单纯的日常**——吃了什么、几点上课/下课、去哪、什么时候睡的这类
    **纯事件**。只记"有事发生"的句子（"中午吃了炸鸡""下午的课取消了"）。
    · **状态、情绪、喜好、关系一律不记**（"他最近很累""不爱吃辣""和室友关系一般"）——
      那些归 fact / interaction_preference。
@@ -267,6 +280,8 @@ MEMORY_V2_EXTRACT_PROMPT = """你是灰泽满私聊机器人的记忆候选提�
 - 单次闲聊、寒暄、玩梗（"在吗""哈哈哈""晚安"）。
   ⚠️ **例外（ritual）**：单次"晚安"不记；但"每天晚安都要有仪式感／睡前必做"是
   **固定仪式**，归 `interaction_preference/ritual`，不要因为出现"晚安"就跳过。
+- **一次性请求不是 request**："现在抱抱我""今天叫一声"只是当下；只有"以后/每天/多/一直"
+  这类长期诉求才进 `request`。
 - **称呼需求的方向搞反**：`address_style` 填的是「**用户希望灰泽满怎么称呼他自己**」。
   他说"我想叫你宝宝""我能不能叫你满姐"——那是**他想叫她**，方向相反，**不要填 address_style**。
   （实测踩坑 2026-10-16：同一个句式"我想叫你宝宝"，两条记录分别被填成 `nickname` 和 `plain`，
@@ -299,8 +314,8 @@ temporal_scope 必须是 past/current/future/timeless：用户过去经历用 pa
 {{
   "items": [
     {{
-      "kind": "fact|interaction_preference|commitment",
-      "key": "小写英文键；fact 要具体到事，别用通用键",
+      "kind": "fact|interaction_preference|commitment|request",
+      "key": "小写英文键；fact 要具体到事，别用通用键；request 固定 request_<target>",
       "value": "简洁、保留限定词的中文内容",
       "action": "upsert|retract",
       "temporal_scope": "past|current|future|timeless",
@@ -308,6 +323,8 @@ temporal_scope 必须是 past/current/future/timeless：用户过去经历用 pa
       "explicit": true,
       "confidence": 0.0,
       "actor": "assistant",
+      "target": "address|affection|initiative|tone|general（仅 request）",
+      "scope": "standing|session（仅 request）",
       "habit": {{"type": "routine|interaction", "cadence": "daily|weekly|monthly|regular|once|unknown", "period": "morning|noon|afternoon|evening|night|any|unknown", "cues": ["2-8个短触发词"]}}
     }}
   ],
@@ -603,6 +620,41 @@ def _commitment_expires_at(item: dict, now: datetime) -> str | None:
     if days:
         return (now + timedelta(days=days)).isoformat()
     return (now + timedelta(hours=_commitment_ttl_hours(str(item.get("value") or "")))).isoformat()
+
+
+def _request_expires_at(item: dict, now: datetime) -> str | None:
+    """长期请求：standing 不过期；session 跟本场一起 3h 消散。"""
+    if item.get("kind") != "request":
+        return None
+    if str(item.get("scope") or "standing") == "session":
+        return (now + timedelta(hours=REQUEST_SESSION_TTL_HOURS)).isoformat()
+    return None
+
+
+_REQUEST_NAME_WRAPPERS = (
+    "用户", "对方", "他", "希望", "要求", "接受", "想要", "让", "被",
+    "称呼为", "称呼", "称为", "称作", "自称", "名叫", "名字是", "名字叫",
+    "叫", "称", "是",
+)
+
+
+def _request_peer_name(active: list[dict]) -> str:
+    """从 active facts 里取一个像名字的值；取不干净就返回空（宁可不带）。"""
+    for m in active:
+        if m.get("kind") != "fact" or str(m.get("key")) not in _NAME_KEYS:
+            continue
+        v = str(m.get("value") or "").split("，")[0].split(",")[0].strip()
+        changed = True
+        while changed:
+            changed = False
+            for w in _REQUEST_NAME_WRAPPERS:
+                if v.startswith(w) and len(v) > len(w):
+                    v = v[len(w):].strip("：: 　")
+                    changed = True
+        v = v.strip("：: 　\"'“”‘’（）()")
+        if 1 <= len(v) <= 12:
+            return v
+    return ""
 
 
 def _ngrams(text: str) -> set[str]:
@@ -1147,6 +1199,7 @@ class ShadowMemoryStore:
             "fact": "current",
             "interaction_preference": "timeless",
             "commitment": "future",
+            "request": "timeless",
         }[kind]
         temporal_scope = temporal_scope or default_scope
         if temporal_scope not in _TEMPORAL_SCOPES:
@@ -1155,9 +1208,26 @@ class ShadowMemoryStore:
             "fact": {"past", "current", "timeless"},
             "interaction_preference": {"current", "timeless"},
             "commitment": {"future", "current"},
+            "request": {"current", "timeless"},
         }[kind]
         if temporal_scope not in allowed_scopes:
             return None, "temporal_scope_mismatch"
+
+        request_target = ""
+        request_scope = ""
+        if kind == "request":
+            request_target = _bounded_text(item.get("target"), 20)
+            if request_target not in _REQUEST_TARGETS and key.startswith("request_"):
+                candidate = key[len("request_"):]
+                if candidate in _REQUEST_TARGETS:
+                    request_target = candidate
+            if request_target not in _REQUEST_TARGETS:
+                return None, "invalid_request_target"
+            if key != f"request_{request_target}":
+                return None, "invalid_request_key"
+            request_scope = _bounded_text(item.get("scope") or "standing", 16)
+            if request_scope not in _REQUEST_SCOPES:
+                return None, "invalid_request_scope"
 
         # 时效性近况的期限档位（只有 fact 用；其余一律 none）。
         valid_for = _bounded_text(item.get("valid_for"), 8).lower()
@@ -1171,6 +1241,8 @@ class ShadowMemoryStore:
 
         if kind == "fact" and not explicit:
             return None, "inferred_fact_blocked"
+        if kind == "request" and not explicit:
+            return None, "explicit_request_required"
         if kind == "fact" and key in _NAME_KEYS and action != "retract":
             reason = _name_fact_rejection(key, value, normalized_source)
             if reason:
@@ -1198,6 +1270,9 @@ class ShadowMemoryStore:
             "valid_for": valid_for,
             "source": normalized_source,
         }
+        if kind == "request":
+            normalized["target"] = request_target
+            normalized["scope"] = request_scope
         # 习惯的结构化字段（2026-10-26）：模型没给就从 value 推导。
         # 不是 key/value 之外的“另存一份事实”，只是把“什么时候相关、怎么触发”变成可检索的字段。
         if kind == "fact" and key.startswith("habit_"):
@@ -1265,7 +1340,7 @@ class ShadowMemoryStore:
                 evidence_id = self._evidence_id(item["source"])
                 existing = next((m for m in memories if m.get("id") == memory_id), None)
                 if existing is None:
-                    if item["explicit"] and item["kind"] in {"fact", "interaction_preference"}:
+                    if item["explicit"] and item["kind"] in {"fact", "interaction_preference", "request"}:
                         status = "confirmed"
                     elif item["kind"] == "commitment":
                         status = "active"
@@ -1291,7 +1366,12 @@ class ShadowMemoryStore:
                     }
                     if item.get("habit"):
                         existing["habit"] = item["habit"]
-                    expires_at = _fact_expires_at(item, now) or _commitment_expires_at(item, now)
+                    if item["kind"] == "request":
+                        existing["target"] = item.get("target")
+                        existing["scope"] = item.get("scope")
+                    expires_at = (_fact_expires_at(item, now)
+                                  or _commitment_expires_at(item, now)
+                                  or _request_expires_at(item, now))
                     if expires_at:
                         existing["expires_at"] = expires_at
                     memories.append(existing)
@@ -1322,7 +1402,12 @@ class ShadowMemoryStore:
                     if item.get("habit"):
                         # 同一条习惯又被提到：用最新的结构化字段（模型修正/人工补的覆盖旧推导）。
                         existing["habit"] = item["habit"]
-                    expires_at = _fact_expires_at(item, now) or _commitment_expires_at(item, now)
+                    if item["kind"] == "request":
+                        existing["target"] = item.get("target")
+                        existing["scope"] = item.get("scope")
+                    expires_at = (_fact_expires_at(item, now)
+                                  or _commitment_expires_at(item, now)
+                                  or _request_expires_at(item, now))
                     if expires_at:
                         existing["expires_at"] = expires_at   # 近况/承诺被再次提到 → 续期
                     if item["explicit"]:
@@ -1342,6 +1427,7 @@ class ShadowMemoryStore:
                 if item["explicit"] and (
                     item["kind"] == "interaction_preference"
                     or item["kind"] == "commitment"   # 同一承诺 key 只留最新一条（旧值顶替）
+                    or item["kind"] == "request"      # 同一 target 只留最新一条（请求更新/撤销）
                     or (item["kind"] == "fact" and (
                         item["temporal_scope"] == "current"
                         or item["key"] in _SINGLE_VALUED_FACT_KEYS
@@ -1669,6 +1755,42 @@ class ShadowMemoryStore:
         active = self._active_memories(user_id, now=now, session_id=session_id)
         return self._fit(self._commitment_lines(active, query or "", used_out=used_ids),
                          COMMITMENT_BUDGET_CHARS)
+
+    def build_request_context(self, user_id: str, *, now: datetime | None = None,
+                              used_ids: list | None = None) -> str:
+        """长期请求块：用户希望她以后怎么对待自己（频率/方式）。
+
+        只做背景事实，不写“请执行”；频率由输出侧预算配平。request_address 时
+        如果名字已存在，顺手带上，避免模型还得猜/调工具。
+        """
+        active = self._active_memories(user_id, now=now)
+        requests = [m for m in active if m.get("kind") == "request"]
+        if not requests:
+            return ""
+        requests.sort(key=lambda m: str(m.get("last_observed_at") or ""), reverse=True)
+        chosen, seen = [], set()
+        for m in requests:
+            key = str(m.get("key") or "")
+            if key in seen:
+                continue
+            seen.add(key)
+            chosen.append(m)
+            if len(chosen) >= 3:
+                break
+        name = _request_peer_name(active)
+        lines = []
+        for m in chosen:
+            text = str(m.get("value") or "").strip()
+            if not text:
+                continue
+            if str(m.get("key")) == "request_address" and name:
+                text += f"（他叫{name}）"
+            lines.append(text)
+            if used_ids is not None and m.get("id"):
+                used_ids.append(str(m["id"]))
+        if not lines:
+            return ""
+        return inj.T("profile", "request", rendered="；".join(lines))
 
     def build_context(
         self,

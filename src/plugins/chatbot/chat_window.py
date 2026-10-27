@@ -449,23 +449,24 @@ _sticker_state: dict[str, dict] = {}
 def _sticker_st(target_id: str) -> dict:
     return _sticker_state.setdefault(
         target_id, {"turns": STICKER_COOLDOWN_TURNS, "recent": [],
-                    "topic": None, "sent": False})
+                    "sent": False, "topic": None})
 
 
 async def _maybe_send_sticker(win: _UserWindow, reply: str) -> None:
-    """冷却到点 + 这个话题还没发过 + 有十分对应的表情 → 补发一张。
+    """双闸：同一话题只发一张 + 发过之后 5 轮内不再发。
 
-    ⚠️ 2026-10-23 用户定：**同一个话题只发一张**（不是每 3 轮一张）。
-    话题标识用 session_memory 的 `topic_since`：转话题/冷场后重置，允许下一张。
-    原来的“每 3 轮”冷却保留，只作为“同一个话题里没匹配到就隔几轮再试”的节流。
+    - 话题闸：同一 `topic_since` 已经发过 → 跳过。只有换话题才解除。
+    - 轮次闸：任何一次发送后 `STICKER_COOLDOWN_TURNS=5` 轮内不再问模型；
+      即使几十秒内换了话题，也挡住（2026-10-24 用户定，实测话题探测会几十秒切一次）。
+    - 两闸是 AND：两条都满足才可能发。
     """
     st = _sticker_st(win.target_id)
     kind = "private" if win.is_private else "group"
     topic = str(session_memory.get_session(win.target_id).get("topic_since") or "")
     if st.get("topic") != topic:
+        # 新话题：解除“同话题一张”，但 **turns 不重置**，5 轮闸继续生效
         st["topic"] = topic
         st["sent"] = False
-        st["turns"] = STICKER_COOLDOWN_TURNS   # 新话题允许立刻试一次
     if st.get("sent"):
         log_event("topic_used", session=win.target_id, kind=kind)
         return
@@ -494,6 +495,7 @@ async def _maybe_send_sticker(win: _UserWindow, reply: str) -> None:
         log_event("sent_failed", session=win.target_id, kind=kind, sticker=hit, why=str(e))
     st["turns"] = 0
     st["sent"] = True
+    st["topic"] = topic
     st["recent"] = ([hit.get("group") or hit["id"]] + st["recent"])[:STICKER_RECENT_KEEP]
 
 

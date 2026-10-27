@@ -49,6 +49,8 @@ PROMPT = (
     "- **双重否定还原成肯定**：「没有不爱」= 她是喜欢的；\n"
     "- **反话写成本意**：「你可真行」= 她在嘲讽对方，不要照字面写成夸奖；\n"
     "- **保留不确定**：「可能/大概/说不定」不要写成确定；\n"
+    "- **环境/外部状态不写成事实**：她随口说的网速、网络、天气、时间、设备/平台卡顿，"
+    "只写她当时的说法/态度（如「她拿网速当借口敷衍对方」），不要把“她那边网速不好”本身写成事实；\n"
     "- **不要加解释、不要评价、不要补因果**；一条只写主要意思；\n"
     "- **绝对不要**在转述里出现「才不」「才没」「少来」「别来这套」「突然说这个」这些原话；\n"
     "- 每条不超过 35 字。\n"
@@ -68,6 +70,38 @@ PROMPT = (
 )
 _JSON_RE = re.compile(r"\{.*\}", re.S)
 _BAD_GIST_RE = re.compile(r"才不|才没|少来|突然说这个|别来这套")
+
+# 她自己的“环境/外部状态”说法：网速、天气、时间、设备……不能变成可引用的事实。
+# 否则会像“虚拟澳洲风很大/网不好”一样，被反复当成她那边真实发生的事。
+_ENV_CLAIM_RE = re.compile(
+    r"(网速|网络|网卡|断网|信号|天气|气温|下雨|下雪|风大|风很大|风好大|台风|降温|升温|"
+    r"卡顿|加载半天|连不上|平台|设备|电脑|手机)")
+_SELF_ENV_RE = re.compile(
+    r"(虚拟[一-龥]{2,6}|她那边|她这边|自己那边|她家|她的网|她的设备|她那边的)")
+_ENV_SPEECH_MARKERS = ("抱怨", "吐槽", "敷衍", "借口", "解释", "否认", "反问", "表示", "提到")
+
+
+def _sanitize_gist(source: str, gist: str) -> str:
+    """她自己的环境/外部状态说法 → 只保留“她在说/找借口”，不保留世界状态。
+
+    ⚠️ 只处理**她自己的**；gist 明确说的是“对方/他”的网/天气，原样保留。
+    这是防止她自己的即兴（网速/天气/时间/设备）被历史回喂成事实。
+    """
+    g = (gist or "").strip()
+    if not g or not _ENV_CLAIM_RE.search(g):
+        return g
+    other = ("对方" in g) or ("他" in g and "她" not in g)
+    if other and not _SELF_ENV_RE.search(g):
+        return g
+    if not (_SELF_ENV_RE.search(g) or (g.startswith("她") and not other)):
+        return g
+    if any(x in g for x in ("抱怨", "吐槽")):
+        return "她拿环境/设备状态当借口抱怨，可能只是随口一说。"
+    if "否认" in g:
+        return "她拿环境/设备状态解释/否认，可能只是随口一说。"
+    if "解释" in g or "表示" in g:
+        return "她拿环境/设备状态当解释，可能只是随口一说。"
+    return "她提到环境/设备状态，可能只是随口一说，不是事实。"
 
 
 def enabled() -> bool:
@@ -153,6 +187,7 @@ async def gist_texts(texts: list[str], client=None) -> dict[str, str]:
             if gists and len(gists) == len(chunk):
                 bad = 0
                 for src, g in zip(chunk, gists):
+                    g = _sanitize_gist(src, g)
                     if not (0 < len(g) <= 80) or _BAD_GIST_RE.search(g):
                         bad += 1
                         continue
@@ -164,7 +199,7 @@ async def gist_texts(texts: list[str], client=None) -> dict[str, str]:
                 print(f"⚠️ 自述转述条数不符（{len(gists or [])}/{len(chunk)}），这批原样注入")
         except Exception as e:
             print(f"⚠️ 自述转述失败（原样注入）: {type(e).__name__}")
-    return {t: _CACHE[_key(t)] for t in uniq if _key(t) in _CACHE}
+    return {t: _sanitize_gist(t, _CACHE[_key(t)]) for t in uniq if _key(t) in _CACHE}
 
 
 async def prewarm(text: str, client=None) -> None:

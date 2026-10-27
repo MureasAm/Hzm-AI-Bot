@@ -23,8 +23,9 @@
 **配图也给它看**（`image_paths`）：她在内容里写"⬇️/这个/图片里那个"时指的是配图，
 不给图它就只会拿正文里别的名字瞎填（2026-09-27 实测踩坑）。
 
-**任何失败都返回 None**。调用方（bili_bridge / weibo_bridge）**无论成败都会先发原文通知**，
-返回 None 只是"少她那句"，信息不会丢（两个桥现在都是「原文 + 她那句」两条）。
+**投递**（2026-10-23 用户定）：主动发言生成后只发她那句——语音优先，失败/不适合再发文字；
+不再推动态/微博原文，配图随她说的话一起发。`broadcast_proactive` 负责广播：
+**同一句话只合成一次 TTS**，再按并发上限并行发给所有目标（300 人时这是关键）。
 """
 import asyncio
 import os
@@ -37,6 +38,8 @@ from .config import (
     parse_json_block, set_llm_route, get_vision_client,
 )
 from .core import gather_retrieval, build_message_list
+from .memory import append_bot_message
+from ._bridge_common import to_memory_line
 from .vision import describe_image_bytes
 
 # 主动发言的长度上限：私聊里蹦出一大段很出戏
@@ -275,6 +278,88 @@ async def deliver_proactive(bot, user_id, text: str,
         msg += MessageSegment.image(file=str(p))
     await bot.send_private_msg(user_id=user_id, message=msg)
     return "text"
+
+
+async def broadcast_proactive(bot, targets, text: str,
+                              image_paths: list | None = None, *,
+                              voice: bool = False, record: bool = True) -> dict:
+    """把一条主动发言广播给多个用户：**TTS 只合成一次**，再按并发上限并行发送。
+
+    为什么单独有这个（2026-10-24）：300 个好友逐个 `send_voice` 会串行跑——每个都要
+    等 TTS 锁、复检缓存、再发消息，整体几十秒起步。这里把合成挪到循环外，发送用
+    `asyncio.Semaphore` 限并发（默认 8，可用 `PROACTIVE_PUSH_CONCURRENCY` 调），
+    单个好友失败不影响其他人。
+    """
+    from nonebot.adapters.onebot.v11 import Message, MessageSegment
+
+    from .voice import prepare_proactive_tts, send_voice_file, synthesize_voice
+
+    ids = list(dict.fromkeys(str(t) for t in (targets or []) if t))
+    if not ids:
+        return {"voice": 0, "text": 0, "failed": 0, "total": 0}
+    try:
+        concurrency = max(1, int(os.environ.get("PROACTIVE_PUSH_CONCURRENCY", "8")))
+    except ValueError:
+        concurrency = 8
+
+    wav_path = None
+    if voice:
+        prepared, why = prepare_proactive_tts(text)
+        if prepared:
+            wav_path = await synthesize_voice(prepared)
+            if wav_path is None:
+                print("[主动] 语音合成失败 → 全量改发文字")
+        else:
+            print(f"[主动] 内容不适合语音（{why}）→ 全量改发文字")
+
+    sem = asyncio.Semaphore(concurrency)
+    stats = {"voice": 0, "text": 0, "failed": 0, "total": len(ids)}
+
+    async def _send_text(uid: str) -> None:
+        msg = Message(text)
+        for p in (image_paths or []):
+            msg += MessageSegment.image(file=str(p))
+        await bot.send_private_msg(user_id=uid, message=msg)
+
+    async def _send_images(uid: str) -> None:
+        if not image_paths:
+            return
+        try:
+            msg = Message()
+            for p in image_paths:
+                msg += MessageSegment.image(file=str(p))
+            await bot.send_private_msg(user_id=uid, message=msg)
+        except Exception as e:
+            print(f"⚠️ 主动语音配图发送失败（语音已发）user={uid}: {e}")
+
+    async def one(uid: str) -> None:
+        async with sem:
+            try:
+                if wav_path:
+                    try:
+                        ok = await send_voice_file(bot, uid, True, wav_path)
+                    except Exception as e:
+                        print(f"⚠️ 主动语音发送异常（改发文字）user={uid}: {e}")
+                        ok = False
+                    if ok:
+                        await _send_images(uid)
+                        stats["voice"] += 1
+                    else:
+                        await _send_text(uid)
+                        stats["text"] += 1
+                else:
+                    await _send_text(uid)
+                    stats["text"] += 1
+                if record:
+                    append_bot_message(uid, to_memory_line(text))
+            except Exception as e:
+                stats["failed"] += 1
+                print(f"⚠️ 主动推送失败 user={uid}: {e}")
+
+    await asyncio.gather(*(one(uid) for uid in ids))
+    print(f"[主动] 广播 {len(ids)} 人：语音 {stats['voice']} / 文字 {stats['text']} / "
+          f"失败 {stats['failed']}（并发 {concurrency}）")
+    return stats
 
 
 async def compose_proactive(content: str, source: str = "B站",

@@ -713,6 +713,14 @@ class TestRitualPreference:
         assert "固定仪式" in prompt
         assert "仪式感的晚安" in prompt
 
+    def test_extract_prompt_teaches_structured_habit(self):
+        """习惯要带 type/cadence/period/cues，而不是只写一句“有…习惯”。"""
+        from src.plugins.chatbot import memory_v2
+        prompt = memory_v2.MEMORY_V2_EXTRACT_PROMPT
+        assert '"habit"' in prompt
+        for field in ("cadence", "period", "cues", "routine", "interaction", "once"):
+            assert field in prompt
+
 
 class TestContextSegments:
     """`build_context` 拆成两段：靠前相处方式 / 中段约定（情绪已搬去会话记忆）。"""
@@ -1075,3 +1083,153 @@ class TestTimePeriodFacts:
         mem = next(m for m in store.snapshot("u1")["memories"]
                    if m["key"] == "morning_running")
         assert mem["id"] in ids
+
+
+class TestHabitHint:
+    """结构化习惯：只对拥有这条记忆的用户、在真正相关的情况下出现（2026-10-26）。
+
+    旧版靠“消息短 + value 里有早上”猜；这套测试锁住升级后的边界：
+    - 作息（routine）才可能按时段召回，互动（interaction）只按线索召回；
+    - 每周/一次性计划不冒充“每天的习惯”；
+    - “在吗/早上吃什么”不算打招呼；
+    - 否定/取消/最近已提过 → 不再追着问。
+    """
+
+    def _seed(self, store, clock, key="habit_morning_run",
+              value="每天早上起床后都要跑步/跑操（学校要求）", habit=None):
+        item = {
+            "kind": "fact", "key": key, "value": value,
+            "action": "upsert", "temporal_scope": "timeless", "valid_for": "none",
+            "explicit": True, "confidence": 1.0,
+        }
+        if habit is not None:
+            item["habit"] = habit
+        return store.ingest("u1", [item], source=_source(now=clock), now=clock)
+
+    def test_hint_only_for_owner_and_greeting(self, store, clock):
+        self._seed(store, clock)
+        morning = clock.replace(hour=7)
+        hint = store.build_habit_hint("u1", "早", now=morning)
+        # 只念 value，不把英文 key 塞给模型；话术不再写死“今天也去吗”
+        assert "他每天早上起床后都要跑步/跑操" in hint
+        assert "今天还照不照常" in hint
+        assert "habit_morning_run" not in hint
+        assert "今天也去" not in hint
+        # 别人没有这条记忆 → 不出现
+        assert store.build_habit_hint("u2", "早", now=morning) == ""
+        # 同一个人的午饭话题 → 不把早操塞进去
+        assert store.build_habit_hint("u1", "今天中午吃什么", now=morning) == ""
+        # 短消息不等于问候：以前“在吗/早上吃什么”也会触发
+        assert store.build_habit_hint("u1", "在吗", now=morning) == ""
+        assert store.build_habit_hint("u1", "早上吃什么", now=morning) == ""
+
+    def test_morning_template_does_not_assume_going_out(self, store, clock):
+        """话术要适用于喝咖啡/背单词，不能写死“今天也去”。"""
+        self._seed(store, clock, key="habit_morning_coffee",
+                   value="每天早上都要喝一杯咖啡")
+        hint = store.build_habit_hint("u1", "早", now=clock.replace(hour=7))
+        assert "他每天早上都要喝一杯咖啡" in hint
+        assert "今天还照不照常" in hint
+        assert "今天也去" not in hint
+
+    def test_interaction_habit_not_triggered_by_time(self, store, clock):
+        """表情包/撒娇是互动习惯，不该在晚安时按“夜间时段”自动翻出来。"""
+        self._seed(store, clock, key="habit_expression_sticker",
+                   value="用户习惯用表情包撒娇、求语音",
+                   habit={"type": "interaction", "cadence": "daily",
+                          "period": "night", "cues": ["表情包", "撒娇", "语音"]})
+        night = clock.replace(hour=22)
+        assert store.build_habit_hint("u1", "晚安", now=night) == ""
+        hint = store.build_habit_hint("u1", "发个表情包", now=night)
+        assert "他习惯用表情包" in hint
+        assert "不是这一轮必须执行" in hint
+
+    def test_weekly_habit_not_triggered_by_morning_greeting(self, store, clock):
+        """每周三次的 3 公里不是“每天早上”，不能在每个“早”里都提。"""
+        self._seed(store, clock, key="habit_run_3km_weekly",
+                   value="除早上的日常跑外，每周还有三次 3 公里跑")
+        morning = clock.replace(hour=7)
+        assert store.build_habit_hint("u1", "早", now=morning) == ""
+        hint = store.build_habit_hint("u1", "今天跑了3公里", now=morning)
+        assert "3 公里" in hint
+
+    def test_one_off_plan_is_not_a_fixed_habit(self, store, clock):
+        """今晚熬夜看比赛是一次性计划，不能当成每天的习惯。"""
+        self._seed(store, clock, key="habit_stay_up_late",
+                   value="今晚要熬夜看比赛")
+        night = clock.replace(hour=3)
+        assert store.build_habit_hint("u1", "又熬夜了", now=night) == ""
+        assert store.build_habit_hint("u1", "看比赛吗", now=night) == ""
+
+    def test_negative_or_cancelled_routine_is_not_prompted(self, store, clock):
+        """他说“不跑了/取消了”时，提示不能还叫他“今天也去”。"""
+        self._seed(store, clock)
+        morning = clock.replace(hour=7)
+        assert store.build_habit_hint("u1", "今天不跑操了", now=morning) == ""
+        assert store.build_habit_hint("u1", "跑操取消了", now=morning) == ""
+
+    def test_negative_check_does_not_swallow_sleep_state(self, store, clock):
+        """"还没睡"是夜间状态的线索，不是“今天不熬夜”的例外。"""
+        self._seed(store, clock, key="habit_late_night",
+                   value="每天深夜凌晨还没睡")
+        night = clock.replace(hour=3)
+        assert "每天深夜" in store.build_habit_hint("u1", "还没睡", now=night)
+        assert store.build_habit_hint("u1", "今天不熬夜了", now=night) == ""
+
+    def test_recent_bot_mention_suppresses_repeat(self, store, clock):
+        """最近几轮她已经提过这条习惯 → 这轮不再重复提示。"""
+        self._seed(store, clock)
+        morning = clock.replace(hour=7)
+        assert store.build_habit_hint(
+            "u1", "早", now=morning, recent_bot_text="今天也去跑操吗？") == ""
+        assert store.build_habit_hint(
+            "u1", "早", now=morning, recent_bot_text="今天天气不错") != ""
+
+    def test_habit_metadata_is_derived_and_stored(self, store, clock):
+        accepted = self._seed(store, clock)
+        meta = accepted[0]["habit"]
+        assert meta["type"] == "routine"
+        assert meta["cadence"] == "daily"
+        assert meta["period"] == "morning"
+        assert "跑操" in meta["cues"]
+        assert "跑步" in meta["cues"]
+
+    def test_legacy_habit_without_meta_is_derived_on_read(self):
+        meta = memory_v2._habit_meta(
+            {"key": "habit_late_night", "value": "每天深夜凌晨还没睡"})
+        assert meta["type"] == "routine"
+        assert meta["cadence"] == "daily"
+        assert meta["period"] == "night"
+
+    def test_habit_meta_accepts_chinese_aliases(self):
+        meta = memory_v2.normalize_habit_metadata(
+            {"type": "互动", "cadence": "每周", "period": "晚上",
+             "cues": "表情包，撒娇"},
+            key="habit_x", value="随便")
+        assert meta["type"] == "interaction"
+        assert meta["cadence"] == "weekly"
+        assert meta["period"] == "evening"
+        assert meta["cues"] == ["表情包", "撒娇"]
+
+    def test_same_habit_key_new_value_supersedes_old(self, store, clock):
+        self._seed(store, clock, value="每天早上跑操")
+        self._seed(store, clock, value="每天早上跑操（学校要求）")
+        active = store._active_memories("u1", now=clock)
+        values = [m["value"] for m in active if m["key"] == "habit_morning_run"]
+        assert values == ["每天早上跑操（学校要求）"]
+
+    def test_habit_excluded_from_generic_facts(self, store, clock):
+        self._seed(store, clock)
+        active = store._active_memories("u1", now=clock)
+        selected = store._select_facts(active, "早")
+        assert all(not str(m.get("key", "")).startswith("habit_") for m in selected)
+
+    def test_hint_reaches_user_message_tail(self, store, clock, monkeypatch):
+        from src.plugins.chatbot import core
+
+        monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "")
+        monkeypatch.setattr(core, "load_schedule", lambda: {})
+        msgs = core.build_message_list(
+            "早", [], [], habit_hint="【你记得的事】测试")
+        assert msgs[-1]["role"] == "user"
+        assert msgs[-2]["content"] == "【你记得的事】测试"

@@ -757,6 +757,20 @@ def _run_weekly_review(args):
 
 # ==================== 主入口 ====================
 
+def _add_injection_audit(sub):
+    p = sub.add_parser("injection-audit", help="注入审计：按用户/消息看真正进入了哪些关系块与提醒")
+    p.add_argument("--user", required=True)
+    p.add_argument("--msg", required=True)
+    p.add_argument("--old", action="store_true", help="审计旧链路")
+    p.set_defaults(func=_run_injection_audit)
+
+
+def _run_injection_audit(args):
+    import asyncio
+    import injection_audit
+    asyncio.run(injection_audit.run(args.user, args.msg, v3=not args.old))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="run_tool",
@@ -803,6 +817,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_proactive_ab(sub)
     _add_model_ab(sub)
     _add_weekly_review(sub)
+    _add_injection_audit(sub)
     return parser
 
 

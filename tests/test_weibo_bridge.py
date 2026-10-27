@@ -13,6 +13,7 @@ import json
 import pytest
 
 from src.plugins.chatbot import weibo_bridge as wb
+from src.plugins.chatbot import proactive as pr
 
 
 @pytest.fixture(autouse=True)
@@ -518,7 +519,7 @@ class TestPushRecordsIntoMemory:
     @pytest.fixture(autouse=True)
     def _spy(self, monkeypatch):
         self.recorded = []
-        monkeypatch.setattr(wb, "append_bot_message",
+        monkeypatch.setattr(pr, "append_bot_message",
                             lambda uid, text: self.recorded.append((uid, text)))
 
     async def test_success_records_per_friend(self, monkeypatch):

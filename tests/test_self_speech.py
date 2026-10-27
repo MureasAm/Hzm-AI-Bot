@@ -65,6 +65,27 @@ async def test_rewrites_group_reply_to_line():
 
 
 @pytest.mark.asyncio
+async def test_environment_claim_is_sanitized():
+    assert "网速" not in self_speech._sanitize_gist(
+        "x", "她提到虚拟澳洲的网速很慢，能回话就不错了。")
+    assert "风" not in self_speech._sanitize_gist(
+        "x", "她抱怨虚拟澳洲今天风很大。")
+    # 对方的环境/普通事实不动
+    assert self_speech._sanitize_gist("x", "她抱怨对方网速慢。") == "她抱怨对方网速慢。"
+    assert self_speech._sanitize_gist("x", "她提到明天要早起。") == "她提到明天要早起。"
+
+
+@pytest.mark.asyncio
+async def test_old_cached_environment_gist_is_sanitized(monkeypatch):
+    src = "虚拟澳洲网速太差了"
+    monkeypatch.setattr(self_speech, "_CACHE",
+                        {self_speech._key(src): "她提到虚拟澳洲的网速很差。"})
+    monkeypatch.setattr(self_speech, "_CACHE_LOADED", True)
+    out = await self_speech.gist_texts([src])
+    assert "网速" not in out[src]
+
+
+@pytest.mark.asyncio
 async def test_fail_open_on_api_error():
     hist = ["灰泽满：少来，灰泽满才不承认。"]
     msg = "你好"
