@@ -3,6 +3,7 @@
 纯函数，不依赖 NoneBot 运行时状态——chat_window 发送前、core 生成后都用它。
 从 core.py 拆出，让 core 专注"消息组装 + 生成"。
 """
+import os
 import random
 import re
 from collections import Counter
@@ -335,18 +336,84 @@ def _join_fragments(frags: list) -> str:
     return out
 
 
+def _split_on_commas(text: str, max_parts: int) -> list:
+    """逗号即分段（2026-10-27）：句末和逗号都切，逗号本身丢掉。
+
+    括号/引号内的逗号不切；逗号后紧跟括号/引号时保留这个逗号（那是停顿，不是断句）。
+    纯括号开头的段并入上一段，避免单独发一条舞台说明。超 max_parts 用空格接。
+    """
+    out = []
+    for s in _split_sentences(text):
+        s = s.strip().rstrip("。").strip()
+        if not s:
+            continue
+        buf, depth, quote = [], 0, False
+        for i, ch in enumerate(s):
+            buf.append(ch)
+            if ch in "（(【[":
+                depth += 1
+            elif ch in "）)】]":
+                depth = max(0, depth - 1)
+            elif ch in "“「『":
+                quote = True
+            elif ch in "”」』":
+                quote = False
+            elif ch == "，" and depth == 0 and not quote:
+                nxt = s[i + 1:].lstrip()[:1]
+                if nxt in ("（", "(", "“", "「"):
+                    continue
+                buf.pop()
+                piece = "".join(buf).strip().rstrip("，").strip()
+                if piece:
+                    out.append(piece)
+                buf = []
+        piece = "".join(buf).strip().rstrip("，").strip()
+        if piece:
+            out.append(piece)
+
+    merged = []
+    for p in out:
+        if merged and re.match(r"^[（(]", p):
+            merged[-1] += p
+        else:
+            merged.append(p)
+    # 只有 1 字碎片（“？”“嗯”）并入下一段；“好啦”“还不太熟嘛”这种 2 字以上
+    # 的短句保留独立——真人发消息本来就会连发几条短的。
+    kept, i = [], 0
+    while i < len(merged):
+        if i + 1 < len(merged) and len(merged[i]) < 2:
+            merged[i + 1] = merged[i] + merged[i + 1]
+        else:
+            kept.append(merged[i])
+        i += 1
+    merged = kept
+    if len(merged) > max_parts:
+        merged = merged[:max_parts - 1] + [" ".join(merged[max_parts - 1:])]
+    return merged
+
+
 def split_reply(reply: str, min_len: int = SPLIT_MIN_LEN,
                 max_parts: int = SPLIT_MAX_PARTS) -> list:
-    """把长回复按句子断开发送（打字感）。短回复/单句不拆，返回单元素列表。
+    """把长回复断开发送（打字感）。短回复/单句不拆，返回单元素列表。
 
-    切分规则：
-    - 句末标点（。！？）切分；省略号仅在后面还有新内容（≥5 字）时才切
-    - 逗号限制：每段至多 1 个逗号，超了从最后一个逗号拆开
-    - 聊天习惯不打句号：切分后去掉句尾"。"（保留？！…）
-    - 短碎片并入下一段；纯括号段并入上一段；超 max_parts 并入最后一段
+    默认走**逗号分段**（2026-10-27 用户定）：句末标点（。！？）和逗号都切，
+    逗号本身丢弃——发出去的是几条不带逗号的短句，更像真人打字。
+    括号/引号内的逗号不切；纯括号段并入上一段；短碎片不并回（避免把逗号段
+    重新焊成 run-on）；超 max_parts 用空格接。`SPLIT_ON_COMMA=0` 可回退旧逻辑。
+
+    旧逻辑（回退时）：句末标点切分；每段至多 1 个逗号；短碎片并入下一段；
+    超 max_parts 用逗号接。
     """
     text = reply.strip().rstrip("。")
-    if not text or len(text) < min_len:
+    if not text:
+        return [""]
+
+    comma_mode = os.environ.get("SPLIT_ON_COMMA", "1").strip().lower() not in (
+        "0", "false", "no", "off")
+    if comma_mode:
+        parts = _split_on_commas(text, max_parts)
+        return parts or [text]
+    if len(text) < min_len:
         return [text]
 
     parts = _split_sentences(text)

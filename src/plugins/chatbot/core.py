@@ -796,6 +796,14 @@ def build_message_list(user_msg: str, fused_items: list,
         hit_blocks.append("tool_note")
         _mark("tool_note")
 
+    # 自称方式（第 21 块，2026-10-27 用户定）：骨架里不再写整段自称规则，
+    # 只在**所有注入之后、用户消息之前**留一句弱约束。实测（60 条真实消息）：
+    # 名字自指 28%、第一人称 7%、才不 13%、名字+才 7%、名字起手 2%——
+    # 比整段规则更自然，也避开了“名字+才”的固定句式。允许少量“我”，别再改回整段。
+    messages.append({"role": "system", "content": inj.T("selfref")})
+    hit_blocks.append("selfref")
+    _mark("selfref")
+
     # 运行时块级开火留痕（scene_* / 12–19；真实聊天路径才写，离线实验/回归不污染）
     if log_hits and get_llm_route() in ("私", "群"):
         log_block_hits(hit_blocks)

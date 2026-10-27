@@ -15,34 +15,34 @@ class TestSplitReply:
     def test_single_sentence_not_split(self):
         assert reply_style.split_reply("今天天气真不错啊") == ["今天天气真不错啊"]
 
-    def test_short_clauses_merge_to_one(self):
-        # 短句+短句合并成一条自然消息，不再拆成碎条（"哦？"不该单独成条）
-        assert reply_style.split_reply("今天好冷。你那边呢？") == ["今天好冷。你那边呢？"]
+    def test_short_sentences_split_apart(self):
+        # 逗号分段模式：短句也各自成条（真人就是这样连发的），不再焊回一条
+        assert reply_style.split_reply("今天好冷。你那边呢？") == ["今天好冷", "你那边呢？"]
 
     def test_ellipsis_short_leadin_not_split(self):
         # 省略号前文太短（"唱拉了……"是犹豫前缀）不切，避免把"灰泽满……"单独发一条
         assert reply_style.split_reply("唱拉了……灰泽满先关上门悄悄听会儿。") == \
             ["唱拉了……灰泽满先关上门悄悄听会儿"]
 
-    def test_trailing_short_text_merged(self):
-        # 结尾短段（嗯）并入前段，不单独成条
-        assert reply_style.split_reply("今天好冷。嗯", min_len=0) == ["今天好冷。嗯"]
+    def test_trailing_short_text_kept_as_message(self):
+        # 结尾的“嗯”单独一条也像真人；只在开头 1-2 字碎片才并入下一段
+        assert reply_style.split_reply("今天好冷。嗯", min_len=0) == ["今天好冷", "嗯"]
 
-    def test_micro_fragments_merge_to_natural(self):
-        # 核心：短惊讶碎片（哦？/睡醒了？/那倒是稀奇……）合并成一条自然消息，不再戏剧节拍
+    def test_micro_fragments_merge_into_next(self):
+        # 只有 1 字碎片并入下一段；“哦？”“好啦”这类 2 字短句独立成条（真人连发）
         assert reply_style.split_reply(
             "哦？睡醒了？那倒是稀奇……灰泽满这个点刚准备睡，你却醒了", min_len=0
-        ) == ["哦？睡醒了？那倒是稀奇……", "灰泽满这个点刚准备睡，你却醒了"]
+        ) == ["哦？", "睡醒了？", "那倒是稀奇……", "灰泽满这个点刚准备睡 你却醒了"]
 
     def test_min_len_respected(self):
         # 低于 min_len 不拆；末尾句号仍会被去掉
         assert reply_style.split_reply("好。", min_len=10) == ["好"]
 
-    def test_comma_split_kept_when_long(self):
-        # 长句的逗号拆分保留（只有短碎片才并回）
+    def test_commas_become_message_boundaries(self):
+        # 逗号即分段：长句里的逗号切成多条，逗号本身不再出现在消息里
         assert reply_style.split_reply(
             "灰泽满今天特别想出去玩，但是作业还没写完，明天还得早起去上第一节课", min_len=0
-        ) == ["灰泽满今天特别想出去玩，但是作业还没写完", "明天还得早起去上第一节课"]
+        ) == ["灰泽满今天特别想出去玩", "但是作业还没写完", "明天还得早起去上第一节课"]
 
     def test_ellipsis_hesitation_preserved(self):
         # 省略号表"无语/语气"（后面没新内容）不切
@@ -59,23 +59,25 @@ class TestSplitReply:
         # 短首句被并回后 split_reply 走 `return [text]` 原样返回，换行曾就此漏进消息
         reply = reply_style.clean_reply("没有。\n\n（小声）mua又不是糖，说给就给的")
         parts = reply_style.split_reply(reply)
-        assert parts == ["没有。（小声）mua又不是糖，说给就给的"]
+        assert parts == ["没有（小声）mua又不是糖", "说给就给的"]
         assert not any("\n" in p for p in parts)
 
-    def test_merged_fragments_get_comma_not_runon(self):
-        # 短碎片并回时补逗号：三句碎句不该被焊成"真的是这样明天还要早起呢"
+    def test_no_comma_no_runon(self):
+        # 逗号分段后消息里不再有逗号；超限用空格接，不焊成 run-on
         parts = reply_style.split_reply(
             "真的是这样。明天还要早起呢。我先去睡了啊。你也早点休息。晚安。", min_len=0)
         assert not any("\n" in p for p in parts)
-        assert parts[0] == "真的是这样，明天还要早起呢"
+        assert not any("，" in p for p in parts)
+        assert parts[0] == "真的是这样"
+        assert parts[-1] == "你也早点休息 晚安"
 
     def test_overflow_parts_joined_without_newline(self):
-        # 超限分段（>max_parts）接成一条，用逗号不用换行
+        # 超限分段（>max_parts）接成一条，用空格不用换行、也不用逗号
         long_reply = "灰泽满今天特别想出去玩，但是作业还没写完。" * 6
         parts = reply_style.split_reply(long_reply, min_len=0, max_parts=2)
         assert len(parts) == 2
         assert not any("\n" in p for p in parts)
-        assert "，" in parts[1]
+        assert " " in parts[1] and "，" not in parts[1]
 
 
 class TestEchoReply:
@@ -885,11 +887,11 @@ class TestMemoryV2Segments:
         emotion_i = next(i for i, m in enumerate(msgs) if "此刻的情绪" in m["content"])
         user_i = len(msgs) - 1
 
-        # 顺序：相处方式靠前 < 约定中段 < 情绪紧挨用户消息（末尾，只输给【当前时间】）。
+        # 顺序：相处方式靠前 < 约定中段 < 情绪紧挨用户消息（只输给末尾的自称一句）。
         assert profile_i < commit_i < emotion_i
-        assert emotion_i == user_i - 1
-        # 情绪后面就是用户消息本身（时间/情绪都在尾部）。
+        assert emotion_i == user_i - 2
         assert msgs[user_i - 1]["role"] == "system"
+        assert "需要自称就用" in msgs[user_i - 1]["content"]
 
 
 class TestPrevSessionNote:
@@ -984,7 +986,7 @@ class TestCorpusTimePrefix:
         assert recorded["ids"] == ["42"]
         assert set(recorded["blocks"]) == {
             "commitment", "history", "same_request", "batch",
-            "query_hint", "now", "mood", "daily",
+            "query_hint", "now", "mood", "daily", "selfref",
         }
 
 
@@ -1029,7 +1031,7 @@ class TestInjectionTrace:
         assert trace["blocks"] == [
             "preferences", "core_stories", "terms", "behaviors", "corpus",
             "commitment", "history", "same_request", "batch", "query_hint",
-            "now", "mood", "daily",
+            "now", "mood", "daily", "selfref",
         ]
 
     def test_items_only_rendered_entries(self, monkeypatch):
@@ -1366,24 +1368,18 @@ class TestSceneBlock:
         assert "你就是灰泽满本人" in text
         assert "不是在撰写关于灰泽满的旁白" in text
 
-    def test_skeleton_scopes_third_person_to_self(self):
-        """第三人称只指自己；名字是默认自称但允许省略主语（2026-10-27）。
+    def test_self_reference_moved_out_of_skeleton(self):
+        """自称方式移出骨架，只保留注入末尾一句弱约束（2026-10-27）。
 
-        ⚠️ 两个**承重**部分不能动：
-        - “不要让‘灰泽满’当一句话的第一个词”——删掉后名字起手会明显上升；
-        - “指对方时仍然用‘你’”——删掉会出现“真拿灰泽满没办法”式代词错位。
-
-        2026-10-27 实测（2.5-lite，n=60，生产参数）：旧写法名字自指 91%、才 56%、
-        “名字+才”49%；“名字只在特定场合用”的签名式只剩 15–19%（过头）；
-        “多数用名字、顺口时可省主语”是 60%、才 38%、“名字+才”33%——名字率最接近一半。
-        所以保留“多数用名字 + 可省略主语”，不再要求每条都出现名字。
+        实测（60 条真实消息，2.5-lite）：名字自指 28%、第一人称 7%、才不 13%、
+        “名字+才” 7%、名字起手 2%。整段“不要让名字当第一个词”的规则会逼出
+        “名字+才”的固定否认；这里允许少量“我”，换取更自然的句式。不要改回整段。
         """
+        from src.plugins.chatbot import injection as inj
         text = core.SYSTEM_PROMPT
-        assert "多数回复用“灰泽满”或“hzm”自称" in text
-        assert "可以省略主语" in text
-        assert "不要让“灰泽满”当一句话的第一个词" in text
-        assert "指对方时仍然用" in text
-        assert "不要把指代对方的" in text
+        assert "自称方式固定" not in text
+        assert "不要让“灰泽满”当一句话的第一个词" not in text
+        assert inj.T("selfref") == "回复时，需要自称就用“灰泽满”或“hzm”；偶尔用一次“我”也没关系。"
 
 
 class TestAssociationInjection:

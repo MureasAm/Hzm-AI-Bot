@@ -38,9 +38,10 @@ def test_build_message_list_uses_v3_contexts():
     assert "【本场时段】" in joined
     assert "【预取】" in joined
     assert "【工具】" in joined
-    # 工具提示在用户消息之前
+    # 工具提示在用户消息之前，自称一句在最后
     assert msgs[-1]["role"] == "user"
-    assert msgs[-2]["content"].startswith("【工具】")
+    assert msgs[-3]["content"].startswith("【工具】")
+    assert "需要自称就用" in msgs[-2]["content"]
     # 不再出现旧的完整感知行（骨架正文里提到这个词不算）
     assert not any(m.get("content", "").startswith("【当前时间】") for m in msgs)
 

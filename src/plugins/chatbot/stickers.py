@@ -13,10 +13,13 @@
 """
 import json
 import os
+import random
+import re
 import time
 
 from .constants import PROJECT_ROOT, THINKING_DISABLED, STICKER_FILE
-from .config import log_cache_usage, _get_model_name, extract_chat_content
+from .config import log_cache_usage, _get_model_name, extract_chat_content, _get_clients, get_flag
+from .rag import embed_query, cosine_similarity
 
 #: 表情包决策流水（统计用）。**唯一的数据源**——在此之前"发了哪张"只 print 到控制台，
 #: 落盘一份才谈得上"哪些图从没被用过 / 哪一类被反复用"。读它的是 `scripts/sticker_stats.py`。
@@ -69,6 +72,136 @@ def sticker_enabled() -> bool:
     return os.environ.get("STICKER", "1") != "0"
 
 
+# ==================== 非 LLM 快路（2026-10-27） ====================
+# 表情包是装饰性判断：先规则闸掉明显不值得的回复，再用 embedding 选组；
+# 高置信度直接发，低置信度才回退 LLM（默认关闭，A/B 通过后开）。
+STICKER_FAST_MIN = 0.58
+STICKER_FAST_MARGIN = 0.04
+_GROUP_VECTORS = None
+_GROUP_VEC_PATH = PROJECT_ROOT / "data" / "sticker_group_vectors.json"
+
+_NEUTRAL_RE = re.compile(
+    r"^(嗯|哦|噢|好|好的|行|可以|知道|知道了|收到|没问题|ok|okay)[。！!…\.]*$", re.I)
+_FACT_RE = re.compile(
+    r"(周表|周[一二三四五六日天]|几点|几号|开播|下播|直播时间|时差|上课|下课|作业|考试|签到)")
+_EMO_RE = re.compile(r"(才不|才没|少来|哼|呜|哭|笑|哈|？|\?|！|!|…|嘛|啦|呢|啊|呀|吧|~)")
+
+
+def fast_enabled() -> bool:
+    return get_flag("STICKER_FAST", "0").strip().lower() in ("1", "true", "on", "yes")
+
+
+def fast_fallback_enabled() -> bool:
+    return get_flag("STICKER_FAST_FALLBACK", "1").strip().lower() in ("1", "true", "on", "yes")
+
+
+def _fast_float(name: str, default: float) -> float:
+    try:
+        return float(get_flag(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def fast_gate(reply: str) -> bool:
+    """这条回复值不值得进入表情包判断。只拦明显不值得的，宁漏勿错。"""
+    t = (reply or "").strip()
+    if not t or len(t) < 4:
+        return False
+    if "小满现在不在" in t:
+        return False
+    if _NEUTRAL_RE.match(t):
+        return False
+    if _FACT_RE.search(t) and not _EMO_RE.search(t):
+        return False
+    return True
+
+
+def _group_texts(items: list) -> dict:
+    groups = {}
+    for s in items:
+        groups.setdefault(s.get("group") or "其他", []).append(s)
+    out = {}
+    for g, ss in groups.items():
+        parts = []
+        for s in ss:
+            tag = "/".join(s.get("tags") or [])
+            parts.append(f"{s.get('desc', '')}（{tag}）适合：{s.get('use_when', '')}")
+        out[g] = f"{g}：" + "；".join(parts)
+    return out
+
+
+async def _load_group_vectors(zhipu_client=None) -> dict:
+    global _GROUP_VECTORS
+    if _GROUP_VECTORS is not None:
+        return _GROUP_VECTORS
+    items = load_stickers()
+    texts = _group_texts(items)
+    if not texts:
+        _GROUP_VECTORS = {}
+        return _GROUP_VECTORS
+    try:
+        if _GROUP_VEC_PATH.exists():
+            data = json.loads(_GROUP_VEC_PATH.read_text(encoding="utf-8"))
+            if data.get("texts") == texts and isinstance(data.get("vectors"), dict):
+                _GROUP_VECTORS = data["vectors"]
+                return _GROUP_VECTORS
+    except Exception:
+        pass
+    if zhipu_client is None:
+        _, zhipu_client = _get_clients()
+    vectors = {}
+    for g, text in texts.items():
+        v = await embed_query(zhipu_client, text)
+        if v:
+            vectors[g] = v
+    _GROUP_VECTORS = vectors
+    try:
+        _GROUP_VEC_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _GROUP_VEC_PATH.write_text(json.dumps({"texts": texts, "vectors": vectors},
+                                              ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
+    return vectors
+
+
+async def fast_pick(reply: str, avoid_groups: list | None = None,
+                    zhipu_client=None) -> dict | None:
+    """Embedding 选组；只有高置信度才返回，否则 None（交给 LLM 或直接不发）。"""
+    q = await embed_query(zhipu_client, reply) if zhipu_client is not None else None
+    if q is None:
+        if zhipu_client is None:
+            _, zhipu_client = _get_clients()
+        q = await embed_query(zhipu_client, reply)
+    if not q:
+        return None
+    vectors = await _load_group_vectors(zhipu_client)
+    if not vectors:
+        return None
+    scored = sorted(((cosine_similarity(q, v), g) for g, v in vectors.items()),
+                    key=lambda x: -x[0])
+    if not scored:
+        return None
+    min_score = _fast_float("STICKER_FAST_MIN", STICKER_FAST_MIN)
+    margin = _fast_float("STICKER_FAST_MARGIN", STICKER_FAST_MARGIN)
+    top_score, top_group = scored[0]
+    if top_score < min_score:
+        return None
+    if len(scored) > 1 and top_score - scored[1][0] < margin:
+        return None
+    avoid = set(avoid_groups or [])
+    for score, group in scored:
+        if score < min_score:
+            break
+        if group in avoid:
+            continue
+        candidates = [s for s in load_stickers() if (s.get("group") or "其他") == group]
+        if candidates:
+            hit = dict(random.choice(candidates))
+            hit["_source"] = "vector"
+            return hit
+    return None
+
+
 def load_stickers() -> list:
     """加载表情标注（模块级缓存）。文件缺失/写坏时返回空列表，调用方当作没表情。"""
     global _stickers_cache
@@ -100,7 +233,7 @@ def _options_text(items: list) -> str:
 
 
 async def pick_sticker(deepseek_client, reply: str, avoid_groups: list | None = None,
-                       session="", kind: str = "") -> dict | None:
+                       session="", kind: str = "", zhipu_client=None) -> dict | None:
     """给这句话挑一张表情；没有十分对应的返回 None。
 
     `avoid_groups`：**最近发过的类别**（不是单张）——别连着发观感相近的图。
@@ -115,6 +248,20 @@ async def pick_sticker(deepseek_client, reply: str, avoid_groups: list | None = 
     items = load_stickers()
     if not items:
         return None
+
+    # 快路①：明显不值得判断的回复直接跳过 LLM（仅 STICKER_FAST=1 时启用）。
+    if fast_enabled() and not fast_gate(reply):
+        log_event("none", session=session, kind=kind, why="fast_gate")
+        return None
+    # 快路②：embedding 选组；高置信度直接发，低置信度才回退 LLM。
+    if fast_enabled():
+        hit = await fast_pick(reply, avoid_groups, zhipu_client)
+        if hit:
+            print(f"[表情包] 向量选 {hit['id']}［{hit.get('group', '')}］")
+            return hit
+        if not fast_fallback_enabled():
+            log_event("none", session=session, kind=kind, why="fast_vector")
+            return None
 
     avoid = ""
     if avoid_groups:

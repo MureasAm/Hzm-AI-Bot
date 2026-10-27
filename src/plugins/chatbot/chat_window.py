@@ -474,11 +474,11 @@ async def _maybe_send_sticker(win: _UserWindow, reply: str) -> None:
         st["turns"] += 1
         log_event("cooldown", session=win.target_id, kind=kind)
         return
-    deepseek_client, _ = _get_clients()
+    deepseek_client, zhipu_client = _get_clients()
     # avoid 传**全部**最近发过的**类别**（不只最近 1 个）：光防"连着发"不够，
     # 用户报的是"同类"太频繁 —— 换个话题回来还会撞上同一类。
     hit = await pick_sticker(deepseek_client, reply, avoid_groups=st["recent"],
-                             session=win.target_id, kind=kind)
+                             session=win.target_id, kind=kind, zhipu_client=zhipu_client)
     if not hit:
         st["turns"] += 1
         return
@@ -489,7 +489,8 @@ async def _maybe_send_sticker(win: _UserWindow, reply: str) -> None:
         else:
             await win.bot.send_group_msg(group_id=win.target_id, message=img)
         print(f"[表情包] 已发送 {hit['id']}［{hit.get('group', '')}］")
-        log_event("sent", session=win.target_id, kind=kind, sticker=hit)
+        log_event("sent", session=win.target_id, kind=kind, sticker=hit,
+                  why=str(hit.get("_source") or "llm"))
     except Exception as e:
         print(f"⚠️ 表情包发送失败（忽略）: {e}")
         log_event("sent_failed", session=win.target_id, kind=kind, sticker=hit, why=str(e))

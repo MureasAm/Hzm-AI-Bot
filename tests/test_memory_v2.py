@@ -1232,4 +1232,5 @@ class TestHabitHint:
         msgs = core.build_message_list(
             "早", [], [], habit_hint="【你记得的事】测试")
         assert msgs[-1]["role"] == "user"
-        assert msgs[-2]["content"] == "【你记得的事】测试"
+        assert msgs[-3]["content"] == "【你记得的事】测试"
+        assert "需要自称就用" in msgs[-2]["content"]

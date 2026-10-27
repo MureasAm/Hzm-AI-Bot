@@ -19,19 +19,20 @@ EXPECTED_IDS = [
     "identity", "schedule", "profile", "preferences", "core_stories", "group",
     "terms", "session", "prev_session", "behaviors", "corpus", "commitment",
     "history", "same_request", "batch", "query_hint", "now", "mood", "daily",
+    "selfref",
 ]
 
 
 # ---------------------------------------------------------------- 目录结构
 
-def test_all_20_blocks_load():
+def test_all_21_blocks_load():
     blocks = inj.load_blocks()
     assert sorted(blocks) == sorted(EXPECTED_IDS), "块的 id 集合变了"
 
 
-def test_order_is_0_to_19_and_unique():
+def test_order_is_0_to_20_and_unique():
     orders = [inj.load_blocks()[b]["order"] for b in EXPECTED_IDS]
-    assert sorted(orders) == list(range(0, 20)), "序号必须 0..19 且不重复"
+    assert sorted(orders) == list(range(0, 21)), "序号必须 0..20 且不重复"
 
 
 def test_folder_prefix_matches_order():
@@ -104,6 +105,10 @@ def test_each_text_block_starts_with_its_header():
     for bid in EXPECTED_IDS:
         b = inj.block(bid)
         if b.get("kind") == "raw_file":
+            continue
+        if bid == "selfref":
+            # 自称那句是**收尾的一句弱约束**（policy=guard），不是内容块：
+            # 实验用的原句就是不带段头的“回复时，需要自称就用…”，加【】会改掉被测文本。
             continue
         for key, tpl in (b.get("strings") or {}).items():
             if key in ("behaviors", "item", "contradiction", "fallback", "tail",

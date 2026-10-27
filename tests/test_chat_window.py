@@ -245,7 +245,8 @@ class TestFlush:
 
         await cw._flush(win)
         assert captured["vision"] == "灰泽满收到一张图片，但暂时没看清里面的内容"
-        assert sent == ["嗯？没看清"]  # 兜底保证有回复
+        # 逗号/句末分段后可能拆成多条；这条测的是“兜底保证有回复”，按拼接内容判断
+        assert "".join(sent) == "嗯？没看清"
 
 
 class TestVoiceFlush:

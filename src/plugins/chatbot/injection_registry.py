@@ -125,6 +125,9 @@ REGISTRY: dict[str, KindSpec] = {s.kind: s for s in (
              "context_probe.perception_now", "now/perception", 80, "empty", ("now",)),
     KindSpec("guard", "输出侧守卫", "conversation", "turn", "canon", "guard",
              "reply_style/core", "", 0, "omit", ()),
+    KindSpec("selfref", "自称方式（收尾）", "her", "stable", "canon", "guard",
+             "core.build_message_list", "selfref/main", 80, "inject", ("selfref",),
+             "每轮最后一句；弱约束，允许少量第一人称（2026-10-27）"),
 )}
 
 
