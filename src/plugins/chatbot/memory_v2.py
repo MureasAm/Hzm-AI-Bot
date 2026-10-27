@@ -357,6 +357,52 @@ def shadow_enabled() -> bool:
     return os.environ.get("MEMORY_V2_SHADOW", "1") != "0"
 
 
+# ==================== 提取前置闸门（2026-10-27 成本优化） ====================
+# 80 条真实轮次里，提取只产出 10 条有用记忆；大量短寒暄/表情不值得一次 3k prompt 的调用。
+# 跳过的风险是漏记；所以只在**短且没有任何事实/事件/偏好线索**时跳，长消息照常提取。
+_GREETING_RE = re.compile(
+    r"^(在吗|在不在|早安|早上好|午好|晚上好|晚安|睡了|睡啦|拜拜|88|哈哈+|hhh+|呵呵|"
+    r"好|嗯|哦|行|ok|？|\?|。|\.|\.\.\.|…)$", re.I)
+_RITUAL_RE = re.compile(r"(每天|以后|都要|每次|固定|仪式|说好|答应|记得|叫我|称呼|睡前|起床)")
+_EXTRACT_MARKERS = re.compile(
+    r"(我叫|我是|叫我|称呼|名字|喜欢|讨厌|希望|不要|别|以后|每天|每次|固定|仪式|说好|答应|记得|"
+    r"摸摸|亲亲|抱抱|陪|哄|温柔|亲昵|害怕|不舒服|感冒|生病|病|疼|累|失眠|睡不着|"
+    r"分手|在一起|恋爱|结婚|离婚|吵架|和好|喜欢的人|讨厌的人|"
+    r"失业|辞职|换工作|offer|工资|贷款|买房|租房|出差|旅游|回国|回家|"
+    r"\d+岁|今年\d+|大一|大二|大三|大四|研究生|毕业|学生|学校|专业|宿舍|室友|老家|"
+    r"住在|在.{1,6}(市|省|区|县)|养|猫|狗)")
+
+
+def worth_extracting(text: str) -> bool:
+    """这条用户消息值不值得跑一次记忆提取。
+
+    确定性、零 API；只做“明显不值得”的拦截：
+    - 纯表情/图片/空
+    - ≤2 字且没有 ritual 线索
+    - 纯寒暄（在吗/晚安/哈哈/好…）且没有 ritual 线索
+    - 纯情绪消息
+    - ≤12 字且没有任何事实/事件/偏好线索
+    长消息一律放行——宁可多花一次，不丢事实。
+    """
+    t = (text or "").strip()
+    if not t or t.startswith("[表情") or t.startswith("[图片"):
+        return False
+    from .reply_style import is_emotion_only_query
+    from .daily_memory import _EVENT_MARKERS
+    core = re.sub(r"[^一-龥A-Za-z0-9]", "", t)
+    ritual = bool(_RITUAL_RE.search(t))
+    if len(core) <= 2 and not ritual:
+        return False
+    if _GREETING_RE.match(t) and not ritual:
+        return False
+    if is_emotion_only_query(t) and not ritual:
+        return False
+    if len(core) <= 12 and not ritual:
+        if not _EXTRACT_MARKERS.search(t) and not any(m in t for m in _EVENT_MARKERS):
+            return False
+    return True
+
+
 def injection_enabled() -> bool:
     """V2 注入**默认开启**（同上转正）。临时关掉设 `MEMORY_V2_INJECT=0`。
 

@@ -16,6 +16,7 @@ corpus/behavior 两路走加权 RRF 融合（score = w/(k+rank)），再条数�
 （voice_sample / phrase 两路已于 2026-10-04 随对应文件删除。）
 """
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -203,6 +204,14 @@ def retrieve_corpus_candidates(user_query: str, query_vector,
     db = load_vector_db()
     if not db or not user_query or not query_vector:
         return []
+    # 成本开关（2026-10-27）：可用环境变量临时缩小判定池做 A/B；
+    # 默认值仍由 constants 决定，生产行为不变。
+    try:
+        top_n = int(os.environ.get("CORPUS_CANDIDATE_N", top_n) or top_n)
+        extra_n = int(os.environ.get("CORPUS_LEXICAL_EXTRA_N", CORPUS_LEXICAL_EXTRA_N)
+                      or CORPUS_LEXICAL_EXTRA_N)
+    except (TypeError, ValueError):
+        extra_n = CORPUS_LEXICAL_EXTRA_N
     scored = [RetrievalItem(source="corpus", item_id=str(i), score=sim, text=it["text"])
               for i, (it, sim) in enumerate(zip(db, cosine_scores(query_vector, db)))]
     scored.sort(key=lambda x: x.score, reverse=True)
@@ -229,7 +238,7 @@ def retrieve_corpus_candidates(user_query: str, query_vector,
         if hooked or ov >= CORPUS_KEYWORD_FLOOR:
             lexical.append((2.0 if hooked else ov, it))   # 钩子命中优先于"只是撞了几个词"
     lexical.sort(key=lambda x: -x[0])
-    for _, it in lexical[:CORPUS_LEXICAL_EXTRA_N]:         # 封顶，别把判定池灌爆
+    for _, it in lexical[:extra_n]:         # 封顶，别把判定池灌爆
         top.append(it)
     return top
 

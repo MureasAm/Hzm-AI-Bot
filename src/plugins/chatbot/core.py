@@ -878,6 +878,10 @@ async def update_memory_v2_shadow_task(
     msg = (user_msg or "").strip()
     if not msg or is_emoji_msg(msg):
         return []
+    # 成本闸门（2026-10-27）：短寒暄/表情/纯情绪不值得一次 3k prompt 的提取；
+    # 长消息和带事实/事件/偏好线索的一律放行。MEMORY_EXTRACT_GATE=0 可回退。
+    if get_flag("MEMORY_EXTRACT_GATE", "1") != "0" and not memory_v2.worth_extracting(msg):
+        return []
     try:
         deepseek_client, _ = _get_clients()
         return await memory_v2.extract_and_ingest(
