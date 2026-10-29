@@ -21,7 +21,7 @@ from .bg import spawn
 from .core import (
     handle_chat, summarize_batch, summarize_group_batch, _get_clients, _compose_record_msg,
 )
-from .config import set_llm_route, get_vision_client
+from .config import set_llm_route, get_vision_client, aux_clients_or
 from .memory import get_user_history, append_user_history
 from .group_gate import should_reply_in_group, _addressed_to_her
 from .chatlog import log_turn
@@ -362,7 +362,7 @@ async def _flush(win: _UserWindow) -> None:
     # 判定不接时：不生成、不发送，但**仍把这一批记进短期记忆**（只记用户侧）——
     # 她"看到了、只是没说"；不记的话下一轮判定看不到上下文，她就会开始"装作知道上文"。
     if not win.is_private:
-        deepseek_client, _ = _get_clients()
+        deepseek_client, _ = aux_clients_or(_get_clients)   # 接话门走辅助链（2026-10-29）
         hist = "\n".join(get_user_history(win.target_id)[-8:])
         if not await should_reply_in_group(deepseek_client, hist, combined,
                                            thread_note=group_thread_note):

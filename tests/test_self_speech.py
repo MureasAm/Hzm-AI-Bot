@@ -34,6 +34,10 @@ def _isolated(tmp_path, monkeypatch):
     monkeypatch.setenv("SELF_SPEECH_ANNOTATE", "1")
     monkeypatch.setattr(self_speech, "config", SimpleNamespace(
         _get_model_name=lambda: "fake",
+        # 辅助链（2026-10-29）：真 config 有这两个入口，假 config 也得有——
+        # 没有的话 self_speech 会 AttributeError，测试就成了"假失败"。
+        aux_model=lambda m: m,
+        aux_clients_or=lambda fallback: fallback(),
         extract_chat_content=lambda r: r.choices[0].message.content,
         log_cache_usage=lambda *a, **k: None,
     ), raising=False)

@@ -172,10 +172,10 @@ async def gist_texts(texts: list[str], client=None) -> dict[str, str]:
         chunk = missing[start:start + 10]
         try:
             if client is None:
-                client, _ = config._get_clients()
+                client, _ = config.aux_clients_or(config._get_clients)
             payload = "".join(f"{i + 1}. {t}\n" for i, t in enumerate(chunk))
             resp = await client.chat.completions.create(
-                model=config._get_model_name(),
+                model=config.aux_model(config._get_model_name()),
                 messages=[{"role": "user", "content": PROMPT + payload}],
                 temperature=0.0,
                 max_tokens=min(1600, 110 * len(chunk) + 120),

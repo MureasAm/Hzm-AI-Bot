@@ -29,10 +29,10 @@ class TestSplitReply:
         assert reply_style.split_reply("今天好冷。嗯", min_len=0) == ["今天好冷", "嗯"]
 
     def test_micro_fragments_merge_into_next(self):
-        # 只有 1 字碎片并入下一段；“哦？”“好啦”这类 2 字短句独立成条（真人连发）
+        # 问号不切；逗号两边不足 5 字时保留逗号、不切
         assert reply_style.split_reply(
             "哦？睡醒了？那倒是稀奇……灰泽满这个点刚准备睡，你却醒了", min_len=0
-        ) == ["哦？", "睡醒了？", "那倒是稀奇……", "灰泽满这个点刚准备睡 你却醒了"]
+        ) == ["哦？睡醒了？那倒是稀奇……", "灰泽满这个点刚准备睡，你却醒了"]
 
     def test_min_len_respected(self):
         # 低于 min_len 不拆；末尾句号仍会被去掉
@@ -61,6 +61,12 @@ class TestSplitReply:
         parts = reply_style.split_reply(reply)
         assert parts == ["没有（小声）mua又不是糖", "说给就给的"]
         assert not any("\n" in p for p in parts)
+
+    def test_interjection_merges_into_next(self):
+        # 多字语气词不单独发一条：“好啦，知道了” → “好啦知道了”；“嗯”跟下一句
+        assert reply_style.split_reply("好啦，知道了。", min_len=0) == ["好啦知道了"]
+        assert reply_style.split_reply("行了行了，别说了。", min_len=0) == ["行了行了别说了"]
+        assert reply_style.split_reply("嗯，知道了。", min_len=0) == ["嗯，知道了"]
 
     def test_no_comma_no_runon(self):
         # 逗号分段后消息里不再有逗号；超限用空格接，不焊成 run-on

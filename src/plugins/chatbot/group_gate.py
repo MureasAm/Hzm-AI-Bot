@@ -24,7 +24,7 @@ import os
 import random
 
 from .constants import THINKING_DISABLED, AT_SELF_MARK, GROUP_EVENT_REPLY_PROB
-from .config import log_cache_usage, _get_model_name, extract_chat_content
+from .config import log_cache_usage, _get_model_name, extract_chat_content, aux_model
 
 # ⚠️ **别重排这段提示词**（2026-10-09）：`{{history}}/{{batch}}` 这些每批都变的变量必须留在
 # 判据**之后**。DeepSeek 的缓存按**前缀**匹配，变量放前面（原来在 8%）会让后面整段判据
@@ -111,7 +111,7 @@ async def should_reply_in_group(deepseek_client, history_text: str, batch_text: 
     )
     try:
         resp = await deepseek_client.chat.completions.create(
-            model=_get_model_name(),
+            model=aux_model(_get_model_name()),
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
             max_tokens=100,

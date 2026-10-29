@@ -24,7 +24,7 @@ from datetime import datetime
 from .memory import archive_legacy_file
 from . import injection as inj
 from .constants import PROJECT_ROOT, THINKING_DISABLED
-from .config import log_cache_usage, _get_model_name, extract_chat_content
+from .config import log_cache_usage, _get_model_name, extract_chat_content, aux_model
 # 时长措辞（"3天"/"2小时"）与长期/短期记忆共用一份，别各写一套（memory re-export 自根模块）
 from .memory import humanize_gap
 
@@ -341,7 +341,7 @@ async def _llm(client, prompt: str, max_tokens: int = 200, temperature: float = 
     """调 DeepSeek。失败返回空串（调用方降级）。"""
     try:
         resp = await client.chat.completions.create(
-            model=_get_model_name(),
+            model=aux_model(_get_model_name()),
             messages=[{"role": "user", "content": prompt}],
             temperature=temperature,
             max_tokens=max_tokens,

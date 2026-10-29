@@ -237,7 +237,10 @@ async def _corpus_items(query: str, query_vector, deepseek_client) -> list[Recal
     if deepseek_client is not None:
         try:
             from .corpus_judge import judge_corpus
-            picked = await judge_corpus(deepseek_client, query, candidates)
+            from .config import aux_clients_or
+            # 直播记忆判走辅助链（2026-10-29）；没配 AUX_* 时退回调用方给的客户端
+            judge_client, _ = aux_clients_or(lambda: (deepseek_client, None))
+            picked = await judge_corpus(judge_client, query, candidates)
         except Exception:
             picked = []
     else:

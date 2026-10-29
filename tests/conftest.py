@@ -15,6 +15,9 @@ import pytest
 os.environ.setdefault("INJECTION_V3", "0")
 os.environ.setdefault("RECALL_TOOLS", "0")
 os.environ.setdefault("TOOL_PROBE", "0")
+# 辅助链（2026-10-29）：.env.prod 里配了 AUX_*，测试一旦走到辅助链就会**真调外部 API**。
+# 关掉后所有调用退回主链，用例 monkeypatch 的 `_get_clients` 才会生效。
+os.environ.setdefault("AUX_CHAIN", "0")
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:

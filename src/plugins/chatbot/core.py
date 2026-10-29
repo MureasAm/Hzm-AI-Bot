@@ -79,6 +79,7 @@ else:
 # ==================== 🛠️ API 客户端（惰性初始化） ====================
 # 挪到了 config.py（基础设施层）。core 从这里 import，routing 也从 config 取，避免循环依赖。
 from .config import log_cache_usage, _get_clients, _get_model_name, extract_chat_content  # noqa: E402
+from .config import aux_clients_or, aux_model  # noqa: E402  —— 辅助链（2026-10-29）
 
 
 def _detach_behavior_from_rrf() -> bool:
@@ -147,9 +148,9 @@ async def summarize_batch(msgs: list) -> str:
         "消息：\n" + "\n".join(texts)
     )
     try:
-        deepseek_client, _ = _get_clients()
+        deepseek_client, _ = aux_clients_or(_get_clients)
         resp = await deepseek_client.chat.completions.create(
-            model=_get_model_name(),
+            model=aux_model(_get_model_name()),
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
             max_tokens=80,
@@ -191,9 +192,9 @@ async def summarize_group_batch(items: list) -> str:
         "消息：\n" + "\n".join(lines)
     )
     try:
-        deepseek_client, _ = _get_clients()
+        deepseek_client, _ = aux_clients_or(_get_clients)
         resp = await deepseek_client.chat.completions.create(
-            model=_get_model_name(),
+            model=aux_model(_get_model_name()),
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
             max_tokens=120,
@@ -222,9 +223,9 @@ async def summarize_forward(raw: str) -> str:
     if not text:
         return ""
     try:
-        deepseek_client, _ = _get_clients()
+        deepseek_client, _ = aux_clients_or(_get_clients)
         resp = await deepseek_client.chat.completions.create(
-            model=_get_model_name(),
+            model=aux_model(_get_model_name()),
             messages=[{"role": "user", "content":
                        "下面是一段 QQ 群里转发的聊天记录（多人对话）。用**一两句话**概括他们聊了什么，"
                        "供别人理解后自然接话。\n"
@@ -390,7 +391,7 @@ async def confirm_ambiguous_terms(user_msg: str, deepseek_client=None) -> set:
         return set()
     if deepseek_client is None:
         try:
-            deepseek_client, _ = _get_clients()
+            deepseek_client, _ = aux_clients_or(_get_clients)
         except Exception:
             return set()
     lines = "\n".join(f"- {t['keyword']}：{t.get('meaning', '')[:80]}" for t in candidates)
@@ -405,7 +406,7 @@ async def confirm_ambiguous_terms(user_msg: str, deepseek_client=None) -> set:
     )
     try:
         resp = await deepseek_client.chat.completions.create(
-            model=_get_model_name(),
+            model=aux_model(_get_model_name()),
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
             max_tokens=200,
@@ -1163,7 +1164,8 @@ async def _fill_retrieval(result: dict, query_text: str, retrieval_query: str, h
         #   **误报的重叠度反而更高** → 阈值只是在拿一个换另一个（试过 0.5，co9/co10 一起红）。
         # 判不出来一律不带（宁可漏不可错，见 corpus_judge 模块头）。
         candidates = retrieve_corpus_candidates(retrieval_query or query_text, query_vector)
-        corpus_items = await judge_corpus(deepseek_client, query_text, candidates)
+        corpus_items = await judge_corpus(
+            aux_clients_or(lambda: (deepseek_client, None))[0], query_text, candidates)
 
     if _detach_behavior_from_rrf():
         # 行为**不进 RRF**：它是 L3 判出类别后**按名字查表**的结果（没有相似度、
@@ -1204,6 +1206,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     reply_to：她这句在回群里哪位（写进短期记忆的「灰泽满（回X）：」，只用于群聊）。
     """
     deepseek_client, zhipu_client = _get_clients()
+    aux_client, _ = aux_clients_or(_get_clients)   # 辅助链（2026-10-29）：话题探测/直播记忆判走它
 
     # 短期记忆的说话人标签：群聊写成「群聊：甲：…」/「灰泽满（回甲）：…」，
     # 私聊保持原来的「用户：」/「灰泽满：」——历史一读就知道是群聊、她回的是谁，
@@ -1234,7 +1237,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         # debug=True 只是为了拿到**这次探测已经算出来的** entities（作品/作者/地点/动物）——
         # 不多调一次模型；生产路径的返回值仍是扩充后的检索 query。
         retrieval_query, probe_meta = await probe_session(
-            user_id, query_text, history_text, deepseek_client, debug=True)
+            user_id, query_text, history_text, aux_client, debug=True)
         if retrieval_query != query_text:
             print(f"[会话记忆] 短 query 扩充: 「{query_text}」→「{retrieval_query}」")
     # 命中已知术语：probe 的短 query 扩充可能猜错含义（如"富区"→"富拉尔基区"），

@@ -232,56 +232,64 @@ class _ChatProxy:
 _MAX_EXTRA_ENDPOINTS = 3
 
 
-def _more_endpoints(global_config):
+def _more_endpoints(global_config, prefix=""):
     """按顺序读出"另一个端点"那几层：`FALLBACK1_*`、`FALLBACK2_*`、…
 
     为什么要编号（2026-10-15）：链变成了**三个不同端点**（linkapi → krill → deepseek 官方），
     而原来只支持"主端点 + 一个备用端点"。**不带编号的 `FALLBACK_*` 仍当第 1 个读**，
     老配置不用改。
+
+    prefix（2026-10-29）：辅助链用 `AUX_FALLBACK1_*` 一套，和主链互不干扰。
     """
     out = []
     for i in range(1, _MAX_EXTRA_ENDPOINTS + 1):
-        key = getattr(global_config, f"fallback{i}_api_key", None)
+        key = getattr(global_config, f"{prefix}fallback{i}_api_key", None)
         if not key and i == 1:
-            key = getattr(global_config, "fallback_api_key", None)      # 老写法：不带编号
+            key = getattr(global_config, f"{prefix}fallback_api_key", None)      # 老写法：不带编号
         if not key:
             continue
-        base = getattr(global_config, f"fallback{i}_api_base", None) or (
-            getattr(global_config, "fallback_api_base", None) if i == 1 else None)             or DEEPSEEK_BASE_URL
-        model = getattr(global_config, f"fallback{i}_model", None) or (
-            getattr(global_config, "fallback_model", None) if i == 1 else None)             or DEFAULT_MODEL
+        base = getattr(global_config, f"{prefix}fallback{i}_api_base", None) or (
+            getattr(global_config, f"{prefix}fallback_api_base", None) if i == 1 else None)             or DEEPSEEK_BASE_URL
+        model = getattr(global_config, f"{prefix}fallback{i}_model", None) or (
+            getattr(global_config, f"{prefix}fallback_model", None) if i == 1 else None)             or DEFAULT_MODEL
         host = str(base).split("//")[-1].split("/")[0]
         out.append((key, base, model, f"{model}（{host}）"))
     return out
 
 
-def _chain_layers(global_config):
+def _chain_layers(global_config, prefix=""):
     """拼出降级链：主模型 → 同端点的其它模型 → 一个一个"另一个端点"。
 
     为什么分两截：中转站上换模型只要改 model 名（同一个 client），而"换端点"要另建 client。
     端点可以有**好几个**（见 `_more_endpoints`），顺序就是 `FALLBACK1_*` → `FALLBACK2_*` → …
+
+    prefix（2026-10-29）：`"aux_"` 时读的是 `AUX_API_*` / `AUX_FALLBACK*` 那一套，
+    给辅助调用单独拼一条链（主链是 deepseek，辅助链是 gemini，分开才不互相影响）。
     """
     primary_client = _mk_client(
-        getattr(global_config, "openai_api_key", None) or "missing",
-        getattr(global_config, "openai_api_base", DEEPSEEK_BASE_URL),
+        getattr(global_config, f"{prefix or 'openai_'}api_key", None) or "missing",
+        getattr(global_config, f"{prefix or 'openai_'}api_base", DEEPSEEK_BASE_URL),
     )
-    layers = [(primary_client, None, "")]      # model=None = 用调用方传进来的那个（= _get_model_name()）
-    for m in str(getattr(global_config, "llm_fallback_models", "") or "").split(","):
+    layers = [(primary_client, None, "")]      # model=None = 用调用方传进来的那个（= 那个模型的模型名）
+    for m in str(getattr(global_config, f"{prefix or 'openai_'}llm_fallback_models", "") or "").split(","):
         m = m.strip()
         if m:
             layers.append((primary_client, m, m, MODEL_EXTRA_PARAMS.get(m)))
-    for key, base, model, label in _more_endpoints(global_config):
+    for key, base, model, label in _more_endpoints(global_config, prefix):
         layers.append((_mk_client(key, base), model, label, MODEL_EXTRA_PARAMS.get(model)))
     # 给每层贴个好看的名字：主层用真实模型名，方便日志一眼看出"这轮是谁答的"
     if layers:
         client, m, label = layers[0]
         # 主层的名字从**传入的 global_config** 取，而不是 `_get_model_name()` 的全局 driver：
         # 这样测试能用自己的配置拼链，主层标签/参数也不会跟调用方的配置脱节。
-        name = getattr(global_config, "openai_model", None) or _get_model_name()
+        if prefix:
+            name = getattr(global_config, f"{prefix}model", None) or ""
+        else:
+            name = getattr(global_config, "openai_model", None) or _get_model_name()
         if not label:
-            host = str(getattr(global_config, "openai_api_base", "") or "").split("//")[-1].split("/")[0]
-            label = f"{name}（{host}）" if host else name
-        layers[0] = (client, m, label, MODEL_EXTRA_PARAMS.get(name))
+            host = str(getattr(global_config, f"{prefix or 'openai_'}api_base", "") or "").split("//")[-1].split("/")[0]
+            label = f"{name}（{host}）" if host else (name or "主")
+        layers[0] = (client, m, label, MODEL_EXTRA_PARAMS.get(name) if name else None)
     return layers
 
 
@@ -311,6 +319,76 @@ def _get_clients():
         _mk_client(zhipu_api_key, ZHIPU_BASE_URL),
     )
     return _clients_cache
+
+
+# ==================== 辅助链（2026-10-29） ====================
+# 为什么要两条链：主回复和辅助调用的**经济结构完全不同**。
+# 主回复每次 ~3000 token、且固定前缀大，deepseek 的自动缓存能命中 84%，比 gemini 还便宜；
+# 辅助调用短、前缀多变化，缓存只有 17~72%，deepseek 的输出价（4 倍）开始吃亏。
+# 实测（docs 里记着 2026-10-29 的账）：主回复走 deepseek、辅助走 gemini-2.5-lite 时
+# 一周 43.5M 积分（免费额度 50M），全 deepseek 要 59.8M，超额度 20%。
+#
+# 分流规则（用户 2026-10-29 定，按"缓存命中率 × 输出长度"算出来）：
+#   主链（deepseek）：主回复、行为分类（缓存 89%）、记忆提取（78%）、表情包（85%）
+#   辅助链（gemini）：其余全部（话题探测/接话门/群聊归纳/直播记忆判/自述转述/看图/…）
+_aux_clients_cache = None
+
+
+def aux_enabled() -> bool:
+    """有没有单独配辅助链（`AUX_API_KEY`）。没配就所有调用共用主链，行为与以前一模一样。
+
+    `AUX_CHAIN=0` 是总开关（单测在 conftest 里就关掉它，否则会真的打外部 API）。
+    """
+    if get_flag("AUX_CHAIN", "1").strip().lower() in ("0", "false", "no", "off"):
+        return False
+    try:
+        return bool(getattr(get_driver().config, "aux_api_key", None))
+    except Exception:
+        return False
+
+
+def _get_aux_clients():
+    """辅助链的 (对话客户端, zhipu_client)。没配 `AUX_*` 时**直接返回主链**。"""
+    global _aux_clients_cache
+    if _aux_clients_cache is not None:
+        return _aux_clients_cache
+    if not aux_enabled():
+        return _get_clients()
+    _global_config = get_driver().config
+    zhipu_api_key = getattr(_global_config, "zhipu_api_key", None)
+    if not zhipu_api_key:
+        raise ValueError("❌ 未检测到 ZHIPU_API_KEY")
+    _aux_clients_cache = (
+        _ClientProxy(_mk_client(getattr(_global_config, "aux_api_key", None),
+                                getattr(_global_config, "aux_api_base", DEEPSEEK_BASE_URL)),
+                     _chain_layers(_global_config, prefix="aux_")),
+        _mk_client(zhipu_api_key, ZHIPU_BASE_URL),
+    )
+    return _aux_clients_cache
+
+
+def aux_clients_or(fallback):
+    """辅助调用这次该用哪套客户端。
+
+    `fallback` 传**调用方模块自己的 `_get_clients`**：没配 `AUX_*` 时走它，
+    这样单测 monkeypatch 的仍是那个名字，测试的注入方式一行都不用改。
+    """
+    try:
+        if aux_enabled():
+            return _get_aux_clients()
+    except Exception:
+        pass
+    return fallback()
+
+
+def aux_model(main_model: str) -> str:
+    """辅助调用该用的模型名；没配 `AUX_*` 时沿用主模型名（= 老行为）。"""
+    try:
+        if aux_enabled():
+            return getattr(get_driver().config, "aux_model", None) or main_model
+    except Exception:
+        pass
+    return main_model
 
 
 def parse_json_block(content: str):

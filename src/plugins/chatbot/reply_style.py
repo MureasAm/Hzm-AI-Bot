@@ -336,14 +336,38 @@ def _join_fragments(frags: list) -> str:
     return out
 
 
-def _split_on_commas(text: str, max_parts: int) -> list:
-    """逗号即分段（2026-10-27）：句末和逗号都切，逗号本身丢掉。
+_INTERJECTION_RE = re.compile(
+    r"^(?:(?:好啦|行了|好吧|好的|好嘞|成吧|得嘞|哎呀|哎哟|诶呀|行啦|对啦|是啊|是吧|真的吗)[！!？?~～。…]*)+$")
 
-    括号/引号内的逗号不切；逗号后紧跟括号/引号时保留这个逗号（那是停顿，不是断句）。
-    纯括号开头的段并入上一段，避免单独发一条舞台说明。超 max_parts 用空格接。
+
+def _comma_sentences(text: str) -> list:
+    """按句末（。！）切；省略号在前后都有内容且后面 ≥5 字时才当边界。**问号不切。**"""
+    parts, i = [], 0
+    for m in re.finditer(r"[。！]|…+", text):
+        end = m.end()
+        if m.group(0).startswith("…"):
+            rest = text[end:].lstrip()
+            before = text[i:m.start()].rstrip()
+            if len(rest) < 5 or len(before) < 4:
+                continue
+        parts.append(text[i:end])
+        i = end
+    if i < len(text):
+        parts.append(text[i:])
+    return [p for p in parts if p.strip()]
+
+
+def _split_on_commas(text: str, max_parts: int) -> list:
+    """逗号分段（2026-10-27，2026-10-28 调整）：
+
+    - 句末只有 。！ 切；**问号不处理**（不切、不删）。
+    - 逗号处：**两边都 ≥5 字**才切，切时丢掉逗号；
+      任一边不足 5 字就保留逗号、不切（避免“少来”“好啦”被单发或焊成 run-on）。
+    - 例外：左边是多字语气词（好啦/行了/好吧…）时并进下一句并丢掉逗号。
+    - 括号/引号内的逗号不切；纯括号段并入上一段；超 max_parts 用空格接。
     """
     out = []
-    for s in _split_sentences(text):
+    for s in _comma_sentences(text):
         s = s.strip().rstrip("。").strip()
         if not s:
             continue
@@ -359,14 +383,17 @@ def _split_on_commas(text: str, max_parts: int) -> list:
             elif ch in "”」』":
                 quote = False
             elif ch == "，" and depth == 0 and not quote:
-                nxt = s[i + 1:].lstrip()[:1]
-                if nxt in ("（", "(", "“", "「"):
-                    continue
-                buf.pop()
-                piece = "".join(buf).strip().rstrip("，").strip()
-                if piece:
-                    out.append(piece)
-                buf = []
+                left = "".join(buf[:-1]).strip()
+                rest = s[i + 1:]
+                nxt = rest.split("，", 1)[0].strip()
+                if _INTERJECTION_RE.match(left):
+                    buf.pop()                      # 语气词：并进下一句
+                elif len(left) >= 5 and len(nxt) >= 5:
+                    buf.pop()                      # 两边都够长：切成两条
+                    if left:
+                        out.append(left)
+                    buf = []
+                # 其余情况：保留逗号，继续拼（不切）
         piece = "".join(buf).strip().rstrip("，").strip()
         if piece:
             out.append(piece)
@@ -377,16 +404,6 @@ def _split_on_commas(text: str, max_parts: int) -> list:
             merged[-1] += p
         else:
             merged.append(p)
-    # 只有 1 字碎片（“？”“嗯”）并入下一段；“好啦”“还不太熟嘛”这种 2 字以上
-    # 的短句保留独立——真人发消息本来就会连发几条短的。
-    kept, i = [], 0
-    while i < len(merged):
-        if i + 1 < len(merged) and len(merged[i]) < 2:
-            merged[i + 1] = merged[i] + merged[i + 1]
-        else:
-            kept.append(merged[i])
-        i += 1
-    merged = kept
     if len(merged) > max_parts:
         merged = merged[:max_parts - 1] + [" ".join(merged[max_parts - 1:])]
     return merged
@@ -396,10 +413,10 @@ def split_reply(reply: str, min_len: int = SPLIT_MIN_LEN,
                 max_parts: int = SPLIT_MAX_PARTS) -> list:
     """把长回复断开发送（打字感）。短回复/单句不拆，返回单元素列表。
 
-    默认走**逗号分段**（2026-10-27 用户定）：句末标点（。！？）和逗号都切，
-    逗号本身丢弃——发出去的是几条不带逗号的短句，更像真人打字。
-    括号/引号内的逗号不切；纯括号段并入上一段；短碎片不并回（避免把逗号段
-    重新焊成 run-on）；超 max_parts 用空格接。`SPLIT_ON_COMMA=0` 可回退旧逻辑。
+    默认走**逗号分段**（2026-10-27 用户定，10-28 调整）：句末只有 。！ 切，问号不处理；
+    逗号两边都 ≥5 字才切并丢掉逗号，短的一侧保留逗号不切（“好啦”这类语气词例外）。
+    括号/引号内的逗号不切；纯括号段并入上一段；超 max_parts 用空格接。
+    `SPLIT_ON_COMMA=0` 可回退旧逻辑。
 
     旧逻辑（回退时）：句末标点切分；每段至多 1 个逗号；短碎片并入下一段；
     超 max_parts 用逗号接。
