@@ -544,6 +544,54 @@ def clean_reply(reply: str) -> str:
     return text
 
 
+# ── 称呼替换（2026-10-30）────────────────────────────────────────────────
+# 用户 2151983431 的现象：**要么每句都叫"温宝"，要么一句都不叫**。
+# 前一种来自早期"名字常驻注入"，后一种来自工具化检索之后名字只在需要时才进上下文。
+# 想要的中间状态是：**回复里本来就有"你"时，偶尔把那个"你"换成对方要的名字**。
+#
+# 为什么放在后处理而不是提示词：提示词只能"鼓励/禁止"，模型是二元的（全叫或全不叫）；
+# 这里只在**已经说出的话**上换一个词，语法风险可控、频率可控、也不会改语义。
+_YOU_BAD_NEXT = ("们", "好")     # "你们""你好"换进去就不像话了
+_QUOTED_RE = re.compile(r"[（(【\[][^）)】\]]*[）)】\]]|[“「『][^”」』]*[”」』]")
+
+
+def call_name_once(reply: str, name: str) -> str:
+    """把回复里**第一处安全的"你"**换成对方的名字；没有可换的就原样返回。
+
+    "安全"= 不在括号/引号里（那是引述或内心戏）、后面不是"们/好"。
+    "你的""给你""祝你"这种都能换（"温宝的""给温宝""祝温宝"都通顺）。
+    """
+    if not reply or not name or name in reply:
+        return reply
+    spans = [m.span() for m in _QUOTED_RE.finditer(reply)]
+    for i, ch in enumerate(reply):
+        if ch != "你":
+            continue
+        if any(a <= i < b for a, b in spans):
+            continue
+        nxt = reply[i + 1] if i + 1 < len(reply) else ""
+        if nxt in _YOU_BAD_NEXT:
+            continue
+        return reply[:i] + name + reply[i + 1:]
+    return reply
+
+
+def maybe_call_name(reply: str, name: str, rate: float | None = None) -> str:
+    """按概率决定这一句要不要把"你"换成名字（`NAME_CALL_RATE`，默认 0.35）。
+
+    只在私聊用：群聊里"你"可能指整批人，换名会指错人。
+    """
+    if not reply or not name:
+        return reply
+    try:
+        rate = float(os.environ.get("NAME_CALL_RATE", "0.35")) if rate is None else rate
+    except ValueError:
+        rate = 0.35
+    if rate <= 0 or random.random() >= rate:
+        return reply
+    return call_name_once(reply, name)
+
+
 def is_emotion_only_query(query: str) -> bool:
     """判断 probe 补全的检索 query 是否为"纯情绪"描述（如'用户发了个偷笑的表情'）。
 

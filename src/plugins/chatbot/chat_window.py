@@ -20,6 +20,7 @@ from nonebot.adapters.onebot.v11 import Message, MessageSegment
 from .bg import spawn
 from .core import (
     handle_chat, summarize_batch, summarize_group_batch, _get_clients, _compose_record_msg,
+    _user_name_for, name_budget_note,
 )
 from .config import set_llm_route, get_vision_client, aux_clients_or
 from .memory import get_user_history, append_user_history
@@ -27,7 +28,7 @@ from .group_gate import should_reply_in_group, _addressed_to_her
 from .chatlog import log_turn
 from .stickers import pick_sticker, log_event
 from .reply_style import (
-    split_reply, split_delay, clean_reply,
+    split_reply, split_delay, clean_reply, maybe_call_name,
 )
 from .voice import should_voice, send_voice, voice_requested
 from .vision import describe_image_bytes, _read_image_bytes, image_kind
@@ -431,6 +432,12 @@ async def _flush(win: _UserWindow) -> None:
                               reply_to=reply_to if not win.is_private else "",
                               **record_kwargs)
     reply = clean_reply(reply)  # 去括号前缀 + 整条至多 1 个括号
+    if reply and win.is_private:
+        # 称呼替换（2026-10-30）：模型要么每句都叫名字、要么一句都不叫；这里在**已经说出的话**上
+        # 按概率把一次"你"换成对方要的名字，落在中间。用 name_budget 兜底：最近她叫过就直接跳过。
+        _name = _user_name_for(win.target_id)
+        if _name and not name_budget_note(win.target_id):
+            reply = maybe_call_name(reply, _name)
     if not reply:
         # 未点名的群聊批次，模型输出的是“没点我/保持潜水”式元回复 → 这批就当没接。
         # handle_chat 已经只记了用户侧（不记这句元回复），这里不发送、不落聊天记录。

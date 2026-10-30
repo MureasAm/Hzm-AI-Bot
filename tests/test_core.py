@@ -5,6 +5,7 @@ from src.plugins.chatbot import core
 from src.plugins.chatbot import memory as mem
 from src.plugins.chatbot import rag
 from src.plugins.chatbot import reply_style
+from src.plugins.chatbot.reply_style import call_name_once, maybe_call_name
 from src.plugins.chatbot import routing
 
 
@@ -353,6 +354,41 @@ class TestBatchSummaryInjection:
         monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
         msgs = core.build_message_list("在吗", [], [])
         assert not any("这批消息的归纳" in m["content"] for m in msgs)
+
+
+class TestCallName:
+    """称呼替换（2026-10-30）：把一次安全的"你"换成对方要的名字。
+
+    背景：用户 2151983431 的回复要么每句都叫"温宝"、要么一句都不叫（工具化检索之后）。
+    现在在已经说出的话上换一个词，落在中间；频率由 NAME_CALL_RATE 控制。
+    """
+
+    def test_replaces_first_you(self):
+        assert call_name_once("明天还来？那灰泽满提前祝你玩到手抽筋。", "温宝")             == "明天还来？那灰泽满提前祝温宝玩到手抽筋。"
+
+    def test_skips_plural_and_greeting(self):
+        assert call_name_once("你们今天好吵。", "温宝") == "你们今天好吵。"
+        assert call_name_once("你好。", "温宝") == "你好。"
+
+    def test_skips_quoted(self):
+        assert call_name_once("灰泽满说了「你别闹」。", "温宝") == "灰泽满说了「你别闹」。"
+        # 括号里的"你"多半是心里话/舞台说明，不动；括号外照常换
+        assert call_name_once("（你别闹）灰泽满知道了。", "温宝") == "（你别闹）灰泽满知道了。"
+        assert call_name_once("（心虚）你别闹。", "温宝") == "（心虚）温宝别闹。"
+
+    def test_noop_when_name_already_there(self):
+        assert call_name_once("谢谢温宝。", "温宝") == "谢谢温宝。"
+
+    def test_noop_without_you(self):
+        assert call_name_once("灰泽满知道了。", "温宝") == "灰泽满知道了。"
+
+    def test_rate_zero_and_one(self):
+        assert maybe_call_name("谢谢你。", "温宝", rate=0) == "谢谢你。"
+        assert maybe_call_name("谢谢你。", "温宝", rate=1) == "谢谢温宝。"
+
+    def test_empty_inputs(self):
+        assert call_name_once("", "温宝") == ""
+        assert call_name_once("谢谢你。", "") == "谢谢你。"
 
 
 class TestCleanReply:
