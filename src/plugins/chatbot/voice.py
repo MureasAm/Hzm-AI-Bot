@@ -408,11 +408,18 @@ def _clean_wav(wav_path: Path) -> tuple[float, float]:
 # - 夹在中文里的（"P5R""VirtuaReal""QQ"）多是被**逐字母念**出来的，慢 → 回归得 10.5 字符/秒；
 # - 整句英文走英语前端，连读，实测 16~19 字符/秒（旧口径按中文字速估，能把期望撑到 3 倍，
 #   于是每条英文回复都被判"截断"、白白重合成三次）。
-_CJK_PER_SEC = 5.9
+# ⚠️ 2026-10-30 重新标定：5.9 是照"直播语速"估的，**合成出来实际只有 ~4 字/秒**
+# （实测：54 字 → 14.0s；32 字 → 7.0~8.9s）。估太快会让"期望时长"偏短：
+#   · 正常音频被当成"撑爆"反复重试（日志里那些"疑似截断或空洞，重试"多半是冤枉的）；
+#   · 真被截断的反而轻松过 0.6 门槛 → **尾音丢了也照样发出去**（用户报的"丢尾音"）。
+_CJK_PER_SEC = 4.0
 _LATIN_PER_SEC = 10.5
 _ENGLISH_PER_SEC = 16.0
 _MIN_SPEECH_RATIO = 0.6   # 有效语音 ≥ 期望的 60% 才算"读完整"
-_MAX_TOTAL_RATIO = 1.6    # 总长 ≤ 期望的 160%（再长就是被空洞撑出来的）
+# 总长上限相对期望的倍数。2026-10-30 从 1.6 提到 2.5：语速标定改准（4.0 字/秒）之后，
+# 真实成品里 1.6x 会误伤 2.1%（"说得慢"不是坏），2.5x 只剩 0.7% 的**真跑飞**（60 秒那类），
+# 这种宁可改发文字。
+_MAX_TOTAL_RATIO = 2.5
 _MIN_TOTAL_SEC = 5.0      # 短句只查"总长不超过这个绝对上限"，不按比例（期望太小没意义）
 _CHECK_MIN_CHARS = 8      # 短于这么多字不查"读完整"（"晚安"本来就短）
 
@@ -438,6 +445,29 @@ def _expect_seconds(text: str) -> float:
 def _bloat_limit(expect: float) -> float:
     """总长的上限：超过它 = 被空洞撑爆了。"""
     return max(expect * _MAX_TOTAL_RATIO, _MIN_TOTAL_SEC)
+
+
+# 峰值低于它 = **有长度但没声音**（16bit 满量程 32767）。
+# 实测（2026-10-30）：正常合成峰值 16000~32000；那批"语音条无声"的只有 300~650，
+# 时长也短（0.34~0.5s）——**不是 FP16 的问题**（显卡是 4060，而且同一句反复合成
+# 会时好时坏，纯文本相关）。检测得到就直接不发，退回文字。
+_SILENT_PEAK = 1000
+
+
+def _peak_amplitude(wav_path: Path) -> int:
+    """16bit PCM 的峰值幅度；读不了返回 -1（不该因为读失败就判定静音）。"""
+    try:
+        with wave.open(str(wav_path), "rb") as w:
+            if w.getsampwidth() != 2:
+                return -1
+            raw = w.readframes(w.getnframes())
+        if not raw:
+            return 0
+        a = array.array("h")
+        a.frombytes(raw)
+        return max(max(a), -min(a))
+    except Exception:
+        return -1
 
 
 def _is_acceptable(sec: float, total: float, expect: float, n_chars: int) -> bool:
@@ -484,7 +514,7 @@ async def _synthesize(reply_text: str, deadline: float | None = None) -> str | N
         # 缓存读回**必须复检**：不然历史坏条子（空洞/截断，3400+ 个文件里的那些）
         # 会被永久复用。复检顺手清一遍（幂等），不合格就重合成、覆盖它。
         sec, total = _clean_wav(cached)
-        if _is_acceptable(sec, total, expect, len(text)):
+        if _is_acceptable(sec, total, expect, len(text)) and _peak_amplitude(cached) >= _SILENT_PEAK:
             return str(cached)
         print(f"[语音] 缓存不合格（{cached.name}）：有效{sec:.1f}s/总{total:.1f}s vs "
               f"期望{expect:.1f}s，重新合成")
@@ -520,6 +550,10 @@ async def _synthesize(reply_text: str, deadline: float | None = None) -> str | N
                 VOICE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
                 cached.write_bytes(resp.content)
                 sec, total = _clean_wav(cached)   # 裁首尾静音 + 压句中空洞，并回报质量
+                peak = _peak_amplitude(cached)
+                if peak >= 0 and peak < _SILENT_PEAK:
+                    print(f"[语音] 第{attempt+1}次 静音（峰值{peak}，有效{sec:.2f}s），重试")
+                    continue
                 score = _quality_score(sec, total, expect)
                 if best is None or score > best[0]:
                     best = (score, cached.read_bytes(), sec, total)
@@ -536,6 +570,11 @@ async def _synthesize(reply_text: str, deadline: float | None = None) -> str | N
     if best is None:
         return None
     _, best_bytes, best_sec, best_total = best
+    if best_total > _bloat_limit(expect):
+        # 60 秒的怪音比不发更糟（用户听到的"单字拖长/整段拖"就是这个）。
+        # 宁可退回文字：信息不丢，只是少了语气。
+        print(f"⚠️ 多次合成都超长（总{best_total:.1f}s > 上限{_bloat_limit(expect):.1f}s），改发文字")
+        return None
     if not _is_acceptable(best_sec, best_total, expect, len(text)):
         print(f"⚠️ 多次合成仍不达标（有效{best_sec:.1f}s/总{best_total:.1f}s vs 期望{expect:.1f}s），"
               f"发最不烂的一次")

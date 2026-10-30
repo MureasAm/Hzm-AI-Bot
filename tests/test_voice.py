@@ -428,29 +428,64 @@ def _cache_path(text):
 
 
 class TestExpectSeconds:
-    """期望时长口径：中文 5.9 字/秒、拉丁 10.5 字符/秒（2026-10-11 回归标定）。"""
+    """期望时长口径：中文 **4.0 字/秒**、拉丁 10.5 字符/秒。
+
+    ⚠️ 2026-10-30 重新标定：原来的 5.9 字/秒是照直播语速写的，合成出来实际只有 ~4 字/秒
+    （实测 54 字 → 14.0s、32 字 → 7.0~8.9s）。估太快 → 期望偏短 → 正常音频被判"撑爆"反复重试，
+    而真截断的反而过得了 0.6 门槛（用户报的"丢尾音"就是这么漏出去的）。
+    """
 
     def test_chinese_rate(self):
-        # 59 个汉字 → 10 秒；旧的 4.2 字/秒会估成 14 秒（把正常语速判成截断）
-        assert v._expect_seconds("中" * 59) == pytest.approx(10.0, abs=0.3)
+        assert v._expect_seconds("中" * 59) == pytest.approx(59 / 4.0, abs=0.3)
 
     def test_latin_in_chinese_is_slow(self):
         # 夹在中文里的拉丁串多是被逐字母念的：按 10.5 字符/秒
-        assert v._expect_seconds("中" + "a" * 21) == pytest.approx(1 / 5.9 + 2.0, abs=0.1)
+        assert v._expect_seconds("中" + "a" * 21) == pytest.approx(1 / 4.0 + 2.0, abs=0.1)
 
     def test_pure_english_is_fast(self):
         # 整句英文连读（实测 16~19 字符/秒）——按中文字速估会把期望撑到 3 倍
         assert v._expect_seconds("a" * 32) == pytest.approx(2.0, abs=0.1)
 
     def test_punctuation_ignored(self):
-        assert v._expect_seconds("中" * 10 + "，。！？" * 3) == pytest.approx(10 / 5.9, abs=0.1)
+        assert v._expect_seconds("中" * 10 + "，。！？" * 3) == pytest.approx(10 / 4.0, abs=0.1)
 
     def test_mixed_adds_up(self):
         e = v._expect_seconds("中文" * 10 + "hello")
-        assert e == pytest.approx(20 / 5.9 + 5 / 10.5, abs=0.05)
+        assert e == pytest.approx(20 / 4.0 + 5 / 10.5, abs=0.05)
 
     def test_empty(self):
         assert v._expect_seconds("") == 0.0
+
+
+class TestPeakAmplitude:
+    """峰值检测：识别"有长度但没声音"的合成结果（2026-10-30）。"""
+
+    @staticmethod
+    def _write(tmp_path, samples):
+        import wave as _w
+        p = tmp_path / "t.wav"
+        with _w.open(str(p), "wb") as w:
+            w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
+            w.writeframes(b"".join(int(s).to_bytes(2, "little", signed=True) for s in samples))
+        return p
+
+    def test_silence_is_near_zero(self, tmp_path):
+        p = self._write(tmp_path, [0] * 16000)
+        assert v._peak_amplitude(p) < v._SILENT_PEAK
+
+    def test_quiet_but_audible_fails_too(self, tmp_path):
+        # 实测坏样本峰值 300~650：有长度、可听不见
+        p = self._write(tmp_path, [400, -500] * 8000)
+        assert v._peak_amplitude(p) < v._SILENT_PEAK
+
+    def test_normal_is_above_threshold(self, tmp_path):
+        p = self._write(tmp_path, [12000, -20000] * 8000)
+        assert v._peak_amplitude(p) >= v._SILENT_PEAK
+
+    def test_unreadable_returns_minus_one(self, tmp_path):
+        """读失败不能当静音判死，否则一次 IO 抖动就变哑巴。"""
+        p = tmp_path / "bad.wav"; p.write_bytes(b"not a wav")
+        assert v._peak_amplitude(p) == -1
 
 
 class TestAcceptance:
