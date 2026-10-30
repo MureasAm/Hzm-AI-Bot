@@ -372,6 +372,33 @@ class TestChainLayerBuilding:
         assert [e[2] for e in eps] == ["gemini-3.8-flash", "deepseek-flash"]
         assert eps[0][1] == "https://api-slb.krill-code.net/codex/v1"
 
+    def test_aux_prefix_reads_aux_endpoints(self):
+        """辅助链读 `AUX_*` 那一套，和主链互不干扰（2026-10-30 双链）。"""
+        cfg = self._cfg(aux_api_key="a1", aux_api_base="https://www.traxnode.com/v1",
+                        aux_model="gemini-2.5-flash-lite",
+                        aux_fallback1_api_key="a2", aux_fallback1_api_base="https://u-ai.me/v1",
+                        aux_fallback1_model="gemini-3.1-flash-lite")
+        layers = config._chain_layers(cfg, prefix="aux_")
+        assert layers[0][2] == "gemini-2.5-flash-lite（www.traxnode.com）"
+        assert [l[2] for l in layers[1:]] == ["gemini-3.1-flash-lite（u-ai.me）"]
+
+    def test_vision_defaults_to_aux_endpoint(self, monkeypatch):
+        """视觉默认跟**辅助链**端点，不再跟主端点。
+
+        踩坑（2026-10-30）：主链换成 apigoto 后视觉跟着搬过去，而 apigoto 没有
+        `gemini-3.1-flash-lite` → 每次看图 404「不支持此模型」。视觉是 gemini 的活，
+        天然属于辅助链那一侧。
+        """
+        cfg = SimpleNamespace(vision_model="gemini-2.5-flash-lite",
+                              aux_api_key="a1", aux_api_base="https://www.traxnode.com/v1",
+                              openai_api_key="k1", openai_api_base="https://api.apigoto.com/v1",
+                              zhipu_api_key="z")
+        monkeypatch.setattr(config, "get_driver", lambda: SimpleNamespace(config=cfg))
+        monkeypatch.setattr(config, "_vision_client_cache", None)
+        monkeypatch.setenv("AUX_CHAIN", "1")
+        client = config.get_vision_client()
+        assert "traxnode" in str(client.base_url)
+
     def test_unnumbered_fallback_still_works(self):
         """不带编号的 `FALLBACK_*` 仍当第 1 个端点读——**老配置不该因为这次改动失效**。"""
         cfg = self._cfg(fallback2_api_key=None, fallback2_api_base=None, fallback2_model=None)

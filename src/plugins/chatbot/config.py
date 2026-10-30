@@ -588,8 +588,13 @@ def get_vision_client():
     它**不接受 image_url 内容块**——主线路一抖，图片请求会落到不支持的模型上，
     整次视觉调用白给。视觉要的是一条确定的线路，所以按模型家族直接选 key/base：
     - `glm-*` → 智谱（老配置不用改）
-    - 其它（gemini…）→ 主模型线路（linkapi / OPENAI_API_BASE）
+    - 其它（gemini…）→ **辅助链的端点**（`AUX_*`；没配辅助链才退回主端点）
     想单独指定就配 `VISION_API_KEY` / `VISION_API_BASE`，优先级最高。
+
+    ⚠️ **别默认跟主端点**（2026-10-30 真实翻车）：主链换成 apigoto 之后，视觉也跟着搬过去了，
+    而 apigoto **没有** `gemini-3.1-flash-lite` → 每次看图都 404「不支持此模型」。
+    视觉是 gemini 家族的活，**天然属于辅助链那一侧**；把默认钉在 AUX 上，
+    以后再换主站也不会把视觉一起带走。
     """
     global _vision_client_cache
     if _vision_client_cache is not None:
@@ -602,8 +607,12 @@ def get_vision_client():
             key = get_config("zhipu_api_key")
             base = base or ZHIPU_BASE_URL
         else:
-            key = get_config("openai_api_key")
-            base = base or get_config("openai_api_base", DEEPSEEK_BASE_URL)
+            if aux_enabled():
+                key = get_config("aux_api_key")
+                base = base or get_config("aux_api_base", DEEPSEEK_BASE_URL)
+            else:
+                key = get_config("openai_api_key")
+                base = base or get_config("openai_api_base", DEEPSEEK_BASE_URL)
     if not key:
         raise ValueError("❌ 未检测到视觉模型 API key（VISION_API_KEY / OPENAI_API_KEY）")
     _vision_client_cache = _mk_client(key, base)
