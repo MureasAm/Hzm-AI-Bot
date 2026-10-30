@@ -488,6 +488,27 @@ class TestPeakAmplitude:
         assert v._peak_amplitude(p) == -1
 
 
+class TestTooShort:
+    """只念了半句的合成（真实案例 2026-10-30：「快递到了，可爱捏。」1.05s vs 期望1.75s）。
+
+    whisper 转写只剩"快点"两个字——有声音、峰值正常，但**听不懂**。这种宁可改发文字。
+    """
+
+    def test_real_case_is_too_short(self):
+        assert v._too_short(1.05, 1.75) is True
+
+    def test_normal_sentence_not_flagged(self):
+        assert v._too_short(4.40, 4.50) is False
+
+    def test_boundary(self):
+        assert v._too_short(1.75 * 0.69, 1.75) is True
+        assert v._too_short(1.75 * 0.71, 1.75) is False
+
+    def test_zero_expect_never_flagged(self):
+        # 期望算不出（全标点/空串）时别乱判
+        assert v._too_short(0.1, 0.0) is False
+
+
 class TestAcceptance:
     """合格 = 没被空洞撑爆 + 没被砍掉半句。"""
 
@@ -637,15 +658,32 @@ class TestSynthesize:
         await v._synthesize(_LONG)
         assert box["n"] == 3, "空洞结果必须继续重试，不能提前收工"
 
-    async def test_gives_up_keeps_least_bad(self, voice_env, monkeypatch):
-        """三次都不达标 → 发"最不烂"的一次（人声最长的），并缓存它。"""
+    async def test_all_too_short_falls_back_to_text(self, voice_env, monkeypatch):
+        """三次都只念了半句（总长 < 期望 70%）→ 改发文字，不再"发最不烂的一次"。
+
+        真实案例（2026-10-30 主动发言）：「快递到了，可爱捏。」合成 1.05s / 期望 1.75s，
+        whisper 转写只剩"快点"两个字——**有声音但听不懂**，比发文字更糟。
+        """
         _fake_httpx(monkeypatch, [
             _wav_bytes([("tone", 2.0)]),
             _wav_bytes([("tone", 3.5)]),
             _wav_bytes([("tone", 3.0)]),
         ])
-        out = await v._synthesize(_LONG)
-        assert 3.3 <= v._speech_seconds(Path(out)) <= 3.7
+        assert await v._synthesize(_LONG) is None
+
+    async def test_hollow_clip_falls_back_to_text(self, voice_env, monkeypatch):
+        """说两句 + 一大段空洞：清理后总长也短了 → 同样改发文字。"""
+        _fake_httpx(monkeypatch, [
+            _wav_bytes([("tone", 3.0), ("silence", 6.0)]),
+            _wav_bytes([("tone", 4.0), ("silence", 5.0)]),
+            _wav_bytes([("tone", 3.5), ("silence", 5.5)]),
+        ])
+        assert await v._synthesize(_LONG) is None
+
+    def test_quality_score_prefers_speech_and_penalises_bloat(self):
+        """"最不烂"的评分：先比有效语音，被撑爆的按比例打折（纯函数，直接测）。"""
+        assert v._quality_score(4.0, 4.2, 6.0) > v._quality_score(3.0, 3.2, 6.0)
+        assert v._quality_score(5.0, 20.0, 6.0) < v._quality_score(4.0, 4.2, 6.0)
 
     async def test_non_200_then_ok(self, voice_env, monkeypatch):
         expect = v._expect_seconds(v._tts_text(_LONG))

@@ -453,6 +453,12 @@ def _bloat_limit(expect: float) -> float:
 # 会时好时坏，纯文本相关）。检测得到就直接不发，退回文字。
 _SILENT_PEAK = 1000
 
+# 总长不到期望的这个比例 = **模型只念了半句就停**，这种"有声音但听不懂"比不发更糟。
+# 真实案例（2026-10-30 主动发言）：「快递到了，可爱捏。」7 个汉字，期望 1.75s，
+# 合成出来 1.05s、峰值很正常（31632）——**不是静音，是只念了"快点"两个字**，
+# whisper 转写只剩"快点"。原来这种会被判"不达标"，但仍按"发最不烂的一次"发出去。
+_MIN_TOTAL_RATIO = 0.7
+
 
 def _peak_amplitude(wav_path: Path) -> int:
     """16bit PCM 的峰值幅度；读不了返回 -1（不该因为读失败就判定静音）。"""
@@ -468,6 +474,11 @@ def _peak_amplitude(wav_path: Path) -> int:
         return max(max(a), -min(a))
     except Exception:
         return -1
+
+
+def _too_short(total: float, expect: float) -> bool:
+    """总长不到期望的 70% = 只念了半句（"有声音但听不懂"）。"""
+    return expect > 0 and total < expect * _MIN_TOTAL_RATIO
 
 
 def _is_acceptable(sec: float, total: float, expect: float, n_chars: int) -> bool:
@@ -514,7 +525,9 @@ async def _synthesize(reply_text: str, deadline: float | None = None) -> str | N
         # 缓存读回**必须复检**：不然历史坏条子（空洞/截断，3400+ 个文件里的那些）
         # 会被永久复用。复检顺手清一遍（幂等），不合格就重合成、覆盖它。
         sec, total = _clean_wav(cached)
-        if _is_acceptable(sec, total, expect, len(text)) and _peak_amplitude(cached) >= _SILENT_PEAK:
+        if (_is_acceptable(sec, total, expect, len(text))
+                and _peak_amplitude(cached) >= _SILENT_PEAK
+                and not _too_short(total, expect)):
             return str(cached)
         print(f"[语音] 缓存不合格（{cached.name}）：有效{sec:.1f}s/总{total:.1f}s vs "
               f"期望{expect:.1f}s，重新合成")
@@ -526,7 +539,13 @@ async def _synthesize(reply_text: str, deadline: float | None = None) -> str | N
     text_lang = _text_lang(text)
     loop = asyncio.get_running_loop()
     best: tuple[float, bytes, float, float] | None = None   # (质量分, 字节, 有效秒, 总秒)
-    for attempt, temperature in enumerate(_TTS_TEMPERATURES):
+    # 短句多试几次（2026-10-30 实测）：模型对短句是**双峰**的——同一个文本反复合成，
+    # 要么正常（1.4~3s），要么直接给个 0.34s/峰值 600 的空壳，或者只念半句就停。
+    # 单次坏率约 1/3，3 次全坏 ≈ 3.7%；短句每次编译只要 1~2s，试到 6 次能把全坏压到 0.4%。
+    temps = list(_TTS_TEMPERATURES)
+    if expect < 3.0:
+        temps = temps + list(_TTS_TEMPERATURES)
+    for attempt, temperature in enumerate(temps):
         left = None if deadline is None else deadline - loop.time()
         if left is not None and left < _TTS_MIN_ATTEMPT_SEC:
             # 预算不够：第一次就别开口，重试则不再试（等锁也可能把预算耗光）
@@ -570,6 +589,11 @@ async def _synthesize(reply_text: str, deadline: float | None = None) -> str | N
     if best is None:
         return None
     _, best_bytes, best_sec, best_total = best
+    if _too_short(best_total, expect):
+        # "有声音但听不懂"（只念了半句/念成别的词）比发文字更糟——用户听不出她在说什么。
+        print(f"⚠️ 多次合成都太短（总{best_total:.1f}s < 期望{expect:.1f}s 的"
+              f"{_MIN_TOTAL_RATIO:.0%}），改发文字")
+        return None
     if best_total > _bloat_limit(expect):
         # 60 秒的怪音比不发更糟（用户听到的"单字拖长/整段拖"就是这个）。
         # 宁可退回文字：信息不丢，只是少了语气。
