@@ -369,6 +369,19 @@ class TestCallName:
     def test_skips_plural_and_greeting(self):
         assert call_name_once("你们今天好吵。", "温宝") == "你们今天好吵。"
         assert call_name_once("你好。", "温宝") == "你好。"
+        assert call_name_once("你俩别闹。", "温宝") == "你俩别闹。"
+
+    def test_skips_inside_word(self):
+        """「迷你」里的"你"不是代词——换成"温宝"会变成"迷温宝"。"""
+        assert call_name_once("这是迷你世界。", "温宝") == "这是迷你世界。"
+
+    def test_sentence_initial_you(self):
+        """句首的"你"是最稳的主语位置（曾经因为空 prev 的 `in` 判断被误杀）。"""
+        assert call_name_once("你别这样，你听我说。", "温宝") == "温宝别这样，你听我说。"
+
+    def test_prefers_object_position(self):
+        """多个"你"时优先换宾语位置那个（祝你 > 你高兴）。"""
+        assert call_name_once("你高兴就好，灰泽满提前祝你玩得开心。", "温宝")             == "你高兴就好，灰泽满提前祝温宝玩得开心。"
 
     def test_skips_quoted(self):
         assert call_name_once("灰泽满说了「你别闹」。", "温宝") == "灰泽满说了「你别闹」。"
@@ -385,6 +398,11 @@ class TestCallName:
     def test_rate_zero_and_one(self):
         assert maybe_call_name("谢谢你。", "温宝", rate=0) == "谢谢你。"
         assert maybe_call_name("谢谢你。", "温宝", rate=1) == "谢谢温宝。"
+
+    def test_default_rate_replaces(self, monkeypatch):
+        """默认 1.0 = 安全的"你"直接换（用户 2026-10-30 定），不再掷骰子。"""
+        monkeypatch.delenv("NAME_CALL_RATE", raising=False)
+        assert maybe_call_name("谢谢你。", "温宝") == "谢谢温宝。"
 
     def test_empty_inputs(self):
         assert call_name_once("", "温宝") == ""

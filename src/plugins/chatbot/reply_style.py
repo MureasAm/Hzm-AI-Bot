@@ -551,40 +551,72 @@ def clean_reply(reply: str) -> str:
 #
 # 为什么放在后处理而不是提示词：提示词只能"鼓励/禁止"，模型是二元的（全叫或全不叫）；
 # 这里只在**已经说出的话**上换一个词，语法风险可控、频率可控、也不会改语义。
-_YOU_BAD_NEXT = ("们", "好")     # "你们""你好"换进去就不像话了
+# 「安全的你」判据（2026-10-30 用户要求：安全的就全换，频率不用掷骰子）。
+# 硬排除（这几种换了会变意思或不通）：
+#   · 引号/括号里 —— 那是引述或内心戏；
+#   · 后面跟 们/好/俩 —— "你们/你好/你俩"不是单指对方；
+#   · 前面是 迷 —— "迷你"是词的一部分。
+# 软评分（多个"你"时挑最像人称代词的那个）：
+#   · 前面是介词/动词（祝/给/跟/对/向/让/叫/帮/陪/请/和/与/替/问/看/觉得/想/希望）→ 宾语位置，最稳；
+#   · 在句首或标点后 → 主语位置，也很稳；
+#   · 后面跟 的/是/要/在/会/能/别/不/把/被/就/也 → 主语位置的常见形态。
+_YOU_BAD_NEXT = ("们", "好", "俩")
+_YOU_BAD_PREV = "迷"
+_YOU_OBJ_PREV = "祝给跟对向让叫帮陪请和与替问看觉得想希望"
+_YOU_SUBJ_NEXT = "的是要在会能别不把被就也都还又再"
+_YOU_CLAUSE_BREAK = "，。！？；、：…\n \t"
 _QUOTED_RE = re.compile(r"[（(【\[][^）)】\]]*[）)】\]]|[“「『][^”」』]*[”」』]")
 
 
-def call_name_once(reply: str, name: str) -> str:
-    """把回复里**第一处安全的"你"**换成对方的名字；没有可换的就原样返回。
+def _you_score(reply: str, i: int, spans: list) -> int:
+    """这个"你"换成名字有多安全；<0 = 不能换。"""
+    if any(a <= i < b for a, b in spans):
+        return -1
+    prev = reply[i - 1] if i > 0 else ""
+    nxt = reply[i + 1] if i + 1 < len(reply) else ""
+    # ⚠️ `prev` 为空串时不能用 `in` 判——`"" in "迷"` 恒为 True，句首的"你"会被误杀
+    if nxt in _YOU_BAD_NEXT or (prev and prev in _YOU_BAD_PREV):
+        return -1
+    score = 1                                  # 默认就是个代词，可换
+    if prev and prev in _YOU_OBJ_PREV:      # 空 prev 同样不能用 in（"" in "祝给…" 恒 True）
+        score += 3
+    if not prev or prev in _YOU_CLAUSE_BREAK:
+        score += 2
+    if nxt in _YOU_SUBJ_NEXT:
+        score += 1
+    return score
 
-    "安全"= 不在括号/引号里（那是引述或内心戏）、后面不是"们/好"。
-    "你的""给你""祝你"这种都能换（"温宝的""给温宝""祝温宝"都通顺）。
+
+def call_name_once(reply: str, name: str) -> str:
+    """把回复里**最安全的一处"你"**换成对方的名字；没有可换的就原样返回。
+
+    有多个"你"时按 `_you_score` 挑最像人称代词的那个（宾语位置 > 句首 > 主语形态），
+    同分取靠前的。只换一处：一句里叫一次名字就够了，多了反而像播报。
     """
     if not reply or not name or name in reply:
         return reply
     spans = [m.span() for m in _QUOTED_RE.finditer(reply)]
+    best_i, best = -1, 0
     for i, ch in enumerate(reply):
         if ch != "你":
             continue
-        if any(a <= i < b for a, b in spans):
-            continue
-        nxt = reply[i + 1] if i + 1 < len(reply) else ""
-        if nxt in _YOU_BAD_NEXT:
-            continue
-        return reply[:i] + name + reply[i + 1:]
-    return reply
+        s = _you_score(reply, i, spans)
+        if s > best:
+            best_i, best = i, s
+    if best_i < 0:
+        return reply
+    return reply[:best_i] + name + reply[best_i + 1:]
 
 
 def maybe_call_name(reply: str, name: str, rate: float | None = None) -> str:
-    """按概率决定这一句要不要把"你"换成名字（`NAME_CALL_RATE`，默认 0.35）。
+    """按概率决定这一句要不要把"你"换成名字（`NAME_CALL_RATE`，默认 1.0 = 安全的就换）。
 
     只在私聊用：群聊里"你"可能指整批人，换名会指错人。
     """
     if not reply or not name:
         return reply
     try:
-        rate = float(os.environ.get("NAME_CALL_RATE", "0.35")) if rate is None else rate
+        rate = float(os.environ.get("NAME_CALL_RATE", "1.0")) if rate is None else rate
     except ValueError:
         rate = 0.35
     if rate <= 0 or random.random() >= rate:
