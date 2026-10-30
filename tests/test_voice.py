@@ -603,6 +603,53 @@ def voice_env(monkeypatch, tmp_path):
     return refs
 
 
+class TestReferenceSelection:
+    """长短两条参考（2026-10-30）：短句走 ref_short，长句留 ref_voice。
+
+    实测（每条 40~66 次合成）：现有 6.3s 参考长句坏率 0%、但短句 ~35%（半句/空壳）；
+    5.1s 的 ref_short 短句 ~10%、长句同样 0%。所以不是"哪条更好"，是长短各一条更好。
+    """
+
+    @staticmethod
+    def _refs(tmp_path, names=("ref_voice", "ref_short")):
+        d = tmp_path / "refs"
+        d.mkdir()
+        for n in names:
+            (d / f"{n}.wav").write_bytes(b"x")
+        return d
+
+    def test_short_text_uses_ref_short(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(v, "SOVITS_REF_DIR", self._refs(tmp_path))
+        assert v._resolve_ref("晚安啦。").name == "ref_short.wav"
+
+    def test_long_text_uses_ref_voice(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(v, "SOVITS_REF_DIR", self._refs(tmp_path))
+        assert v._resolve_ref(_LONG).name == "ref_voice.wav"
+
+    def test_missing_short_ref_falls_back(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(v, "SOVITS_REF_DIR", self._refs(tmp_path, ("ref_voice",)))
+        assert v._resolve_ref("晚安啦。").name == "ref_voice.wav"
+
+
+class TestCacheKey:
+    """缓存键要带参考：换参考后不能复用旧音频（2026-10-30）。"""
+
+    async def test_short_ref_uses_own_cache_file(self, tmp_path, monkeypatch):
+        d = tmp_path / "refs"
+        d.mkdir()
+        for n in ("ref_voice", "ref_short"):
+            (d / f"{n}.wav").write_bytes(b"x")
+        (d / "ref_short.txt").write_text("参考", encoding="utf-8")
+        monkeypatch.setattr(v, "SOVITS_REF_DIR", d)
+        monkeypatch.setattr(v, "VOICE_CACHE_DIR", tmp_path / "cache")
+        monkeypatch.setattr(v, "get_voice_enabled", lambda: True)
+        text = "晚安啦。"
+        expect = v._expect_seconds(v._tts_text(text))
+        _fake_httpx(monkeypatch, [_wav_bytes([("tone", expect)])])
+        out = await v._synthesize(text)
+        assert out and Path(out).name.startswith("voice_short_")
+
+
 class TestSynthesize:
     async def test_cache_hit_good_skips_http(self, voice_env, monkeypatch):
         expect = v._expect_seconds(v._tts_text(_LONG))

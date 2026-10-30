@@ -254,17 +254,31 @@ def _pick_tier(reply: str) -> str:
     return "ref_serious"
 
 
+# 短句专用参考的阈值：期望时长低于它就用 ref_short。
+# **为什么按长短分两条参考**（2026-10-30 实测，每条 40~66 次合成）：
+#   · 现在这条 6.3 秒的参考（"居委会"那句）**长句很好**（坏率 0%、时长几乎正中），
+#     但**短句坏率 ~35%**——大量只念半句/空壳；
+#   · 训练集里那条 5.1 秒的（"萤火虫"）短句坏率 ~10%，长句也是 0% 坏、
+#     只是节奏略慢（时长/期望 1.16 vs 0.96）。
+#   所以不是"哪条更好"，是**长短各有一条更好**：短句走 ref_short，长句留 ref_voice。
+_SHORT_REF_MAX_SEC = 4.0
+
+
 def _resolve_ref(reply: str) -> Path | None:
-    """按情绪档选参考音频；档位文件缺失 → 回落 ref_voice.wav → 任一 .wav。一个参考也能跑。"""
+    """按"这句话多长 + 情绪档"选参考音频，缺档就往下回落，最后任一 .wav。"""
     d = Path(SOVITS_REF_DIR)
     if not d.exists():
         return None
-    tier = d / f"{_pick_tier(reply)}.wav"
-    if tier.exists():
-        return tier
-    default = d / "ref_voice.wav"
-    if default.exists():
-        return default
+    order = []
+    expect = _expect_seconds(_tts_text(reply or ""))
+    if 0 < expect < _SHORT_REF_MAX_SEC:
+        order.append("ref_short")
+    order.append(_pick_tier(reply or ""))
+    order.append("ref_voice")
+    for name in order:
+        p = d / f"{name}.wav"
+        if p.exists():
+            return p
     for wav in sorted(d.glob("*.wav")):
         return wav
     return None
@@ -518,8 +532,13 @@ async def _synthesize(reply_text: str, deadline: float | None = None) -> str | N
     text = _tts_text(reply_text)
     if not text:
         return None
+    # 缓存键**必须带上参考**（2026-10-30）：以前只按文本 md5，换参考后旧音频会被原样复用，
+    # 换了等于没换。短句参考用独立前缀，老缓存（长参考生成的那 7,400 条）继续有效，
+    # 只有短句会各生成一份。
+    ref_path = _resolve_ref(reply_text)
     h = hashlib.md5(text.encode("utf-8")).hexdigest()
-    cached = VOICE_CACHE_DIR / f"voice_{h}.wav"
+    stem = "voice_short" if ref_path is not None and ref_path.stem == "ref_short" else "voice"
+    cached = VOICE_CACHE_DIR / f"{stem}_{h}.wav"
     expect = _expect_seconds(text)
     if cached.exists():
         # 缓存读回**必须复检**：不然历史坏条子（空洞/截断，3400+ 个文件里的那些）
@@ -531,7 +550,6 @@ async def _synthesize(reply_text: str, deadline: float | None = None) -> str | N
             return str(cached)
         print(f"[语音] 缓存不合格（{cached.name}）：有效{sec:.1f}s/总{total:.1f}s vs "
               f"期望{expect:.1f}s，重新合成")
-    ref_path = _resolve_ref(reply_text)
     if ref_path is None:
         print(f"⚠️ 参考音频缺失: {SOVITS_REF_DIR} 下没有 .wav（放 ref_voice.wav 即可起步）")
         return None
