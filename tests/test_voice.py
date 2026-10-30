@@ -631,6 +631,38 @@ class TestReferenceSelection:
         assert v._resolve_ref("晚安啦。").name == "ref_voice.wav"
 
 
+class TestReferencePool:
+    """重试轮换用的参考池（2026-10-30）：短句 pol 以 ref_short 打头，长句以 ref_voice 打头。"""
+
+    def _refs(self, tmp_path):
+        d = tmp_path / "refs"
+        d.mkdir()
+        for n in ("ref_voice", "ref_short", "ref_alt1", "ref_alt2", "ref_alt3"):
+            (d / f"{n}.wav").write_bytes(b"x")
+        return d
+
+    def test_short_texts_start_with_ref_short(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(v, "SOVITS_REF_DIR", self._refs(tmp_path))
+        pool = v._ref_pool("晚安啦。")
+        assert pool[0].name == "ref_short.wav"
+        assert [p.name for p in pool][1:4] == ["ref_alt1.wav", "ref_alt2.wav", "ref_alt3.wav"]
+        assert pool[-1].name == "ref_voice.wav"     # 兜底永远落在默认参考上
+
+    def test_long_texts_start_with_ref_voice(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(v, "SOVITS_REF_DIR", self._refs(tmp_path))
+        assert v._ref_pool(_LONG)[0].name == "ref_voice.wav"
+
+    def test_missing_ref_short_still_has_pool(self, tmp_path, monkeypatch):
+        d = tmp_path / "refs"
+        d.mkdir()
+        for n in ("ref_voice", "ref_alt1"):
+            (d / f"{n}.wav").write_bytes(b"x")
+        monkeypatch.setattr(v, "SOVITS_REF_DIR", d)
+        pool = v._ref_pool("晚安啦。")
+        # 短句首选缺失时用备用参考，但池子里必须有默认那条兜底
+        assert pool and any(p.name == "ref_voice.wav" for p in pool)
+
+
 class TestCacheKey:
     """缓存键要带参考：换参考后不能复用旧音频（2026-10-30）。"""
 

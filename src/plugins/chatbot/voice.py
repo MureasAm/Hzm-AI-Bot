@@ -264,24 +264,41 @@ def _pick_tier(reply: str) -> str:
 _SHORT_REF_MAX_SEC = 4.0
 
 
-def _resolve_ref(reply: str) -> Path | None:
-    """按"这句话多长 + 情绪档"选参考音频，缺档就往下回落，最后任一 .wav。"""
+def _ref_pool(reply: str) -> list:
+    """这次合成可用的参考，**按优先级排好**。重试时依次轮换（2026-10-30）。
+
+    为什么要一池子而不是一条：坏合成是"文本 × 参考"的交互——同一句话换条参考常常就正常了。
+    固定一条重试，等于三种温度全压在同一条参考上，失败高度相关；
+    轮换能把失败**解相关**：短句 6 次尝试最多用到 4 条不同的参考。
+
+    顺序：短句 → ref_short 打头（实测短句坏率 ~10%，另一条长参考 ~35%）；
+    长句 → 情绪档 / ref_voice 打头（长句 0% 坏率）。后面统一挂 alt 备用。
+    """
     d = Path(SOVITS_REF_DIR)
     if not d.exists():
-        return None
-    order = []
+        return []
     expect = _expect_seconds(_tts_text(reply or ""))
+    order = []
     if 0 < expect < _SHORT_REF_MAX_SEC:
-        order.append("ref_short")
-    order.append(_pick_tier(reply or ""))
-    order.append("ref_voice")
+        # 短句：ref_short 打头，最后仍要落回情绪档/ref_voice——缺 ref_short 时不能没得用
+        order += ["ref_short", "ref_alt1", "ref_alt2", "ref_alt3",
+                  _pick_tier(reply or ""), "ref_voice"]
+    else:
+        order += [_pick_tier(reply or ""), "ref_voice", "ref_alt1", "ref_alt2"]
+    out = []
     for name in order:
         p = d / f"{name}.wav"
-        if p.exists():
-            return p
-    for wav in sorted(d.glob("*.wav")):
-        return wav
-    return None
+        if p.exists() and p not in out:
+            out.append(p)
+    if not out:
+        out = sorted(d.glob("*.wav"))[:1]
+    return out
+
+
+def _resolve_ref(reply: str) -> Path | None:
+    """首选参考（缓存键/日志用）；完整可轮换的池子见 `_ref_pool`。"""
+    pool = _ref_pool(reply)
+    return pool[0] if pool else None
 
 
 def _read_prompt_text(ref_path: Path) -> str:
@@ -535,7 +552,8 @@ async def _synthesize(reply_text: str, deadline: float | None = None) -> str | N
     # 缓存键**必须带上参考**（2026-10-30）：以前只按文本 md5，换参考后旧音频会被原样复用，
     # 换了等于没换。短句参考用独立前缀，老缓存（长参考生成的那 7,400 条）继续有效，
     # 只有短句会各生成一份。
-    ref_path = _resolve_ref(reply_text)
+    pool = _ref_pool(reply_text)
+    ref_path = pool[0] if pool else None
     h = hashlib.md5(text.encode("utf-8")).hexdigest()
     stem = "voice_short" if ref_path is not None and ref_path.stem == "ref_short" else "voice"
     cached = VOICE_CACHE_DIR / f"{stem}_{h}.wav"
@@ -553,7 +571,6 @@ async def _synthesize(reply_text: str, deadline: float | None = None) -> str | N
     if ref_path is None:
         print(f"⚠️ 参考音频缺失: {SOVITS_REF_DIR} 下没有 .wav（放 ref_voice.wav 即可起步）")
         return None
-    prompt_text = _read_prompt_text(ref_path)
     text_lang = _text_lang(text)
     loop = asyncio.get_running_loop()
     best: tuple[float, bytes, float, float] | None = None   # (质量分, 字节, 有效秒, 总秒)
@@ -572,11 +589,14 @@ async def _synthesize(reply_text: str, deadline: float | None = None) -> str | N
             break
         timeout = (_TTS_ATTEMPT_TIMEOUT_SEC if left is None
                    else max(3.0, min(_TTS_ATTEMPT_TIMEOUT_SEC, left)))
+        # 每次重试用**不同的参考**（轮换）：坏合成多半是某条参考对这句话不合适。
+        cur_ref = pool[attempt % len(pool)]
+        prompt_text = _read_prompt_text(cur_ref)
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 resp = await client.post(SOVITS_URL, json={
                     "text": text, "text_lang": text_lang,
-                    "ref_audio_path": str(ref_path),
+                    "ref_audio_path": str(cur_ref),
                     "prompt_text": prompt_text, "prompt_lang": "zh",
                     "top_k": 5, "top_p": 0.85, "temperature": temperature,
                     "speed_factor": 1.0, "media_type": "wav",
