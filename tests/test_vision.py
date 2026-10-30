@@ -163,6 +163,16 @@ class TestImageKind:
         assert vision.image_kind("[照片]\n一只猫") == "照片"
         assert vision.image_kind("[文档]\n一份表格") == "文档"
 
+    def test_she_is_her_tag(self):
+        """「[表情包·灰泽满本人]」这种带后缀的标签也要认出类型（2026-10-30）。
+
+        为什么要后缀：用户常发她自己的表情包，视觉认出是本人之后，聊天模型那句会变成
+        「这谁做的，怎么把灰泽满画得这么心虚」——比"发个表情包想表达什么"有意思得多。
+        后缀不能把 `image_kind` 弄崩，否则表情包判定整条失效。
+        """
+        assert vision.image_kind("[表情包·灰泽满本人]\n她比了个耶") == "表情包"
+        assert vision.image_kind("[照片·灰泽满本人]\n立绘") == "照片"
+
     def test_untagged_legacy_description(self):
         assert vision.image_kind("表情包：灰发角色躺着") == "表情包"
         assert vision.image_kind("一只猫在窗台上") == "其他"
