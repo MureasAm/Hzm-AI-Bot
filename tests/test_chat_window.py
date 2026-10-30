@@ -14,24 +14,35 @@ class TestCombineText:
         assert cw._combine_text([]) == ""
 
 
-class TestKeepImageDesc:
-    """文字+表情包时是否保留视觉描述（2026-10-19）。"""
+class TestImageNote:
+    """图在用户消息里怎么呈现（2026-10-30 三档：完整描述 / 情绪短标签 / 本人标记）。"""
 
-    def test_question_text_drops_sticker(self):
-        assert cw._keep_image_desc("怎么评价", "[表情包]\n一只虫子") is False
+    def test_question_text_compacts_sticker_to_mood(self):
+        note = cw._image_note("怎么评价", "[表情包]\n一只虫子在地上蠕动，表情很无奈")
+        assert note == "[表情包：无奈]"
+        assert "虫子" not in note          # 名词不许进用户消息——旧翻车的根子
 
-    def test_short_name_or_greeting_keeps_sticker(self):
-        assert cw._keep_image_desc("云子", "[表情包]\n躺在床上睡觉") is True
-        assert cw._keep_image_desc("晚安", "[表情包]\n睡觉") is True
+    def test_short_name_or_greeting_keeps_full(self):
+        assert cw._image_note("云子", "[表情包]\n躺在床上睡觉").startswith("[图片：")
+        assert cw._image_note("晚安", "[表情包]\n睡觉").startswith("[图片：")
 
-    def test_explicit_image_reference_keeps_sticker(self):
-        assert cw._keep_image_desc("这个表情包是什么", "[表情包]\n一只虫子") is True
+    def test_explicit_image_reference_keeps_full(self):
+        assert cw._image_note("这个表情包是什么", "[表情包]\n一只虫子").startswith("[图片：")
 
-    def test_empty_text_keeps_sticker(self):
-        assert cw._keep_image_desc("", "[表情包]\n一只虫子") is True
+    def test_empty_text_keeps_full(self):
+        assert cw._image_note("", "[表情包]\n一只虫子").startswith("[图片：")
 
-    def test_screenshot_always_kept(self):
-        assert cw._keep_image_desc("怎么评价", "[截图]\n小说封面") is True
+    def test_screenshot_always_full(self):
+        assert cw._image_note("怎么评价", "[截图]\n小说封面").startswith("[图片：")
+
+    def test_her_own_sticker_keeps_full(self):
+        """图里是她自己就**不压缩**：那种图本来就在聊她，而且实测完整描述回来的句子更活。"""
+        note = cw._image_note("今天好累啊", "[表情包·灰泽满本人]\n她比了个耶，表情得意")
+        assert note.startswith("[图片：[表情包·灰泽满本人]")
+        assert "灰泽满本人" in note
+
+    def test_no_mood_word_falls_back_to_plain_tag(self):
+        assert cw._image_note("怎么评价", "[表情包]\n一只虫子") == "[表情包]"
 
 
 class TestFlush:
@@ -142,8 +153,12 @@ class TestFlush:
         assert captured["vision"] == "一张猫；一张狗"
         assert captured["summary_msgs"] == [("你看", "一张猫；一张狗")]
 
-    async def test_sticker_description_dropped_when_text_has_topic(self, monkeypatch):
-        """文字+表情包：表情包只是反应，描述不进当前批次（2807992783 的翻车点）。"""
+    async def test_sticker_description_compacted_when_text_has_topic(self, monkeypatch):
+        """文字+表情包：描述压成情绪短标签，**名词不进当前批次**（2807992783 的翻车点）。
+
+        2026-10-30 从"整段丢掉"改成"只留情绪词"：整段丢看不见"求评价/表达心情"，
+        整段留又会被描述里的名词劫持话题。
+        """
         win = cw._UserWindow("u11")
         win.pending = [("u11", "怎么评价", [("http://img", "f")])]
         captured = {}
@@ -177,8 +192,9 @@ class TestFlush:
         monkeypatch.setattr(cw, "_sticker_state", {})
 
         await cw._flush(win)
-        assert captured["vision"] == ""
-        assert captured["transcript"] == "怎么评价"
+        assert captured["vision"] == "表情包"                 # 记录里也不留名词
+        assert captured["transcript"] == "怎么评价\n[表情包]"  # 短标签还在，虫子不在
+        assert "虫子" not in captured["transcript"]
 
     async def test_screenshot_description_kept(self, monkeypatch):
         """截图可能就是话题，不能因为带了文字就丢。"""

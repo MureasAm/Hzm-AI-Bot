@@ -106,28 +106,64 @@ _IMAGE_REF_RE = re.compile(
 _QUESTION_RE = re.compile(r"怎么|什么|为什么|如何|评价|觉得|呢|吗|哪|咋")
 
 
-def _keep_image_desc(text: str, desc: str) -> bool:
-    """文字+表情包时，是否把表情包描述喂给模型（2026-10-19）。
+_MOOD_WORDS = (
+    "无奈", "无语", "委屈", "得意", "卖萌", "撒娇", "尴尬", "害羞", "嫌弃", "崩溃",
+    "开心", "难过", "生气", "震惊", "疑惑", "期待", "害怕", "疲惫", "敷衍", "得逞",
+    "累", "困", "笑", "哭", "可爱",
+)
 
-    实测 2807992783：上一轮在聊小说，用户发「怎么评价」+ 虫子表情包，
-    表情包描述被当成了当前话题，她评价虫子而不是小说。
-    → 文字非空、图是表情包、文字没有明确指图时，**丢掉表情包描述**；
-      只有「云子」「晚安」「哈哈」这类短的非问句、纯图片消息才保留（表情包本身就是内容）。
+
+def _mood_words(desc: str, limit: int = 2) -> str:
+    """从视觉描述里按出现顺序抽情绪词（最多 limit 个）。抽不到返回空串。"""
+    found = [(desc.find(w), w) for w in _MOOD_WORDS if w in desc]
+    out = []
+    for _, w in sorted(found):
+        if w not in out:
+            out.append(w)
+        if len(out) >= limit:
+            break
+    return "/".join(out)
+
+
+def _plain_note(note: str) -> str:
+    """把 `_image_note` 的呈现还原成**记录/兜底**用的普通文字。
+
+    "[图片：X]" → "X"；"[表情包：无奈]" → "表情包，无奈"。短期记忆里那行是
+    「用户：…（附图：X）」，带着方括号会和记录模板的括号打架。
     """
+    note = (note or "").replace(chr(10), " ")
+    if note.startswith("[图片："):
+        return note[len("[图片："):].rstrip("]")
+    if note.startswith("[表情包"):
+        return note.strip("[]").replace("：", "，")
+    return note
+
+
+def _image_note(text: str, desc: str) -> str:
+    """一张图在**用户消息里**怎么呈现（2026-10-30 改成三档）。
+
+    - 纯图 / 极短非问句 / 文字明确指了图 → 完整描述（表情包本身就是内容）
+    - 文字 + 表情包 → `[表情包：无奈]` 这种**只带情绪词**的短标签
+    - 图里是灰泽满本人 → 短标签写成 `[表情包·灰泽满本人：得意]`
+
+    为什么不一刀切丢（旧规则 2026-10-19 的教训反过来）：文字+表情包整段丢掉，
+    就看不见"用户是想给她看 / 让她评价"和"用户在用表情包表达自己心情"这两种真需求；
+    而整段保留又会劫持话题（实测：聊小说时发「怎么评价」+虫子表情包，她去评价虫子）。
+    折中点是**只留情绪词、不留描述里的名词**——旧翻车的根子正是那个名词变成了话题。
+    """
+    desc = (desc or "").replace(chr(10), " ").strip()   # 描述是两行（标签+内容），内联时压成一行
     if image_kind(desc) != "表情包":
-        return True
+        return f"[图片：{desc}]"
+    # 图里是她自己：**不压缩**。实测（2026-10-30）同一句"怎么评价"+她的表情包，
+    # 完整描述回来的那句是"不就是灰泽满周五下午的状态嘛"——比短标签的"这表情包吗"活多了；
+    # 而且这种图本来就在聊她，不存在"把别人的话题劫走"的风险。
+    if "灰泽满本人" in desc:
+        return f"[图片：{desc}]"
     t = (text or "").strip()
-    if not t:
-        return True
-    if _IMAGE_REF_RE.search(t):
-        return True
-    if len(t) <= 4 and not _QUESTION_RE.search(t):
-        return True
-    return False
-
-
-# 群聊发送者昵称缓存：(group:user) → 昵称
-_sender_name_cache: dict[str, str] = {}
+    if not t or _IMAGE_REF_RE.search(t) or (len(t) <= 4 and not _QUESTION_RE.search(t)):
+        return f"[图片：{desc}]"
+    mood = _mood_words(desc)
+    return f"[表情包：{mood}]" if mood else "[表情包]"
 
 
 async def _get_sender_name(bot, group_id: str, user_id: str) -> str:
@@ -271,8 +307,10 @@ async def _flush(win: _UserWindow) -> None:
         if d:
             descs[i].append(d)
     all_descs = [d for ds in descs for d in ds]
-    parsed = [(s, t, [d for d in ds if _keep_image_desc(t, d)])
-              for (s, t, _), ds in zip(msgs, descs)]  # (sender, text, [保留的图片描述...])
+    # 给模型看的呈现（可能被压成情绪短标签）vs 给归纳/日志用的完整描述：
+    parsed = [(s, t, [_image_note(t, d) for d in ds])
+              for (s, t, _), ds in zip(msgs, descs)]     # (sender, text, [图片呈现...])
+    full = [(s, t, ds) for (s, t, _), ds in zip(msgs, descs)]  # 完整描述（归纳/日志用）
 
     # 组装：
     # · 私聊 = 纯文本 transcript（图片按顺序内联）
@@ -294,14 +332,13 @@ async def _flush(win: _UserWindow) -> None:
         for _, t, ds in parsed:
             if t.strip():
                 tlines.append(t.strip())
-            for d in ds:
-                tlines.append(f"[图片：{d}]")
+            tlines.extend(ds)   # _image_note 已经拼好 "[图片：…]" / "[表情包：无奈]"，别再包
         user_transcript = "\n".join(tlines).strip()
     else:
         lines, plain_lines, addressed_lines = [], [], []
         addressed_speakers = []
         last_speaker = ""
-        for s, t, ds in parsed:
+        for (s, t, ds), (_, _, fds) in zip(parsed, full):
             text = t.strip()
             if not text and not ds:
                 continue
@@ -313,11 +350,11 @@ async def _flush(win: _UserWindow) -> None:
             batch_addressed = batch_addressed or addressed
             # 模型看到的用户消息也要干净：把内部的 @ 标记换成中性说法（点名情况另由系统元信息给）
             shown = text.replace(AT_SELF_MARK, "").strip() or ("（只 @ 了她）" if addressed else "")
-            body = " ".join(([shown] if shown else []) + [f"[图片：{d}]" for d in ds])
+            body = " ".join(([shown] if shown else []) + list(ds))
             lines.append(f"{name}：{body}")
             # 归纳用**中性版**（`shown`）：内部 @ 标记不该进对话线，否则会被归纳成
             # 「有人@了灰泽满」再注入回去，模型有了可复述的标记来源。
-            group_items.append((name, shown, "；".join(ds)))
+            group_items.append((name, shown, "；".join(fds)))
             if text:
                 plain_lines.append(f"{name}：{text}")
             if addressed:
@@ -336,7 +373,7 @@ async def _flush(win: _UserWindow) -> None:
             group_address_note = "；".join(addressed_lines[:3])
         reply_to = addressed_speakers[-1] if addressed_speakers else last_speaker
 
-    vision_desc = "；".join(d for _, _, ds in parsed for d in ds)
+    vision_desc = "；".join(_plain_note(n) for _, _, ds in parsed for n in ds)
     img_count = sum(len(ds) for _, _, ds in parsed)
     print(f"[读秒] {'群' if not win.is_private else '私聊'}={win.target_id} "
           f"攒批 {len(msgs)} 条 → 回复" + (f"（含 {img_count} 张图）" if img_count else ""))
@@ -347,7 +384,7 @@ async def _flush(win: _UserWindow) -> None:
     batch_summary = ""
     group_thread_note = ""
     if win.is_private:
-        batch_summary = await summarize_batch([(t, "；".join(ds)) for _, t, ds in parsed])
+        batch_summary = await summarize_batch([(t, "；".join(ds)) for _, t, ds in full])
     else:
         group_thread_note = await summarize_group_batch(group_items)
     # 群近况写入群记忆（有冷却，防碎碎念刷爆；只记有信息量的归纳）
