@@ -45,6 +45,36 @@ class TestImageNote:
         assert cw._image_note("怎么评价", "[表情包]\n一只虫子") == "[表情包]"
 
 
+class TestSenderName:
+    """群聊昵称解析。2026-10-30 线上报过 `name '_sender_name_cache' is not defined`——
+    当时整段替换函数把缓存声明一起删了，而群聊用例都 monkeypatch 了这个函数，单测没抓到。"""
+
+    def test_cache_declared(self):
+        assert isinstance(cw._sender_name_cache, dict)
+
+    async def test_returns_card_and_caches(self, monkeypatch):
+        monkeypatch.setattr(cw, "_sender_name_cache", {})
+        calls = []
+
+        class _Bot:
+            async def get_group_member_info(self, group_id, user_id):
+                calls.append((group_id, user_id))
+                return {"card": "甲", "nickname": "nick"}
+
+        assert await cw._get_sender_name(_Bot(), "123", "456") == "甲"
+        assert await cw._get_sender_name(_Bot(), "123", "456") == "甲"
+        assert len(calls) == 1          # 第二次走缓存，不再打 API
+
+    async def test_failure_falls_back_to_short_id(self, monkeypatch):
+        monkeypatch.setattr(cw, "_sender_name_cache", {})
+
+        class _Bot:
+            async def get_group_member_info(self, **kw):
+                raise RuntimeError("boom")
+
+        assert await cw._get_sender_name(_Bot(), "1", "9876543210") == "绿冻3210"
+
+
 class TestFlush:
     async def test_flush_combines_and_splits(self, monkeypatch):
         win = cw._UserWindow("u1")

@@ -166,6 +166,13 @@ def _image_note(text: str, desc: str) -> str:
     return f"[表情包：{mood}]" if mood else "[表情包]"
 
 
+# 群聊发送者昵称缓存：(group:user) → 昵称
+# ⚠️ 这行被误删过一次（2026-10-30 线上 NameError：`name '_sender_name_cache' is not defined`）——
+# 当时把 `_keep_image_desc` 整段替换掉时，把函数**后面**的这行声明一起带走了，
+# 单测没抓到是因为群聊用例都 monkeypatch 了 `_get_sender_name`。**改这段代码时别整段删到下一个 def。**
+_sender_name_cache: dict[str, str] = {}
+
+
 async def _get_sender_name(bot, group_id: str, user_id: str) -> str:
     """取群成员昵称（缓存 + 失败用短 id 兜底），群聊组装时标注"谁在说话"。"""
     key = f"{group_id}:{user_id}"
