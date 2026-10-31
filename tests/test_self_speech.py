@@ -69,6 +69,19 @@ async def test_rewrites_group_reply_to_line():
 
 
 @pytest.mark.asyncio
+async def test_image_note_is_preserved_in_paraphrase():
+    """她主动发「图片+正文」时，记忆行带 [发了…图片…]；转述只能改正文，图片事实要保留。"""
+    hist = ["[3分钟前] 灰泽满：[发了1张图片：一只白猫趴在窗台上] 看看这个"]
+    client, comp = _client('{"gists": ["她让对方看这张图。"]}')
+    new_hist, _ = await self_speech.annotate_turn(hist, "嗯", client)
+    assert comp.calls == 1
+    assert new_hist[0] == (
+        "[3分钟前] 灰泽满（转述）："
+        "[发了1张图片：一只白猫趴在窗台上] 她让对方看这张图。"
+    )
+
+
+@pytest.mark.asyncio
 async def test_environment_claim_is_sanitized():
     assert "网速" not in self_speech._sanitize_gist(
         "x", "她提到虚拟澳洲的网速很慢，能回话就不错了。")
@@ -77,6 +90,20 @@ async def test_environment_claim_is_sanitized():
     # 对方的环境/普通事实不动
     assert self_speech._sanitize_gist("x", "她抱怨对方网速慢。") == "她抱怨对方网速慢。"
     assert self_speech._sanitize_gist("x", "她提到明天要早起。") == "她提到明天要早起。"
+
+
+def test_plan_with_device_is_not_downgraded_to_environment_claim():
+    """「马上要直播，在调设备」是计划，不是环境抱怨。
+
+    2026-10-30 线上：这条被转述成「她提到环境/设备状态，可能只是随口一说，不是事实」，
+    下一句「快进到电脑打不开」失去锚点，回复按字面修电脑。计划必须保留。
+    """
+    g = "她告诉对方自己马上要直播，正在调设备。"
+    assert self_speech._sanitize_gist("x", g) == g
+    # 纯环境抱怨仍然降级
+    env = "她提到虚拟澳洲这边的设备经常出故障，自己也没办法。"
+    out = self_speech._sanitize_gist("x", env)
+    assert "经常出故障" not in out
 
 
 @pytest.mark.asyncio

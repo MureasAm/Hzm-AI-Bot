@@ -1,5 +1,6 @@
 """读秒窗口（chat_window）攒批/读图/归纳/分批发送逻辑的单元测试。"""
 import asyncio
+import time
 
 import pytest
 
@@ -514,8 +515,8 @@ class TestGroupTranscript:
 
         assert captured["is_group"] is True
         # 用户消息里不再有 [未点名]/[对灰泽满] 标记（模型会照抄）
-        assert captured["transcript"] == ("甲：今天下雨了\n"
-                                          "乙：你怎么看")
+        assert captured["transcript"] == ("[1] 甲：今天下雨了\n"
+                                          "[2] 乙：你怎么看")
         assert "[未点名]" not in captured["transcript"]
         assert "[对灰泽满]" not in captured["transcript"]
         assert "[有人@了灰泽满]" not in captured["transcript"]
@@ -572,12 +573,58 @@ class TestGroupTranscript:
 
         await cw._flush(win)
 
-        assert captured["transcript"] == "甲：看这个 [图片：一只虫子]"
+        assert captured["transcript"] == "[1] 甲：看这个 [图片：一只虫子]"
         # 未点名：一个字都不注（旧版会注“本批无人点名”，正是元回复的根）
         assert captured["address_note"] == ""
 
 
-class TestBatchCommitOnInterrupt:
+class TestGroupReplyTag:
+    """群聊 <reply:编号>：映射到本批消息的 QQ message_id，标签必须从正文剥掉。"""
+
+    async def test_reply_tag_maps_and_strips(self, monkeypatch):
+        win = cw._UserWindow("g3")
+        win.is_private = False
+        win.pending = [("u1", "在吗", [])]
+        win.pending_meta = [{"ts": time.time() - 180, "message_id": "12345"}]
+        captured = {}
+
+        async def fake_name(bot, group_id, user_id):
+            return "甲"
+
+        async def fake_gate(client, hist, batch, thread_note=""):
+            return True
+
+        async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False,
+                              user_transcript="", **kwargs):
+            captured["transcript"] = user_transcript
+            return "<reply:1>[1]在呢"
+
+        async def fake_summarize(msgs):
+            return ""
+
+        async def fake_pick(client, reply, avoid_groups=None, **kwargs):
+            return None
+
+        async def fake_send(win_, content, reply_mid=""):
+            captured.update(content=content, mid=reply_mid)
+
+        monkeypatch.setattr(cw, "_get_sender_name", fake_name)
+        monkeypatch.setattr(cw, "should_reply_in_group", fake_gate)
+        monkeypatch.setattr(cw, "handle_chat", fake_handle)
+        monkeypatch.setattr(cw, "summarize_batch", fake_summarize)
+        monkeypatch.setattr(cw, "_get_clients", lambda: (object(), None))
+        monkeypatch.setattr(cw, "pick_sticker", fake_pick)
+        monkeypatch.setattr(cw, "_sticker_state", {})
+        monkeypatch.setattr(cw, "_send", fake_send)
+        monkeypatch.setattr(cw.group_memory, "upsert_members", lambda *a, **k: None)
+        monkeypatch.setattr(cw.group_memory, "add_event", lambda *a, **k: None)
+
+        await cw._flush(win)
+
+        # 相对时间：180 秒 → 3分钟前
+        assert captured["transcript"] == "[1] 甲（3分钟前）：在吗"
+        assert captured["content"] == "在呢"
+        assert captured["mid"] == "12345"
     """被打断的批次不能丢（2026-10-20「跑步呀」事故）。
 
     旧实现一进 `_flush` 就把 pending 清空；新消息取消回复任务时，那批已经被取走 →

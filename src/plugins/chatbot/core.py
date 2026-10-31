@@ -429,7 +429,7 @@ def build_message_list(user_msg: str, fused_items: list,
                        vision_desc: str = "", weather_city: str = "",
                        batch_summary: str = "", preference_items: list = None,
                        core_stories: list = None, session_context: str = "",
-                       query_hint: str = "", denied_terms: set | None = None,
+                       query_hint: str = "", pragmatic_hint: str = "", denied_terms: set | None = None,
                        group_context: str = "", history_gap_note: str = "",
                        prev_session_note: str = "", same_request: dict = None,
                        profile_context: str = "", commitment_context: str = "",
@@ -439,6 +439,7 @@ def build_message_list(user_msg: str, fused_items: list,
                        association_context: str = "", association_entities: list | None = None,
                        is_group: bool = False, group_address_note: str = "",
                        group_thread_note: str = "", name_budget: str = "",
+                       group_batch_note: str = "",
                        habit_hint: str = "", now_context: str = "",
                        time_hint: str = "", prefetch_context: str = "",
                        tool_note: str = "", request_context: str = "",
@@ -579,6 +580,13 @@ def build_message_list(user_msg: str, fused_items: list,
                          "content": inj.T("group", "address_note", note=group_address_note)})
         _mark("group_addr")
 
+    # 本批新消息的回复方式：编号 + “整段回” + <reply:n>。
+    # 只在群聊且确实是一批多条时注；单条消息不需要额外指令。
+    if group_batch_note:
+        messages.append({"role": "system",
+                         "content": inj.T("group", "batch_note", count=group_batch_note)})
+        _mark("group_batch")
+
     # 名词库（terms/lorebook）：核心词 always 注入 + 命中用户消息的词注入——让模型懂"绿冻/枪神8/slg"这类词并带对的态度
     _term_hits: list = []
     terms_note = build_terms_note(user_msg, denied_terms=denied_terms,
@@ -716,7 +724,13 @@ def build_message_list(user_msg: str, fused_items: list,
 
     # 短消息语境提示：用户消息 ≤4 字时，把扩充后的完整语义作为提示给模型
     # （正文仍是原 msg，这里帮模型理解"咋这样"这种短句的真实含义）
-    if query_hint:
+    if pragmatic_hint:
+        # 语用注释（玩笑/反讽/预演）：和短消息补全不同，它作用于**任意长度**的消息。
+        # 单独一个变体，避免 query_hint 的“短消息/指代性消息”措辞误导模型。
+        messages.append({"role": "system", "content": inj.T("query_hint", "pragmatic", hint=pragmatic_hint)})
+        hit_blocks.append("query_hint")
+        _mark("query_hint")
+    elif query_hint:
         # 纯表情消息：按表情的真实情绪回应，体现情绪该有的态度，不被当前话题绑架
         if is_emoji_msg(final_user):
             # 这里**只做"别读错情绪"的正确性约束，不规定她该怎么反应**——
@@ -1189,7 +1203,8 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
                       batch_summary: str = "", is_group: bool = False,
                       user_transcript: str = "", record_text: str = "",
                       group_addressed: bool = True, group_address_note: str = "",
-                      group_thread_note: str = "", reply_to: str = "") -> str:
+                      group_thread_note: str = "", group_batch_note: str = "",
+                      reply_to: str = "") -> str:
     """处理一条用户消息，返回机器人回复。vision_desc 为图片描述；batch_summary 为批量归纳。
 
     is_group=True 时按群会话处理：user_id 传群号（会话历史按群记），
@@ -1408,11 +1423,29 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         await context_probe.warm_weather(weather_city)
     # query_hint：短消息（≤4字）的语境扩充，仅当扩充句与原文不同时传入，帮模型理解短句
     query_hint = retrieval_query if (retrieval_query and retrieval_query != query_text) else ""
+    # 语用注释（2026-10-31）：玩笑/反讽/预演这类“不是字面”的消息，单独给一条提示。
+    # 与 query_hint 分开：它作用于任意长度，措辞也不能写成“短消息补全”。
+    pragmatic_hint = ""
+    _pa = str(probe_meta.get("speech_act") or "")
+    _pn = str(probe_meta.get("pragmatic_note") or "").strip()
+    _sc = str(probe_meta.get("scene") or "").strip()
+    _st = str(probe_meta.get("implied_stance") or "").strip()
+    try:
+        _pc = float(probe_meta.get("pragmatic_confidence") or 0)
+    except (TypeError, ValueError):
+        _pc = 0.0
+    if _pn and _pc >= 0.6 and _pa in ("tease", "anticipation", "roleplay", "other"):
+        pragmatic_hint = ((f"场景：{_sc}。" if _sc else "")
+                          + _pn
+                          + (f"（更自然的反应：{_st}）" if _st else ""))
+        print(f"[语用] {_pa} → {pragmatic_hint[:60]}")
     # 术语语境确认：confirm:true 的命中做一次便宜 LLM 判断，剔除误触词条（词→意思守卫）
     denied_terms = await confirm_ambiguous_terms(user_msg, deepseek_client)
     # 条目级注入轨迹：build 时填"实际注入了哪些块/条目"，回复生成后再补称呼是否被用，
     # 由下面统一落盘（只有 私/群 真实聊天路径写，和 block_hits 同一个闸）。
     injection_trace: dict = {}
+    if pragmatic_hint:
+        injection_trace.setdefault("values", {})["pragmatic"] = pragmatic_hint[:200]
     # 自述转述（2026-10-21）：历史里她的原句 + 本轮对她自己话的引用，注入前改写成大意。
     # 实测原句 20/20 会复读同一句式，加提醒仍 16–20/20，改成大意 0/20。
     # 只改注入，不改检索、不改落盘记录。
@@ -1447,6 +1480,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         preference_items=[] if v3 else preference_items,
         core_stories=[] if v3 else core_stories,
         session_context=session_context, query_hint=query_hint,
+        pragmatic_hint=pragmatic_hint,
         denied_terms=denied_terms, group_context=group_context,
         history_gap_note=history_gap_note, prev_session_note=_prev_session_note,
         same_request=ctx.get("same_request"),
@@ -1457,6 +1491,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         association_context=_assoc["note"], association_entities=_assoc["entities"],
         is_group=is_group, group_address_note=group_address_note,
         group_thread_note=group_thread_note, name_budget=name_budget,
+        group_batch_note=group_batch_note,
         habit_hint=habit_hint, now_context=now_context, time_hint=time_hint,
         prefetch_context=prefetch_context, tool_note=tool_note,
         request_context=request_context, reminders_context=reminders_context,

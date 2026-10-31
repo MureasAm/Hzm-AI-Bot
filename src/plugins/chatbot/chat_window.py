@@ -23,7 +23,7 @@ from .core import (
     _user_name_for, name_budget_note,
 )
 from .config import set_llm_route, get_vision_client, aux_clients_or
-from .memory import get_user_history, append_user_history
+from .memory import get_user_history, append_user_history, humanize_gap
 from .group_gate import should_reply_in_group, _addressed_to_her
 from .chatlog import log_turn
 from .stickers import pick_sticker, log_event
@@ -51,6 +51,9 @@ class _UserWindow:
     def __init__(self, target_id: str):
         self.target_id = target_id
         self.pending: list[tuple[str, str, list[tuple[str, str]]]] = []   # (sender_id, text, [(image_url, image_file), ...])
+        # 与 pending 按下标对齐的元信息（ts / message_id）。不并进 tuple，
+        # 是为了不打断现有测试/调用方对 pending 三元组的约定。
+        self.pending_meta: list[dict] = []
         self.task: asyncio.Task | None = None      # 当前"窗口等待/发送"任务
         self.generation = 0                        # 每次 enqueue 自增
         self.bot = None
@@ -236,7 +239,8 @@ async def _describe_image_src(bot, image_url: str, image_file: str) -> str:
 
 
 def enqueue(target_id: str, sender_id: str, text: str,
-            image_sources: list[tuple[str, str]], bot, is_private: bool) -> None:
+            image_sources: list[tuple[str, str]], bot, is_private: bool,
+            *, ts: float | None = None, message_id: str = "") -> None:
     """采集一条消息进缓冲，重置读秒窗口。
 
     窗口按 target_id（私聊=user_id，群聊=group_id）开——群成员发言攒同一个窗口。
@@ -254,8 +258,14 @@ def enqueue(target_id: str, sender_id: str, text: str,
     win.is_private = is_private
     # 私聊/群聊统一：整窗口攒批、读秒后一起回（群=回整场群聊）
     win.pending.append((sender_id, text, list(image_sources)))
+    win.pending_meta.append({
+        "ts": float(ts) if ts is not None else time.time(),
+        "message_id": str(message_id or ""),
+    })
     if len(win.pending) > 30:
-        del win.pending[:len(win.pending) - 30]
+        cut = len(win.pending) - 30
+        del win.pending[:cut]
+        del win.pending_meta[:cut]
     for url, _ in image_sources:
         if url:
             spawn(_eager_download(url))
@@ -294,11 +304,14 @@ async def _flush(win: _UserWindow) -> None:
     #    实况：「跑步呀」已经开始回复，6 秒后「你忘了吗」进来把它取消，
     #    于是「跑步呀」既没回复、也没进记忆/聊天记录，下一轮只看得到「早」。
     msgs = list(win.pending)
+    # 与 msgs 对齐的元信息；测试里手工设置 pending 时没有 meta，用空 dict 兜底。
+    metas = [win.pending_meta[i] if i < len(win.pending_meta) else {} for i in range(len(msgs))]
     my_gen = win.generation   # 起跑时的代际；后面用它判断"我是否已被新消息取代"
 
     def _commit_batch() -> None:
         """这一批已经生成并记录完毕，从 pending 删掉；中途被取消就永远走不到这里。"""
         del win.pending[:len(msgs)]
+        del win.pending_meta[:len(msgs)]
 
     # 读图：本批所有消息里的**所有**图片统一在回复前解析（不是收到就秒解析，避免节奏割裂）
     async def _parse(src: tuple[str, str]) -> str:
@@ -334,6 +347,7 @@ async def _flush(win: _UserWindow) -> None:
     batch_addressed = False
     group_items: list[tuple[str, str, str]] = []   # (昵称, 文本, 图片描述) → 对话线归纳
     reply_to = ""                                  # 她这句在回谁（历史里标「灰泽满（回X）」）
+    group_refs: dict[int, dict] = {}
     if win.is_private:
         combined = _combine_text([(t, ds) for _, t, ds in parsed])
         tlines = []
@@ -346,7 +360,9 @@ async def _flush(win: _UserWindow) -> None:
         lines, plain_lines, addressed_lines = [], [], []
         addressed_speakers = []
         last_speaker = ""
-        for (s, t, ds), (_, _, fds) in zip(parsed, full):
+        line_no = 0
+        for idx, ((s, t, ds), (_, _, fds)) in enumerate(zip(parsed, full)):
+            meta = metas[idx] if idx < len(metas) else {}
             text = t.strip()
             if not text and not ds:
                 continue
@@ -359,7 +375,14 @@ async def _flush(win: _UserWindow) -> None:
             # 模型看到的用户消息也要干净：把内部的 @ 标记换成中性说法（点名情况另由系统元信息给）
             shown = text.replace(AT_SELF_MARK, "").strip() or ("（只 @ 了她）" if addressed else "")
             body = " ".join(([shown] if shown else []) + list(ds))
-            lines.append(f"{name}：{body}")
+            line_no += 1
+            # 每条带本地编号 + 相对时间：群聊里旧消息被唤醒后当成刚发生，是高频翻车点。
+            # <90 秒不显示时间（同一批内没必要），只有跨批次/断线重连才会出现。
+            ts = meta.get("ts")
+            age = humanize_gap(time.time() - float(ts)) if ts else ""
+            age_part = f"（{age}前）" if age else ""
+            lines.append(f"[{line_no}] {name}{age_part}：{body}")
+            group_refs[line_no] = meta
             # 归纳用**中性版**（`shown`）：内部 @ 标记不该进对话线，否则会被归纳成
             # 「有人@了灰泽满」再注入回去，模型有了可复述的标记来源。
             group_items.append((name, shown, "；".join(fds)))
@@ -423,14 +446,29 @@ async def _flush(win: _UserWindow) -> None:
     if not win.is_private:
         # 内部 @ 标记也不进历史（模型会照抄）；历史只留干净的「昵称：文本」
         record_kwargs["record_text"] = _compose_record_msg(_clean_group_record(combined), vision_desc)
+    group_batch_note = (f"本批 {len(msgs)} 条"
+                        if not win.is_private and len(msgs) >= 2 else "")
     reply = await handle_chat(win.target_id, combined, vision_desc=vision_desc,
                               batch_summary=batch_summary, is_group=not win.is_private,
                               user_transcript=user_transcript,
                               group_addressed=(True if win.is_private else batch_addressed),
                               group_address_note=group_address_note,
                               group_thread_note=group_thread_note,
+                              group_batch_note=group_batch_note,
                               reply_to=reply_to if not win.is_private else "",
                               **record_kwargs)
+    # <reply:编号>：桥接式群聊的“接某一条”协议。只在群聊生效；
+    # 编号映射到本批消息的 QQ message_id，发送时变成引用回复。
+    # 标签必须在 clean_reply / 落盘之前剥掉，绝不能发到 QQ 上。
+    reply_mid = ""
+    if not win.is_private and reply:
+        m = re.search(r"<reply:(\d+)>", reply)
+        if m:
+            n = int(m.group(1))
+            reply_mid = str(group_refs.get(n, {}).get("message_id") or "")
+            reply = (reply[:m.start()] + reply[m.end():]).strip()
+        # 模型偶尔会把用户消息里的 [1] 当成自己的编号照抄；群聊开头剥掉。
+        reply = re.sub(r"^\s*\[\d+\]\s*", "", reply).strip()
     reply = clean_reply(reply)  # 去括号前缀 + 整条至多 1 个括号
     if reply and win.is_private:
         # 称呼替换（2026-10-30）：模型要么每句都叫名字、要么一句都不叫；这里在**已经说出的话**上
@@ -477,10 +515,16 @@ async def _flush(win: _UserWindow) -> None:
     parts = split_reply(reply) if SPLIT_REPLY_ENABLED else [reply]
     # 拆分后每段再清一次：内联括号可能落在某段开头（如 （刚醒，声音哑哑的）...），剥掉
     parts = [clean_reply(p) for p in parts]
-    for p in parts[:-1]:
-        await _send(win, p)
+    for i, p in enumerate(parts[:-1]):
+        if i == 0 and reply_mid:
+            await _send(win, p, reply_mid=reply_mid)
+        else:
+            await _send(win, p)
         await asyncio.sleep(split_delay(p))
-    await _send(win, parts[-1])
+    if len(parts) == 1 and reply_mid:
+        await _send(win, parts[-1], reply_mid=reply_mid)
+    else:
+        await _send(win, parts[-1])
 
     # 表情包：文字发完之后，若某张表情与这句话"十分对应"就补一张。
     # （语音那条路在上面单独调了一次——它提前 return，不在这里。）
@@ -560,9 +604,15 @@ def _to_qq_image(rel_path: str) -> str:
     return "file:///" + p.as_posix()
 
 
-async def _send(win: _UserWindow, content: str) -> None:
-    """按私聊/群聊路由发送。"""
+async def _send(win: _UserWindow, content: str, reply_mid: str = "") -> None:
+    """按私聊/群聊路由发送；群聊带 reply_mid 时首段变成引用回复。"""
+    message = Message(content)
+    if reply_mid and not win.is_private:
+        try:
+            message = Message(MessageSegment.reply(int(reply_mid))) + message
+        except (TypeError, ValueError):
+            pass
     if win.is_private:
-        await win.bot.send_private_msg(user_id=win.target_id, message=Message(content))
+        await win.bot.send_private_msg(user_id=win.target_id, message=message)
     else:
-        await win.bot.send_group_msg(group_id=win.target_id, message=Message(content))
+        await win.bot.send_group_msg(group_id=win.target_id, message=message)

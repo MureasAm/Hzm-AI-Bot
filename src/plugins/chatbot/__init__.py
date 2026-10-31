@@ -582,4 +582,6 @@ async def _handle_chat(bot: Bot, event: Event):
 
     # 读秒窗口（方案B）：攒批 + 静默后统一回复（含读图/归纳/分批发送）
     # target_id=会话标识（私聊=user_id，群聊=group_id），群聊按群攒批实现多人对话
-    chat_window.enqueue(target_id, user_id, user_msg, image_sources, bot, is_private)
+    chat_window.enqueue(target_id, user_id, user_msg, image_sources, bot, is_private,
+                        ts=float(getattr(event, "time", 0) or time.time()),
+                        message_id=str(getattr(event, "message_id", "") or ""))

@@ -286,6 +286,13 @@ SESSION_PROBE_PROMPT = """你是会话话题追踪器。用户在聊天中刚发
   "new_event": "这条消息值得记住的关键事件，一句话（如'用户发比爱心示好'）；纯寒暄无事件则 null",
   "mood": "用户**此刻**的情绪状态，一句话（如'因为考试失利而失落''和队友闹别扭后很委屈'）；看不出来 / 没有明显情绪则 null",
   "entities": "用户这句话提到/问到的**作品、作者、地点、动物**等专名（最多 3 个，写规范名，如'空中杀人现场''东野圭吾''袋鼠'）；没有或只是普通闲聊则 null",
+  "speech_act": "literal_question | factual_statement | request | complaint | tease | anticipation | roleplay | other",
+  "target": "这句话指向谁/什么；**只写一个最可能的对象**（如：她正在做的事、对方的东西、某个物件）；如果“我的电脑”这类说法确实分不清是谁的，写 null，不要硬猜，也不要用“或”并列",
+  "scene": "这句话把对话放进了一个什么场景（一句话：谁在场、在做什么、可能出什么岔子，如'比赛现场发现忘带准考证、比赛要迟到'）；普通陈述则 null",
+  "proposition": "这句话字面上说了什么，一句话；没有明确命题则 null",
+  "pragmatic_note": "这句话在当前语境里的**真实意思**；如果是玩笑/反讽/预演，必须明确写'不是字面陈述'；普通陈述则 null",
+  "implied_stance": "根据语用，她怎样反应更自然（自信否认/顺着接梗/认真解释/反问）；普通陈述则 null",
+  "pragmatic_confidence": 0.0,
   "expanded_query": "如果这条消息很短（≤4字）**或是指代性的**（必须结合前面聊的话题才能理解，如'能读给我听听吗''那个呢''然后呢'——单看这句不知道指什么），补全成既能检索到相关记忆、又能帮模型理解的一句话（如'用户让灰泽满念她写的小说乌色月'）；其他情况则 null"
 }}
 要求：
@@ -297,6 +304,28 @@ SESSION_PROBE_PROMPT = """你是会话话题追踪器。用户在聊天中刚发
 - **topic 只概括双方实际说的话，不要添加对话里没有的设定或推断**：用户没提"时差/异地/对方在哪/身份"，就别写"时差/异地"——用户只说时间是几点，就写"聊时间/几点/作息"；拿不准就平实地概括内容，宁可朴素不要加戏（曾踩坑：用户说"现在是墨尔本时间凌晨六点"，被脑补成"调侃时差"并注入带偏回复）
 - topic_changed 判定标准（**新主题优先**）：只要用户这条消息是在**问/聊一个新的具体主题**（如"你最近有在用香水吗""你会不会游泳"），即使语气还延续之前的氛围，也视为转话题 → topic_changed=true，topic 换成这个新主题。只有当消息是**同一主题下的继续**（如上一轮聊香水、这轮"那你喜欢哪个牌子"）才 topic_changed=false 沿用。
 - new_event 只记有意义的互动（示好/情绪/承诺/分享），寒暄问候不记
+- **判断这句话在干什么，而不只是它说了什么**：
+  · 中文里的「快进到 X」是一个梗：跳过过程，直接预演一个可预见的坏结果；通常是玩笑/自嘲，
+    **不是事实陈述，也不是求助**。例：「快进到我又忘了带钥匙」= 开玩笑地预演自己会忘带钥匙。
+  · 判断 target 要看上一轮谁在做什么、这个玩笑最可能在拿谁开涮：
+    如果上一轮她刚提到自己要做某件公开/重要的事（开播、出门、考试、做饭、约会），
+    对方说「快进到 X」，X 更可能是在预演**她**的翻车/出糗，而不是对方自己的事；
+    上一轮如果是对方自己在做事，才归到对方。
+    例：她刚说今晚要参加比赛，对方说「快进到忘带准考证」→ target 是她的比赛，不是对方的考试。
+  · **「快进到 X」通常是在预演一个未来场景，不是陈述当前事实。**
+    `scene` 要写这个场景（谁在场、在做什么、可能出什么岔子），不要只写“某人的电脑”；
+    如果上一轮她刚提到要开播/出门/比赛，这个场景更可能是**那件事出岔子**，
+    例如「直播现场出故障、直播又要推迟」。这时 target 写场景的核心对象（如“直播现场”），
+    不要写“某人的电脑”。
+  · target 只能写一个最可能的对象；拿不准写 null 并降低 confidence，不要用“或”并列。
+  · `implied_stance` 要和 target 一致：target 是她的设备/表现 → 自信否认或反怼；
+    target 是对方自己的事 → 可以顺着笑/安慰。**如果 target 拿不准，给一个对两种读法都成立的立场**：
+    别按字面去解决，也别顺着承认坏事一定会发生；可以自信否认/反怼，或顺着玩笑接但不把它当真。
+  · `pragmatic_note` 只在非字面时写；写清“这不是字面陈述/不是求助”，不要写具体台词。
+  · `implied_stance` 只写一般社交反应：如果对方在开玩笑地预演你的失败/出糗，通常应自信否认或反怼，
+    不要顺着承认，也不要把玩笑当成待解决的问题。
+  · 不确定就降低 `pragmatic_confidence`，不要硬编；普通陈述的 `speech_act` 用 literal_question /
+    factual_statement / request / complaint，`pragmatic_note` 与 `implied_stance` 为 null。
 - mood 只在用户**明显**带情绪时写（失落/焦虑/兴奋/委屈…）；纯寒暄、看不出情绪就 null。
   **别把"话题"当情绪**（聊考试 ≠ 焦虑），也**别把灰泽满自己的语气**算成用户的情绪。
 - entities 只收**专名**（书名/作者/地点/动物），别把普通名词（"书""作家""动物"）当实体；
@@ -478,6 +507,26 @@ async def probe_session(user_id: str, user_msg: str, history_text: str, client,
             if s and s.lower() not in ("null", "none") and len(s) <= 20 and s not in entities:
                 entities.append(s)
     parsed["entities"] = entities[:3]
+
+    # 语用注释（2026-10-31）：不只判“聊什么”，还要判“这句话在干什么”。
+    # 只收白名单值；普通陈述不产生 pragmatic_note，避免把每句话都注成玩笑。
+    speech_act = str(parsed.get("speech_act") or "").strip().lower()
+    if speech_act not in {
+        "literal_question", "factual_statement", "request", "complaint",
+        "tease", "anticipation", "roleplay", "other",
+    }:
+        speech_act = ""
+    parsed["speech_act"] = speech_act
+    for key in ("target", "scene", "proposition", "pragmatic_note", "implied_stance"):
+        val = parsed.get(key)
+        parsed[key] = val.strip() if isinstance(val, str) else ""
+        if parsed[key].lower() in ("null", "none"):
+            parsed[key] = ""
+    try:
+        conf = float(parsed.get("pragmatic_confidence") or 0)
+    except (TypeError, ValueError):
+        conf = 0.0
+    parsed["pragmatic_confidence"] = max(0.0, min(1.0, conf))
 
     # 转话题：清空旧事件，起新话题
     events = [] if changed else list(prev.get("events", []))

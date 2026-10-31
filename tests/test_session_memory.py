@@ -225,6 +225,52 @@ class TestProbeSession:
         _, meta = await sm.probe_session("u1", "在吗", "历史", object(), debug=True)
         assert meta["entities"] == []
 
+    async def test_pragmatic_fields_parsed_and_normalized(self, monkeypatch):
+        """语用注释（2026-10-31）：speech_act / target / pragmatic_note / implied_stance。"""
+        async def fake_llm(client, prompt, max_tokens=250, temperature=0.2):
+            return json.dumps({
+                "topic": "直播前的设备玩笑",
+                "topic_changed": True,
+                "new_event": None,
+                "speech_act": "tease",
+                "target": "灰泽满的直播设备",
+                "scene": "直播现场设备准备调试、可能出岔子",
+                "proposition": "快进到电脑打不开",
+                "pragmatic_note": "用户在玩笑式预演直播设备出故障，不是字面陈述。",
+                "implied_stance": "自信否认",
+                "pragmatic_confidence": 0.92,
+                "expanded_query": None,
+            }, ensure_ascii=False)
+
+        monkeypatch.setattr(sm, "_llm", fake_llm)
+        out, meta = await sm.probe_session(
+            "u1", "快进到绿冻我的电脑怎么打不开",
+            "[现在] 灰泽满：马上要直播，在调设备。", object(), debug=True)
+        assert out == "快进到绿冻我的电脑怎么打不开"   # 长消息不扩写检索 query
+        assert meta["speech_act"] == "tease"
+        assert meta["target"] == "灰泽满的直播设备"
+        assert meta["scene"] == "直播现场设备准备调试、可能出岔子"
+        assert meta["pragmatic_note"].startswith("用户在玩笑式预演")
+        assert meta["implied_stance"] == "自信否认"
+        assert meta["pragmatic_confidence"] == 0.92
+
+    async def test_pragmatic_fields_invalid_fall_back(self, monkeypatch):
+        async def fake_llm(client, prompt, max_tokens=250, temperature=0.2):
+            return json.dumps({
+                "topic": "闲聊", "topic_changed": False, "new_event": None,
+                "speech_act": "not-a-real-act", "target": "null",
+                "pragmatic_note": "None", "implied_stance": "  ",
+                "pragmatic_confidence": "oops", "expanded_query": None,
+            }, ensure_ascii=False)
+
+        monkeypatch.setattr(sm, "_llm", fake_llm)
+        _, meta = await sm.probe_session("u1", "在吗", "历史", object(), debug=True)
+        assert meta["speech_act"] == ""
+        assert meta["target"] == ""
+        assert meta["pragmatic_note"] == ""
+        assert meta["implied_stance"] == ""
+        assert meta["pragmatic_confidence"] == 0.0
+
     async def test_llm_failure_degrades(self, tmp_path, monkeypatch):
         """LLM 失败返回空 → probe_session 静默降级，原消息返回，不写文件。"""
         f = tmp_path / "s.json"
