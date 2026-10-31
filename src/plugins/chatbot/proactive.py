@@ -355,6 +355,20 @@ async def broadcast_proactive(bot, targets, text: str,
     sem = asyncio.Semaphore(concurrency)
     stats = {"voice": 0, "text": 0, "failed": 0, "total": len(ids)}
 
+    # 她发出去的是「正文 + 配图」，但 append_bot_message 旧版只记正文——
+    # 下一轮对方聊到那张图时，她的历史里只有一句话，完全不知道自己发过图。
+    # 这里把配图说明并进同一条记忆行（只描述第一张，够指代；多张只报数量）。
+    memory_text = to_memory_line(text)
+    if record and image_paths:
+        desc = (await _describe_first_image(get_vision_client(), image_paths) or "").strip()
+        desc = " ".join(desc.split())
+        if len(desc) > 120:
+            desc = desc[:120] + "…"
+        count = len(image_paths)
+        head = "发了1张图片" if count == 1 else f"发了{count}张图片"
+        note = f"{head}：{desc}" if desc else head
+        memory_text = f"[{note}] {memory_text}".strip()
+
     async def _send_text(uid: str) -> None:
         msg = Message(text)
         for p in (image_paths or []):
@@ -391,7 +405,7 @@ async def broadcast_proactive(bot, targets, text: str,
                     await _send_text(uid)
                     stats["text"] += 1
                 if record:
-                    append_bot_message(uid, to_memory_line(text))
+                    append_bot_message(uid, memory_text)
             except Exception as e:
                 stats["failed"] += 1
                 print(f"⚠️ 主动推送失败 user={uid}: {e}")

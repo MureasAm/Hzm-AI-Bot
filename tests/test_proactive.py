@@ -531,6 +531,40 @@ class TestDeliverProactiveVoice:
         assert [seg.type for seg in bot.sent[0][1]] == ["text"]
 
 
+class TestImageMemoryNote:
+    """主动发「正文 + 配图」时，短期记忆要记下“她发了图”及其描述。
+
+    旧版只 append_bot_message(text)，下一轮对方聊到图，她的历史里只有一句正文，
+    完全不知道自己发过图。
+    """
+
+    async def test_image_note_recorded_in_memory(self, monkeypatch):
+        recorded = []
+
+        async def fake_desc(vision_client, image_paths):
+            return "一只白猫趴在窗台上"
+
+        monkeypatch.setattr(proactive, "_describe_first_image", fake_desc)
+        monkeypatch.setattr(proactive, "append_bot_message",
+                            lambda uid, text: recorded.append((uid, text)))
+        bot = _FakeBot()
+        stats = await proactive.broadcast_proactive(
+            bot, [1, 2], "看看这个", image_paths=["a.jpg", "b.jpg"])
+        assert stats["text"] == 2
+        assert len(recorded) == 2
+        assert recorded[0][0] == "1"
+        assert recorded[0][1].startswith("[发了2张图片：一只白猫趴在窗台上]")
+        assert recorded[0][1].endswith("看看这个")
+
+    async def test_no_image_note_without_images(self, monkeypatch):
+        recorded = []
+        monkeypatch.setattr(proactive, "append_bot_message",
+                            lambda uid, text: recorded.append((uid, text)))
+        bot = _FakeBot()
+        await proactive.broadcast_proactive(bot, [1], "今晚播")
+        assert recorded == [("1", "今晚播")]
+
+
 class TestBroadcastProactive:
     """300 人群发：TTS 只合成一次 + 有界并发（2026-10-24）。"""
 
