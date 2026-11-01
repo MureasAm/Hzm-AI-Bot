@@ -284,7 +284,10 @@ def _ref_pool(reply: str) -> list:
         order += ["ref_short", "ref_alt1", "ref_alt2", "ref_alt3",
                   _pick_tier(reply or ""), "ref_voice"]
     else:
-        order += [_pick_tier(reply or ""), "ref_voice", "ref_alt1", "ref_alt2"]
+        # 长句仍先试情绪档/默认参考；ref_short 放第二顺位：
+        # 2026-11-01 线上 ref_voice/ref_alt* 在服务端偶发“音频加载失败”，
+        # 长句池原本没有 ref_short，导致 proactive 重试 3 次全落在坏参考上。
+        order += [_pick_tier(reply or ""), "ref_voice", "ref_short", "ref_alt1", "ref_alt2"]
     out = []
     for name in order:
         p = d / f"{name}.wav"
