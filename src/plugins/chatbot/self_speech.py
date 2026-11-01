@@ -18,6 +18,7 @@ import re
 
 from . import config
 from .constants import THINKING_DISABLED
+from .term_hints import terms_hint_block
 
 _CACHE_PATH = "data/self_speech_cache.json"
 _CACHE_MAX = 3000
@@ -203,9 +204,10 @@ async def gist_texts(texts: list[str], client=None) -> dict[str, str]:
             if client is None:
                 client, _ = config.aux_clients_or(config._get_clients)
             payload = "".join(f"{i + 1}. {t}\n" for i, t in enumerate(chunk))
+            hint = terms_hint_block("\n".join(chunk), max_terms=2, max_chars=200)
             resp = await client.chat.completions.create(
                 model=config.aux_model(config._get_model_name()),
-                messages=[{"role": "user", "content": PROMPT + payload}],
+                messages=[{"role": "user", "content": PROMPT + hint + payload}],
                 temperature=0.0,
                 max_tokens=min(1600, 110 * len(chunk) + 120),
                 **THINKING_DISABLED,
@@ -283,7 +285,11 @@ async def annotate_turn(history_lines: list[str], user_msg: str, client=None):
         g = gists.get(core)
         if g:
             new_text = f"{note} {g}" if note else g
-            new_hist.append(f"{m.group('lead')}灰泽满（转述）：{new_text}")
+            # 群聊历史里的「回甲」只保留“她在接某位群友”的关系，不把具体名字喂回去；
+            # 私聊仍是「灰泽满（转述）」。两者都只是标注，不是她要说的话。
+            label = ("灰泽满（回群友·转述）"
+                     if re.search(r"灰泽满（回[^）]*）", ln) else "灰泽满（转述）")
+            new_hist.append(f"{m.group('lead')}{label}：{new_text}")
         else:
             new_hist.append(ln)
 

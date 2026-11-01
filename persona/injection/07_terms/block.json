@@ -10,6 +10,7 @@
     "associations": "【关联背景】{note}",
     "associations_written_by": "《{work}》是{author}的作品。",
     "associations_representative": "{author}的代表作有{works}。",
-    "associations_located_in": "{subject}生活在{place}。"
+    "associations_located_in": "{subject}生活在{place}。",
+    "wiki_note": "【背景资料·不是她说的话，不要照读】{note}（来自萌娘百科，仅作事实参考）"
   }
 }

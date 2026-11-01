@@ -593,7 +593,10 @@ async def _synthesize(reply_text: str, deadline: float | None = None) -> str | N
         cur_ref = pool[attempt % len(pool)]
         prompt_text = _read_prompt_text(cur_ref)
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
+            # trust_env=False：本地 TTS 必须直连 127.0.0.1，不能吃系统/环境代理。
+            # 2026-11-01 实测：trust_env 默认 True 时请求被代理链断成
+            # RemoteProtocolError（Server disconnected）；同一请求 false → 200 + wav。
+            async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
                 resp = await client.post(SOVITS_URL, json={
                     "text": text, "text_lang": text_lang,
                     "ref_audio_path": str(cur_ref),

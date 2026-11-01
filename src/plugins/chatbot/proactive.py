@@ -42,6 +42,7 @@ from .core import gather_retrieval, build_message_list
 from .memory import append_bot_message
 from ._bridge_common import to_memory_line
 from .vision import describe_image_bytes
+from .term_hints import terms_hint_block
 
 # 主动发言的长度上限：私聊里蹦出一大段很出戏
 PROACTIVE_REPLY_TRIM = 60
@@ -239,6 +240,7 @@ async def content_is_clear(deepseek_client, text: str) -> bool:
     if not judge_enabled():
         return True
     prompt = PROACTIVE_JUDGE_PROMPT.format(content=text)
+    prompt += terms_hint_block(text, max_terms=2, max_chars=200)
     try:
         resp = await deepseek_client.chat.completions.create(
             model=_get_model_name(),

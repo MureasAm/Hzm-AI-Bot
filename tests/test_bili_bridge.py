@@ -279,18 +279,25 @@ class TestDynamic:
         await m._check_dynamic(bot)
         assert len(pushed) == 1
 
-    async def test_no_sessdata_skips(self, monkeypatch):
-        m = _make_monitor(uid="1", sessdata="", state={})
-        monkeypatch.setattr(bb, "get_bili_sessdata", lambda: "")  # 未配置 → 跳过
+    async def test_no_sessdata_still_fetches(self, monkeypatch):
+        """2026-10-31：动态改走公共接口（buvid+WBI），没有 SESSDATA 也要照常拉取。"""
+        m = _make_monitor(uid="1", state={})
         called = []
+        pushed = []
 
         async def fake_fetch():
             called.append(1)
             return {"id": "x", "text": "", "image_urls": []}
 
+        async def fake_push(bot, content, image_paths=None, record=True, voice=False):
+            pushed.append(content)
+
         monkeypatch.setattr(m, "_fetch_latest_dynamic", fake_fetch)
+        monkeypatch.setattr(m, "_push", fake_push)
+        monkeypatch.setattr(bb, "_save_state", lambda s: None)
         await m._check_dynamic(FakeBot())
-        assert called == []  # 未配置 sessdata 不应尝试请求
+        assert called == [1]    # 未配置 sessdata 也应尝试请求
+        assert len(pushed) == 1
 
 
 class TestDynamicRetraction:
@@ -504,6 +511,34 @@ class TestPrime:
         await m._prime()
         assert m.state["last_dynamic_id"] == "1246839524441456643"
 
+    async def test_partial_baseline_failure_skips_that_source(self, monkeypatch):
+        """直播基线失败时本轮不检查直播；动态基线成功照常检查，失败项下轮重试。"""
+        m = _make_monitor(uid="1", state={})
+        monkeypatch.setattr(bb, "_save_state", lambda s: None)
+        checked = []
+
+        async def fail_live():
+            raise RuntimeError("直播接口瞬断")
+
+        async def fake_dyn():
+            return {"id": "new", "text": "", "image_urls": []}
+
+        async def fake_check_live(bot):
+            checked.append("live")
+
+        async def fake_check_dynamic(bot):
+            checked.append("dynamic")
+
+        monkeypatch.setattr(m, "_fetch_live_status", fail_live)
+        monkeypatch.setattr(m, "_fetch_latest_dynamic", fake_dyn)
+        monkeypatch.setattr(m, "_check_live", fake_check_live)
+        monkeypatch.setattr(m, "_check_dynamic", fake_check_dynamic)
+
+        await m.poll_once(FakeBot())
+        assert checked == ["dynamic"]          # 失败的那一路被跳过
+        assert m._live_primed is False
+        assert m._dynamic_primed is True
+
 
 class TestPush:
     async def test_whitelist_filters(self, monkeypatch):
@@ -672,19 +707,19 @@ class TestRepostDynamicSkipped:
     """
 
     def test_is_repost_flag(self, monkeypatch):
-        from types import SimpleNamespace
-        m = _make_monitor(uid="1", sessdata="sess", state={})
+        m = _make_monitor(uid="1", state={})
         monkeypatch.setattr(bb, "_get_emote_map", lambda: _async({}))
 
-        async def _page(*a, **k):
-            return {"items": [{"id_str": "9", "orig": {"id_str": "1"},
-                               "modules": {"module_dynamic": {"desc": {"text": "看这个"}}}}]}
-        import bilibili_api.dynamic as _dyn
-        monkeypatch.setattr(_dyn, "get_dynamic_page_info", _page)
-        import bilibili_api.utils.network as _net
-        monkeypatch.setattr(_net, "Credential", lambda **k: object())
+        async def _items(uid, attempts=3):
+            # 公共接口会把置顶动态排在第一条；必须按 id 取最新，不能取 items[0]
+            return [{"id_str": "1",
+                     "modules": {"module_dynamic": {"desc": {"text": "置顶的旧动态"}}}},
+                    {"id_str": "9", "orig": {"id_str": "2"},
+                     "modules": {"module_dynamic": {"desc": {"text": "看这个"}}}}]
+        monkeypatch.setattr(bb, "_fetch_dynamic_items", _items)
         dyn = asyncio.get_event_loop_policy().new_event_loop().run_until_complete(
             m._fetch_latest_dynamic())
+        assert dyn["id"] == "9"                 # 置顶旧动态不能被当成最新
         assert dyn["is_repost"] is True
         assert dyn["text"] == "看这个"
 

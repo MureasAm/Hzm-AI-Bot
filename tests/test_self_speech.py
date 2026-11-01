@@ -65,7 +65,7 @@ async def test_rewrites_group_reply_to_line():
     new_hist, _ = await self_speech.annotate_turn(hist, "嗯", client)
     assert comp.calls == 1
     assert new_hist[0] == hist[0]
-    assert new_hist[1] == "[3分钟前] 灰泽满（转述）：她否认和对方是一对。"
+    assert new_hist[1] == "[3分钟前] 灰泽满（回群友·转述）：她否认和对方是一对。"
 
 
 @pytest.mark.asyncio

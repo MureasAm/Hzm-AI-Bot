@@ -638,6 +638,16 @@ def get_weibo_cookie() -> str:
     return str(get_config("weibo_cookie", "") or "").strip()
 
 
+def get_weibo_proxy() -> str:
+    """微博请求固定出口（如 http://127.0.0.1:7897）；留空=强制直连。
+
+    微博会把登录态和出口 IP 绑定：浏览器走 VPN、bot 直连，或 VPN 节点频繁切换，
+    都会被判成异常会话而掉登录。这里显式指定，且 **trust_env=False**，
+    避免系统里的 HTTP_PROXY/HTTPS_PROXY 在不知不觉中改变出口。
+    """
+    return str(get_config("weibo_proxy", "") or "").strip()
+
+
 def get_notify_whitelist() -> list:
     raw = get_config("notify_friends_whitelist", "")
     if not raw:

@@ -1,10 +1,12 @@
 """读秒窗口（chat_window）攒批/读图/归纳/分批发送逻辑的单元测试。"""
 import asyncio
+import inspect
 import time
 
 import pytest
 
 from src.plugins.chatbot import chat_window as cw
+from src.plugins.chatbot import core
 
 
 class TestCombineText:
@@ -481,10 +483,11 @@ class TestGroupTranscript:
         async def fake_gate(client, hist, batch, thread_note=""):
             return True
 
-        async def fake_handle(uid, text, vision_desc="", batch_summary="", is_group=False,
-                              user_transcript="", **kwargs):
-            captured.update(text=text, is_group=is_group,
-                            transcript=user_transcript, record=kwargs.get("record_text"),
+        async def fake_handle(uid, text, **kwargs):
+            captured.update(call_kwargs=dict(kwargs), text=text,
+                            is_group=kwargs.get("is_group", False),
+                            transcript=kwargs.get("user_transcript", ""),
+                            record=kwargs.get("record_text"),
                             address_note=kwargs.get("group_address_note"),
                             thread_note=kwargs.get("group_thread_note"),
                             reply_to=kwargs.get("reply_to"))
@@ -529,6 +532,11 @@ class TestGroupTranscript:
         # 短期记忆记干净版：内部标记不进历史
         assert captured["record"] == ("甲：今天下雨了\n"
                                       "乙：你怎么看")
+        # 调用方与 core.handle_chat 的签名必须对齐：**kwargs 假函数会把多传的参数吞掉，
+        # 所以 2026-10-31 的 group_batch_note 版本错配（TypeError）在测试里看不出来。
+        params = set(inspect.signature(core.handle_chat).parameters)
+        unknown = set(captured["call_kwargs"]) - params
+        assert not unknown, f"chat_window 传了 handle_chat 不认识的参数: {unknown}"
 
     async def test_images_are_inline_per_message(self, monkeypatch):
         win = cw._UserWindow("g2")

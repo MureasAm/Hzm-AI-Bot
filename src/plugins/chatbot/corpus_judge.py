@@ -25,6 +25,7 @@ import os
 
 from .constants import CORPUS_JUDGE_MAX_KEEP, MAX_RETRIEVAL_ITEM_CHARS, THINKING_DISABLED
 from .config import log_cache_usage, _get_model_name, extract_chat_content, aux_model
+from .term_hints import terms_hint_block
 
 # ⚠️ **别重排这段提示词**（2026-10-11）：`{query}` 是每轮都变的变量，必须留在**判据之后**、
 # 候选之前也不放——DeepSeek 按**前缀**匹配，变量夹在中间会把**后面整段**（候选经历）
@@ -90,6 +91,7 @@ async def judge_corpus(deepseek_client, query: str, candidates: list) -> list:
         for k, c in enumerate(items)
     )
     prompt = CORPUS_JUDGE_PROMPT.format(query=query.strip(), candidates=numbered)
+    prompt += terms_hint_block(query)
     try:
         resp = await deepseek_client.chat.completions.create(
             model=aux_model(_get_model_name()),

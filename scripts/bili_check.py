@@ -5,7 +5,7 @@
 不依赖 bot 运行，用于确认：
 1. UID 对不对（接口是否返回该用户）
 2. 直播状态接口通不通
-3. 动态接口（含 WBI 签名）通不通、正文/配图解析对不对
+3. 动态公共接口（buvid + WBI 签名，**不需要 SESSDATA**）通不通、正文/配图解析对不对
 
 用法：
     python scripts/bili_check.py --uid 1298779265
@@ -36,6 +36,11 @@ def _load_env(name: str):
 async def main(uid: int) -> None:
     import httpx
 
+    # bili_bridge 是 bot 插件包的一部分，导入会触发包的 __init__（那里要 get_driver）；
+    # 离线脚本先起一个最小 NoneBot 环境，否则会报 NoneBot has not been initialized。
+    import nonebot
+    nonebot.init()
+
     sessdata = _load_env("BILI_SESSDATA")
 
     # ---- 直播状态 ----
@@ -63,32 +68,17 @@ async def main(uid: int) -> None:
     except Exception as e:
         print(f"❌ 直播状态查询失败: {e}")
 
-    # ---- 最新动态（需 SESSDATA） ----
-    print("\n== 最新动态 ==")
-    if not sessdata:
-        print("⚠️ .env.prod 未配置 BILI_SESSDATA——动态接口需登录，跳过。\n"
-              "   想启用动态监控：B站网页版登录你自己的号 → F12 → Application → Cookies →\n"
-              "   复制 SESSDATA 的值填进 .env.prod 的 BILI_SESSDATA=")
-        return
+    # ---- 最新动态（公共接口，无需登录） ----
+    print("\n== 最新动态（公共接口，无需 SESSDATA） ==")
+    print("SESSDATA: " + ("已配置（emote panel 完整）" if sessdata
+                           else "未配置（动态仍可监控；emote 表可能为空）"))
     try:
-        from bilibili_api import dynamic
-        from bilibili_api.utils.network import Credential
-        from src.plugins.chatbot.bili_bridge import (
-            _extract_dynamic_text, _extract_dynamic_images,
-        )
-        cred = Credential(sessdata=sessdata)
-        page = await dynamic.get_dynamic_page_info(cred, host_mid=uid, pn=1)
-        items = (page or {}).get("items") or []
-        print(f"动态接口: 获取到 {len(items)} 条")
-        if items:
-            item = items[0]
-            print(f"最新动态 id: {item.get('id_str') or item.get('id')}")
-            text = _extract_dynamic_text(item)
-            imgs = _extract_dynamic_images(item)
-            print(f"动态正文: {text[:120]}")
-            print(f"配图数: {len(imgs)}")
-        else:
-            print("该 UID 暂无可见动态")
+        from src.plugins.chatbot.bili_bridge import fetch_latest_dynamic
+        dyn = await fetch_latest_dynamic(str(uid))
+        print(f"最新动态 id: {dyn.get('id')}")
+        print(f"动态正文: {(dyn.get('text') or '')[:120]}")
+        print(f"配图数: {len(dyn.get('image_urls') or [])}")
+        print(f"转发动态: {dyn.get('is_repost')}")
     except Exception as e:
         print(f"❌ 动态查询失败: {e}")
 

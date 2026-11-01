@@ -54,6 +54,13 @@ class TestExtractImages:
     def test_no_images(self):
         assert wb._extract_post_images({}) == []
 
+    def test_pic_ids_fallback_when_pic_infos_missing(self):
+        """pic_infos 缺失时也要用 pic_id 拼出图链，不能静默变成纯文字。"""
+        item = {"pic_ids": ["pid1", "pid2"]}
+        assert wb._extract_post_images(item) == [
+            "https://wx1.sinaimg.cn/large/pid1.jpg",
+            "https://wx1.sinaimg.cn/large/pid2.jpg"]
+
 
 class TestMidToBid:
     def test_known_value_stable(self):
@@ -372,17 +379,25 @@ class TestPrime:
         await m.poll_once(FakeBot())
         assert len(pushed) == 1
 
-    async def test_prime_failure_still_marks_primed(self, monkeypatch):
-        """基线拉取失败也不能卡死——否则永远不 _primed、每轮都重试。"""
+    async def test_prime_failure_does_not_mark_primed_or_check(self, monkeypatch):
+        """基线失败不能开启事件检查：否则下一轮会把停机期间的最新微博当新事件推送。"""
         m = _make_monitor(uid="1", state={}, _primed=False)
         monkeypatch.setattr(wb, "_save_state", lambda s: None)
 
         async def boom():
             raise RuntimeError("网络瞬断")
 
+        checked = []
+
+        async def fake_check(bot):
+            checked.append(1)
+
         monkeypatch.setattr(m, "_fetch_latest_post", boom)
-        await m._prime()
-        assert m._primed is True
+        monkeypatch.setattr(m, "_check_posts", fake_check)
+        assert await m._prime() is False
+        assert m._primed is False
+        await m.poll_once(FakeBot())
+        assert checked == []
 
 
 class TestPushTargets:

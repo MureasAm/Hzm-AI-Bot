@@ -17,7 +17,7 @@ from .constants import (
     LENGTH_GUARD_MAX_CHARS,
 )
 from .persona import (
-    load_persona_rules, load_schedule,
+    load_persona_rules, load_schedule, load_terms,
 )
 from .memory import (
     get_user_history, get_user_history_timed, append_user_history,
@@ -42,6 +42,7 @@ from . import self_speech
 from . import recall as recall_mod
 from . import need_triggers
 from . import tool_loop
+from . import wiki_lookup
 from .routing import (
     LEGENDARY_REPLIES, LEGENDARY_CONFIRMS, legendary_confirmed, legendary_hit, classify_l3,
 )
@@ -53,6 +54,7 @@ from .session_memory import (
     probe_session, build_session_context, get_session, is_emoji_msg, previous_session_note,
     mood_note,
 )
+from .term_hints import terms_hint_block
 
 
 _MEMORY_V2_STORE = memory_v2.ShadowMemoryStore()
@@ -67,6 +69,27 @@ _TOOL_NOTE = (
 def injection_v3_enabled() -> bool:
     """注入 v3（registry/frame + recall）。默认 0：旧链路逐字不变，便于回退。"""
     return get_flag("INJECTION_V3", "0").strip().lower() not in ("0", "false", "no", "off")
+
+
+def wiki_lookup_enabled() -> bool:
+    """未知专名去萌娘百科查一次。默认 0：先关着，验证后再开。"""
+    return get_flag("WIKI_LOOKUP", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _known_wiki_terms() -> set:
+    """terms 已维护的词不再查 wiki——wiki 只补长尾，不抢名词库的活。
+
+    只认 keyword，不认 aliases：alias 用来让词条命中（如「小松绿」→「后辈」），
+    但 wiki 仍可补这个词的客观资料（社团/期数/出道时间），两者互补。
+    """
+    known: set = set()
+    # 她自己不需要查百科；否则用户一句「小松绿和灰泽满」可能先查到灰泽满
+    known.update({"灰泽满", "Hazel", "灰泽满Hazel"})
+    for t in load_terms():
+        kw = str(t.get("keyword") or "").strip()
+        if kw:
+            known.add(kw)
+    return known
 
 
 # ==================== 🎭 基础人设提示词 ====================
@@ -147,6 +170,7 @@ async def summarize_batch(msgs: list) -> str:
         "要求：只归纳原文已有的信息，不要编造；不要逐条复述；如果是纯寒暄就直接说。\n\n"
         "消息：\n" + "\n".join(texts)
     )
+    prompt += terms_hint_block("\n".join(texts), max_terms=2, max_chars=200)
     try:
         deepseek_client, _ = aux_clients_or(_get_clients)
         resp = await deepseek_client.chat.completions.create(
@@ -191,6 +215,7 @@ async def summarize_group_batch(items: list) -> str:
         "如果大家各说各的、没有接同一条线，就直接说没有。\n\n"
         "消息：\n" + "\n".join(lines)
     )
+    prompt += terms_hint_block("\n".join(lines), max_terms=2, max_chars=200)
     try:
         deepseek_client, _ = aux_clients_or(_get_clients)
         resp = await deepseek_client.chat.completions.create(
@@ -230,6 +255,7 @@ async def summarize_forward(raw: str) -> str:
                        "下面是一段 QQ 群里转发的聊天记录（多人对话）。用**一两句话**概括他们聊了什么，"
                        "供别人理解后自然接话。\n"
                        "要求：只概括不评价、不加戏；说清'谁在跟谁聊什么、大致什么氛围'；不要逐条复述。\n\n"
+                       f"{terms_hint_block(text, max_terms=2, max_chars=200)}\n"
                        f"聊天记录：\n{text[:FORWARD_FOR_SUMMARY_CHARS]}\n\n"
                        "只输出摘要本身，不要任何前缀。"}],
             temperature=0.3,
@@ -287,8 +313,8 @@ def build_terms_note(user_msg: str, denied_terms: set | None = None,
 
     双向（v2）：
     - usage：该词的"主动用词规则"——回复里表达这个概念时用这个词（意思→词）。
-    - usage_triggers：概念触发词。消息出现这些词（关键词没命中）时只注入 usage，
-      让模型讨论这个概念时主动用黑话称呼，而不是只会听懂。
+    - usage_triggers：概念触发词。消息出现这些词（关键词没命中）时注入 **meaning + usage**，
+      让模型既知道这个词是什么意思，也知道可以主动用它，而不是只会听懂。
     usage 只在"关键词命中 或 概念词出现"时才注入（不常驻），避免"每条都蹦黑话"。
 
     denied_terms：LLM 语境确认后应剔除的词条 keyword 集合（见 confirm_ambiguous_terms）。
@@ -325,8 +351,9 @@ def build_terms_note(user_msg: str, denied_terms: set | None = None,
             if hit_out is not None:
                 hit_out.append(kw)
         elif usage and concept_hit:
-            # 概念命中：消息没提关键词，但提到概念词 → 只注入用词规则
-            notes.append(f"用词规则：{usage}")
+            # 概念命中：消息没提关键词，但提到概念词 → 给 meaning + 用词规则
+            parts = [t.get("meaning", ""), f"用词规则：{usage}"]
+            notes.append(f"{kw}（相关概念）：{'；'.join(p for p in parts if p)}")
     return "；".join(notes) if notes else ""
 
 
@@ -437,6 +464,7 @@ def build_message_list(user_msg: str, fused_items: list,
                        user_transcript: str = "", nickname_hint: str = "",
                        log_hits: bool = False, trace: dict | None = None,
                        association_context: str = "", association_entities: list | None = None,
+                       wiki_context: str = "",
                        is_group: bool = False, group_address_note: str = "",
                        group_thread_note: str = "", name_budget: str = "",
                        group_batch_note: str = "",
@@ -604,6 +632,13 @@ def build_message_list(user_msg: str, fused_items: list,
                          "content": inj.T("terms", "associations", note=association_context)})
         _mark("associations")
         _items("associations", association_entities or [])
+
+    # 萌娘百科按需背景（未知专名）：只作事实参考，不混进名词库/关联背景。
+    # 放在关联背景之后、会话记忆之前——先懂词，再接话。
+    if wiki_context:
+        messages.append({"role": "system",
+                         "content": inj.T("terms", "wiki_note", note=wiki_context)})
+        _mark("wiki")
 
     # 会话级记忆（当前话题 + 本场事件）：让模型接得住会话调性
     if session_context:
@@ -1000,6 +1035,27 @@ def _bare_name_from(value: str) -> str:
     return v.strip("：: 　\"'“”‘’（）()")
 
 
+def _neutralize_group_history(lines: list[str]) -> list[str]:
+    """注入前把「灰泽满（回甲）：…」的**具体名字**换成中性的「回群友」。
+
+    为什么要改注释而不是加回复守卫（2026-11-01 用户指出）：她自己的回复会进历史被当样本；
+    `（回X）` 标签会让模型学到“回复=先叫群友名字”，进而频繁名字起手。根在喂回去的注释，
+    不在生成后的句子。这里**保留“她在回某位群友”这个关系**（理解不丢），只把具体名字去掉；
+    `chat_log` / 短期记忆原文仍保留回复对象，供排查与统计。
+    """
+    out = []
+    for ln in lines or []:
+        def _repl(m):
+            label = m.group(2)
+            if label.startswith("回群友"):
+                return m.group(0)   # 已经是中性标注（可能带 ·转述），别把它洗掉
+            return f"{m.group(1) or ''}灰泽满（回群友）："
+        out.append(re.sub(r"^(\[[^\]]+\]\s*)?灰泽满（(回[^）]*)）：", _repl, ln))
+    return out
+
+
+
+
 def _user_name_for(user_id: str) -> str:
     """用户希望被怎么称呼——用来判"她是不是又在拿名字当开头"。
 
@@ -1237,9 +1293,12 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     #    两个消费者都用它：① 注入层（【最近对话记录】）② L3 判 same_request
     #    ——L3 必须知道那几轮之间隔了多久，否则隔 8 小时的一句会被算成"连着"。
     user_history_timed = get_user_history_timed(user_id)
+    # 探测、L3、生成都用**去标签版**群聊历史：`灰泽满（回甲）` 的“回谁”只留在落盘日志里，
+    # 不喂回模型——它会学成“回复先叫名字”（2026-11-01 用户指出根因在注释回喂）。
+    history_for_model = _neutralize_group_history(user_history_timed) if is_group else user_history_timed
     # 探测和 L3 都看**完整**短期记忆（10 条 / 5 轮）；原来只给 8 条，
     # 短句/提醒要指代的上一句可能刚好落在被裁掉的那两条里（2026-10-20）。
-    history_text = "\n".join(user_history_timed) if user_history_timed else ""
+    history_text = "\n".join(history_for_model) if history_for_model else ""
     # 距上一轮多久（此刻还没 append 本轮，最后一条就是上一轮）。同一场对话内为空串
     _gap_sec = get_last_turn_gap_seconds(user_id)
     history_gap_note = humanize_gap(_gap_sec) if _gap_sec is not None else ""
@@ -1252,7 +1311,8 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         # debug=True 只是为了拿到**这次探测已经算出来的** entities（作品/作者/地点/动物）——
         # 不多调一次模型；生产路径的返回值仍是扩充后的检索 query。
         retrieval_query, probe_meta = await probe_session(
-            user_id, query_text, history_text, aux_client, debug=True)
+            user_id, query_text, history_text, aux_client, debug=True,
+            is_group=is_group, group_addressed=group_addressed)
         if retrieval_query != query_text:
             print(f"[会话记忆] 短 query 扩充: 「{query_text}」→「{retrieval_query}」")
     # 命中已知术语：probe 的短 query 扩充可能猜错含义（如"富区"→"富拉尔基区"），
@@ -1308,6 +1368,16 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     if _assoc["note"]:
         print(f"[关联] {_assoc['entities']} → {_assoc['note'][:40]}")
 
+    # 未知专名 → 萌娘百科按需查一次。与检索**并行**：3 秒的网络查通常被 embedding/检索盖住；
+    # 超时/查不到/已知词都返回空，主链路完全不受影响。
+    _wiki_task = None
+    if wiki_lookup_enabled() and probe_meta.get("entities"):
+        _known_wiki = _known_wiki_terms()
+        _known_wiki.update(_assoc.get("entities") or [])
+        _wiki_task = asyncio.create_task(
+            wiki_lookup.wiki_context_for(
+                query_text, probe_meta["entities"], _known_wiki))
+
     # --- 🎭 人格规则 + 🔍 检索融合（query 只算 1 次 embedding）---
     # 素材统一从 gather_retrieval 取（主动发言也走同一个入口，别再各拼一套）
     ctx = await gather_retrieval(query_text, retrieval_query, history_text,
@@ -1317,6 +1387,18 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     fused_items = ctx["fused_items"]
     preference_items = ctx["preference_items"]
     core_stories = ctx["core_stories"]
+
+    wiki_context = ""
+    if _wiki_task is not None:
+        try:
+            # 硬上限 6s：wiki 只是锦上添花，不能把正常回复拖住。
+            wiki_context = await asyncio.wait_for(_wiki_task, timeout=6.0)
+        except asyncio.TimeoutError:
+            print("⚠️ wiki 查询超时（忽略，不阻塞回复）")
+        except Exception as e:
+            print(f"⚠️ wiki 查询异常（忽略）: {str(e)[:100]}")
+    if wiki_context:
+        print(f"[wiki] 注入背景: {wiki_context[:60]}")
 
     # --- 🧠 长期记忆：**只有 V2**（2026-10-12 起 v1 整个删除）---
     # v1 的卡（user_memory/long_term/*.json）连同 memory_manager.py 一起清掉了；
@@ -1434,7 +1516,11 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         _pc = float(probe_meta.get("pragmatic_confidence") or 0)
     except (TypeError, ValueError):
         _pc = 0.0
-    if _pn and _pc >= 0.6 and _pa in ("tease", "anticipation", "roleplay", "other"):
+    if _pn and _pc >= 0.6 and _pa in ("tease", "anticipation", "roleplay", "other") \
+            and not (is_group and not group_addressed):
+        # ⚠️ 群聊未点名时**禁用语用注释**：probe 容易把群友之间的「你/她/这事」
+        #    误判成在说灰泽满（2026-10-31 967761489 22:36 实锤：
+        #    「还关门/有什么我们不能听的吗」被注成「调侃灰泽满背着大家做什么」）。
         pragmatic_hint = ((f"场景：{_sc}。" if _sc else "")
                           + _pn
                           + (f"（更自然的反应：{_st}）" if _st else ""))
@@ -1453,6 +1539,9 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     if self_speech.enabled():
         hist_for_injection, gen_user_msg = await self_speech.annotate_turn(
             user_history_timed, user_msg, deepseek_client)
+    if is_group:
+        # annotate_turn 会把 `（回X）` 换成 `（转述）`；若它没启用/失败，这里再兜底去一次。
+        hist_for_injection = _neutralize_group_history(hist_for_injection)
     v3_fused = ([it for it in fused_items if getattr(it, "source", "") == "behavior"]
                 if v3 else fused_items)
     # v3：模型可调用 recall 取记忆/感知；显式预取已在 frame 里，不依赖工具能力。
@@ -1489,6 +1578,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         user_transcript=user_transcript, nickname_hint=nickname_hint,
         log_hits=True, trace=injection_trace,
         association_context=_assoc["note"], association_entities=_assoc["entities"],
+        wiki_context=wiki_context,
         is_group=is_group, group_address_note=group_address_note,
         group_thread_note=group_thread_note, name_budget=name_budget,
         group_batch_note=group_batch_note,

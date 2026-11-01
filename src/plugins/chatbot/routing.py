@@ -11,6 +11,7 @@ import re
 from .constants import THINKING_DISABLED, LEGENDARY_FILE
 from .config import log_cache_usage, _get_clients, _get_model_name, extract_chat_content
 from .config import aux_clients_or, aux_model  # 辅助链（2026-10-29）
+from .term_hints import terms_hint_block
 
 _legendary_cache = None
 
@@ -82,6 +83,7 @@ async def legendary_confirmed(user_msg: str, prompt_template: str, history: str 
             content = content.replace("{context}", history or "（无）").replace("{msg}", user_msg)
         else:
             content = content.replace("{msg}", user_msg)
+        content += terms_hint_block(user_msg)
         deepseek_client, _ = aux_clients_or(_get_clients)
         resp = await deepseek_client.chat.completions.create(
             model=aux_model(_get_model_name()),
@@ -186,6 +188,7 @@ async def classify_l3(deepseek_client, user_msg: str, history_text: str,
         history=history_text or "（无）", user_msg=user_msg,
         role_name="灰泽满",
     )
+    prompt += terms_hint_block(user_msg)
     try:
         resp = await deepseek_client.chat.completions.create(
             model=_get_model_name(),

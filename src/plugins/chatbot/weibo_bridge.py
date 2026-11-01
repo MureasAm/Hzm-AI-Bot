@@ -24,7 +24,8 @@ from .bg import spawn
 from .constants import WEIBO_STATE_FILE
 from .proactive import compose_proactive, broadcast_proactive
 from . import _bridge_common
-from .config import get_weibo_uid, get_weibo_cookie, get_notify_whitelist, get_push_interval
+from .config import (get_weibo_uid, get_weibo_cookie, get_weibo_proxy,
+                     get_notify_whitelist, get_push_interval)
 
 WEIBO_API = "https://weibo.com/ajax/statuses/mymblog"
 
@@ -125,6 +126,10 @@ def _extract_post_images(item: dict) -> list:
     for pid in (item.get("pic_ids") or []):
         info = infos.get(pid) or {}
         u = (info.get("original") or {}).get("url") or (info.get("large") or {}).get("url") or ""
+        if not u and pid:
+            # pic_infos 偶发缺失（或只给 pic_ids）时，用 pic_id 直接拼图链；
+            # 否则同一张图会静默变成纯文字推送。
+            u = f"https://wx1.sinaimg.cn/large/{pid}.jpg"
         if u:
             urls.append(u)
     if not urls:  # 兼容旧版 pics 结构
@@ -165,11 +170,19 @@ class WeiboMonitor:
         if not self.uid:
             return
         if not self._primed:
-            await self._prime()
+            # 基线没建立成功就**不检查事件**：否则下一轮会把停机期间的最新微博
+            # 当成新微博推给所有好友（2026-11-01 实测：重启后把 10-30 17:24 的
+            # 「快递到了🐤可爱捏」广播了）。失败就留到下一轮重试基线。
+            if not await self._prime():
+                return
         await self._check_posts(bot)
 
-    async def _prime(self) -> None:
-        """每次启动建基线：记录当前最新微博 id，不推送停机期间已发的。"""
+    async def _prime(self) -> bool:
+        """每次启动建基线：记录当前最新微博 id，返回是否真正成功。
+
+        **失败时不能把 `_primed` 置 True**：否则事件检查会带着旧水位线运行，
+        下一轮成功请求就会把停机期间的最新微博当新事件推送。
+        """
         try:
             post = await self._fetch_latest_post()
             cur = post.get("id", "")
@@ -177,10 +190,13 @@ class WeiboMonitor:
             if _bridge_common.is_newer_id(cur, self.state.get("last_post_id", "")):
                 self.state["last_post_id"] = cur
         except Exception as e:
-            print(f"⚠️ 微博基线失败（忽略）: {e}")
+            print(f"⚠️ 微博基线失败（不推送，下轮重试）: {e}")
+            self._primed = False
+            return False
         self._primed = True
         _save_state(self.state)
         print("[微博] 已建立基线（对齐当前微博状态），之后检测到新微博才会推送")
+        return True
 
     async def _fetch_latest_post(self) -> dict:
         """取最新一条微博，返回 {id, mblogid, text, image_urls, url}。
@@ -212,8 +228,12 @@ class WeiboMonitor:
         }
         if jar.get("XSRF-TOKEN"):
             headers["x-xsrf-token"] = jar["XSRF-TOKEN"]
+        # 出口固定：WEIBO_PROXY 有值就走它，没值就强制直连（trust_env=False 不吃系统代理）。
+        # 微博登录态和出口 IP 绑定，浏览器/bot 出口不一致会被风控顶掉。
+        proxy = get_weibo_proxy()
         async with httpx.AsyncClient(timeout=10.0, cookies=jar,
-                                     headers=headers, follow_redirects=False) as client:
+                                     headers=headers, follow_redirects=False,
+                                     proxy=proxy or None, trust_env=False) as client:
             resp = await client.get(WEIBO_API,
                                     params={"uid": self.uid, "page": 1, "feature": 0})
         _save_jar(resp.cookies)   # 续期会话落盘（若微博下发新 cookie）
@@ -308,6 +328,8 @@ class WeiboMonitor:
                 print(f"⚠️ 微博配图下载失败（忽略，仍发文字）: {e}")
         if image_paths:
             print(f"[微博] 配图已下载 {len(image_paths)} 张")
+        elif post.get("image_urls"):
+            print(f"[微博] 本有 {len(post['image_urls'])} 张配图，但全部下载失败 → 本次只发文字")
 
         # 同 B站 2026-10-23 改定：主动发言生成后只发她那句（语音优先），不推原文；
         # 只有她没话说时才退回结构化通知。
@@ -364,10 +386,24 @@ class WeiboMonitor:
 
 # ==================== 启动注册 ====================
 
+async def _log_egress_ip() -> None:
+    """启动时打印微博请求的实际出口 IP，方便和浏览器对照（不一致会掉登录态）。"""
+    proxy = get_weibo_proxy()
+    try:
+        async with httpx.AsyncClient(timeout=6.0, proxy=proxy or None,
+                                     trust_env=False) as c:
+            resp = await c.get("https://ifconfig.me/ip")
+        print(f"[微博] 当前出口 IP: {resp.text.strip()[:64]}")
+    except Exception as e:
+        print(f"⚠️ 微博出口 IP 查询失败（不影响监听）: {str(e)[:80]}")
+
+
 async def _monitor_loop() -> None:
     monitor = WeiboMonitor()
     interval = get_push_interval()
     print(f"[微博] 监听启动: uid={monitor.uid}, 轮询间隔={interval}s（±随机抖动防风控）")
+    print(f"[微博] 请求出口: {get_weibo_proxy() or '直连'}（WEIBO_PROXY 可固定；trust_env=False）")
+    await _log_egress_ip()
     while True:
         try:
             bot = get_bot()

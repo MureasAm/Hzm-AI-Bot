@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from .constants import PROJECT_ROOT, THINKING_DISABLED
+from .term_hints import terms_hint_block
 
 
 DEFAULT_STATE_FILE = PROJECT_ROOT / "user_memory" / "memory_v2_shadow.json"
@@ -524,6 +525,7 @@ async def extract_and_ingest(
         session_id=session_id,
         observed_at=observed_at,
     )
+    prompt += terms_hint_block(user_text, max_terms=2, max_chars=200)
     try:
         response = await client.chat.completions.create(
             model=model,

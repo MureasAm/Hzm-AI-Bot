@@ -199,6 +199,22 @@ class TestProbeSession:
         assert "本场已知的事" in p
         assert "保留用户原词" in p and "言语行为" in p
 
+    async def test_group_scene_note_explains_not_addressed(self, monkeypatch):
+        """群聊未点名时必须告诉 probe：别人说的“你”不一定指灰泽满。"""
+        captured = {}
+
+        async def fake_llm(client, prompt, max_tokens=250, temperature=0.2):
+            captured["prompt"] = prompt
+            return json.dumps({"topic": "群聊", "topic_changed": False,
+                               "new_event": None, "expanded_query": None}, ensure_ascii=False)
+
+        monkeypatch.setattr(sm, "_llm", fake_llm)
+        await sm.probe_session("g1", "极星：还关门", "历史", object(),
+                               is_group=True, group_addressed=False)
+        p = captured["prompt"]
+        assert "没有人点名" in p
+        assert "不要把话题理解成关于她" in p
+
     async def test_entities_normalized_in_debug_meta(self, monkeypatch):
         """probe 顺带识别专名（作品/作者/地点/动物），供【关联背景】沿边走。
 

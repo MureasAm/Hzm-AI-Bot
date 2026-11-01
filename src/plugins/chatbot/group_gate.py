@@ -23,6 +23,8 @@ import json
 import os
 import random
 
+from .term_hints import terms_hint_block
+
 from .constants import THINKING_DISABLED, AT_SELF_MARK, GROUP_EVENT_REPLY_PROB
 from .config import log_cache_usage, _get_model_name, extract_chat_content, aux_model
 
@@ -109,6 +111,7 @@ async def should_reply_in_group(deepseek_client, history_text: str, batch_text: 
         history=(history_text or "").strip()[-1500:] or "（这是群里最早的一批）",
         batch=batch_text.strip(),
     )
+    prompt += terms_hint_block(batch_text)
     try:
         resp = await deepseek_client.chat.completions.create(
             model=aux_model(_get_model_name()),

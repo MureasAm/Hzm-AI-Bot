@@ -25,6 +25,7 @@ from .memory import archive_legacy_file
 from . import injection as inj
 from .constants import PROJECT_ROOT, THINKING_DISABLED
 from .config import log_cache_usage, _get_model_name, extract_chat_content, aux_model
+from .term_hints import terms_hint
 # 时长措辞（"3天"/"2小时"）与长期/短期记忆共用一份，别各写一套（memory re-export 自根模块）
 from .memory import humanize_gap
 
@@ -274,9 +275,23 @@ def mood_note(user_id: str) -> str:
 
 # ==================== 提示词 ====================
 
+def _scene_note(is_group: bool, group_addressed: bool) -> str:
+    if not is_group:
+        return "这是私聊：用户在对灰泽满说话。"
+    if group_addressed:
+        return ("这是 QQ 群聊：本批有人点名/引用/@ 灰泽满。被点名的那句是在跟她说，"
+                "其他群友的话仍可能是互相在聊。")
+    return ("这是 QQ 群聊：本批没有人点名/@/引用灰泽满。群友之间的「你/他/她」可能指别的群友；"
+            "不要把话题理解成关于她，也不要写成发生在她身上。")
+
+
 SESSION_PROBE_PROMPT = """你是会话话题追踪器。用户在聊天中刚发了一条新消息，下面给出【上一轮已知话题】和【最近对话】。
 
+【场景】{scene_note}
+
 任务：判断这条新消息在当前语境下的完整含义，以及它是否带来了话题转变。
+
+群聊场景特别注意：消息不一定是在对灰泽满说。只有明确点名/@/引用她时，才把「你/他/她」理解成灰泽满；否则先按对话线判断指的是哪位群友，不要把群友之间的事归到她身上，也不要写成“发生在她身上”。
 
 
 输出 JSON：
@@ -285,7 +300,7 @@ SESSION_PROBE_PROMPT = """你是会话话题追踪器。用户在聊天中刚发
   "topic_changed": true 或 false,
   "new_event": "这条消息值得记住的关键事件，一句话（如'用户发比爱心示好'）；纯寒暄无事件则 null",
   "mood": "用户**此刻**的情绪状态，一句话（如'因为考试失利而失落''和队友闹别扭后很委屈'）；看不出来 / 没有明显情绪则 null",
-  "entities": "用户这句话提到/问到的**作品、作者、地点、动物**等专名（最多 3 个，写规范名，如'空中杀人现场''东野圭吾''袋鼠'）；没有或只是普通闲聊则 null",
+  "entities": "用户这句话提到/问到的**专名**（作品、作者、地点、动物，以及动画/漫画/游戏、虚拟主播/角色、网络梗等；**即使用户只发了一个名字/专名，也要收进来**；最多 3 个，写规范名/全名，如'空中杀人现场''东野圭吾''小松绿''初音未来'）；没有或只是普通闲聊则 null",
   "speech_act": "literal_question | factual_statement | request | complaint | tease | anticipation | roleplay | other",
   "target": "这句话指向谁/什么；**只写一个最可能的对象**（如：她正在做的事、对方的东西、某个物件）；如果“我的电脑”这类说法确实分不清是谁的，写 null，不要硬猜，也不要用“或”并列",
   "scene": "这句话把对话放进了一个什么场景（一句话：谁在场、在做什么、可能出什么岔子，如'比赛现场发现忘带准考证、比赛要迟到'）；普通陈述则 null",
@@ -328,8 +343,11 @@ SESSION_PROBE_PROMPT = """你是会话话题追踪器。用户在聊天中刚发
     factual_statement / request / complaint，`pragmatic_note` 与 `implied_stance` 为 null。
 - mood 只在用户**明显**带情绪时写（失落/焦虑/兴奋/委屈…）；纯寒暄、看不出情绪就 null。
   **别把"话题"当情绪**（聊考试 ≠ 焦虑），也**别把灰泽满自己的语气**算成用户的情绪。
-- entities 只收**专名**（书名/作者/地点/动物），别把普通名词（"书""作家""动物"）当实体；
-  用户没提具体名字、拿不准就 null。作品名写用户说的那个，作者写全名。
+- entities 只收**专名**（书名/作者/地点/动物/动画/漫画/游戏/虚拟主播/角色/网络梗），
+  别把普通名词（"书""作家""动物"）当实体；作品名写用户说的那个，虚拟主播/角色写规范名，
+  作者写全名；用户没提具体名字、拿不准就 null。
+  即使用户只发了一个名字/专名（如「小松绿」「初音未来」），也要收进 entities，
+  不要因为缺少上下文就返回 null。
 - **expanded_query 表情识别铁律**：如果消息是**纯表情/纯符号**（emoji 或[表情：xx]），必须先按**表情的标准含义**识别，不要从对话历史臆测：
   · 😅 = 无语/无奈/尴尬（不是傲娇调侃）
   · 😭 = 委屈/难过/哭
@@ -358,6 +376,8 @@ SESSION_PROBE_PROMPT = """你是会话话题追踪器。用户在聊天中刚发
 {history}
 
 【本场已知的事】{events}
+
+【术语表·只用于理解，不要写进输出】{term_hint}
 
 【用户刚发的消息】{user_msg}
 
@@ -447,7 +467,8 @@ def _now_label(now: datetime | None = None) -> str:
 
 
 async def probe_session(user_id: str, user_msg: str, history_text: str, client,
-                        debug: bool = False, now: datetime | None = None):
+                        debug: bool = False, now: datetime | None = None,
+                        is_group: bool = False, group_addressed: bool = True):
     """对话前同步探测会话：判断话题延续/转换、累计事件、扩充短 query。
 
     一次 LLM 调用同时完成三件事（避免对话后异步更新导致的话题滞后一轮）：
@@ -475,6 +496,8 @@ async def probe_session(user_id: str, user_msg: str, history_text: str, client,
         user_msg=msg,
         events=events,
         now=_now_label(now),
+        term_hint=terms_hint(msg) or "（无）",
+        scene_note=_scene_note(is_group, group_addressed),
     )
     content = await _llm(client, prompt, max_tokens=320, temperature=0.2)
     expanded = msg

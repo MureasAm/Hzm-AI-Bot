@@ -4,6 +4,7 @@
 cookie 会话策略刻意不同（B站塞 Header / 微博用 httpx cookie jar 续期），不在此统一——
 那是有注释解释的差异，不是重复。
 """
+import asyncio
 import json
 import re
 import tempfile
@@ -87,9 +88,25 @@ def save_state_file(path: Path, state: dict) -> None:
 
 
 async def download_image_to_tmp(url: str, prefix: str) -> Path:
-    """下载图片并统一转 JPEG 到临时文件；失败抛异常由调用方兜底。"""
+    """下载图片并统一转 JPEG 到临时文件；失败抛异常由调用方兜底。
+
+    图片 CDN 偶发瞬断（尤其微博 sinaimg）；这里多给一次重试，
+    避免同一张图在推送时静默变成纯文字。
+    """
     from .vision import _read_image_bytes, _normalize_image
-    data = await _read_image_bytes(url)
+    last: Exception | None = None
+    data = b""
+    for attempt in range(2):
+        try:
+            data = await _read_image_bytes(url)
+            break
+        except Exception as e:
+            last = e
+            if attempt == 0:
+                await asyncio.sleep(0.6)
+    else:
+        assert last is not None
+        raise last
     data = _normalize_image(data)
     tmp = Path(tempfile.gettempdir()) / f"{prefix}_{time.time_ns()}.jpg"
     tmp.write_bytes(data)

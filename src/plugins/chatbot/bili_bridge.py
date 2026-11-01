@@ -4,16 +4,21 @@
 - 开播：状态翻转（未播→直播）才推送一次，带上直播间标题
 - 动态：出现新动态 ID 才推送。**能转成“她会主动说的那句话”时，只发那句（语音优先），
   不再推动态原文/链接**（2026-10-23 用户定）；转不出来/不适合时才发结构化原文通知。
+- 动态走**公共接口**（buvid3/4 + WBI 签名），**不需要 SESSDATA**（2026-10-31 实测）；
+  接口偶发 `code=0 + 空列表`，自动重试 1–2 次即恢复。SESSDATA 只影响 emote panel
+  的完整度（没有时退回动态自带表情映射 + 本地 assets/emotes）。
 推送目标：灰泽满 QQ 号的所有好友（私聊），NOTIFY_FRIENDS_WHITELIST 可收窄为白名单。
 去重状态（last_live_status / last_dynamic_id / 好友缓存）持久化到 data/bili_state.json，
 重启不重复推送。所有外部调用失败都降级为日志，绝不让监听任务崩溃。
 """
 import asyncio
+import hashlib
 import random
 import re
 import tempfile
 import time
 from pathlib import Path
+from urllib.parse import urlencode
 
 import httpx
 from PIL import Image
@@ -32,8 +37,186 @@ LIVE_STATUS_API = "https://api.live.bilibili.com/room/v1/Room/get_status_info_by
 _BILI_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
             "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
 
+# 动态公共接口：匿名身份（buvid3/4）+ WBI 签名即可，不需要 SESSDATA。
+BILI_SPI_API = "https://api.bilibili.com/x/frontend/finger/spi"
+BILI_NAV_API = "https://api.bilibili.com/x/web-interface/nav"
+BILI_DYNAMIC_API = "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space"
+
+# WBI 签名的 mixin 表（与 bilibili-api 的 utils/network.py 同一张表）
+_WBI_MIXIN_TAB = [46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43,
+                  5, 49, 33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16,
+                  24, 55, 40, 61, 26, 17, 0, 1, 60, 51, 30, 4, 22, 25, 54, 21, 56, 59,
+                  6, 63, 57, 62, 11, 36, 20, 34, 44, 52]
+_BUVID_TTL = 12 * 3600
+_WBI_TTL = 6 * 3600
+_buvid_cache: dict = {}
+_buvid_at = 0.0
+_wbi_cache: dict = {}
+_wbi_at = 0.0
+
 # QQ 无法把自定义表情内联进文字，只能当独立图片发。表情图压到这么小再发，尽量接近"小表情"观感。
 _EMOJI_MAX_SIDE = 64
+
+
+def _wbi_sign(params: dict, mixin_key: str) -> dict:
+    """按 B站 WBI 规则签名：过滤特殊字符 → 按 key 排序 → md5(query + mixin)。"""
+    signed = {k: "".join(ch for ch in str(v) if ch not in "!'()*")
+              for k, v in params.items()}
+    signed["wts"] = int(time.time())
+    query = urlencode(sorted(signed.items()))
+    signed["w_rid"] = hashlib.md5((query + mixin_key).encode("utf-8")).hexdigest()
+    return signed
+
+
+async def _get_buvid() -> dict:
+    """获取并缓存匿名身份 buvid3/4（12 小时刷新一次）。"""
+    global _buvid_cache, _buvid_at
+    if _buvid_cache and time.time() - _buvid_at < _BUVID_TTL:
+        return dict(_buvid_cache)
+    async with httpx.AsyncClient(timeout=10.0, headers={"User-Agent": _BILI_UA}) as c:
+        resp = await c.get(BILI_SPI_API)
+        data = (resp.json() or {}).get("data") or {}
+    b3, b4 = data.get("b_3"), data.get("b_4")
+    if not b3 or not b4:
+        raise RuntimeError("B站 buvid 获取失败（finger/spi 未返回 b_3/b_4）")
+    _buvid_cache = {"buvid3": str(b3), "buvid4": str(b4),
+                    "b_nut": str(int(time.time()))}
+    _buvid_at = time.time()
+    print(f"[B站] buvid 已刷新: {str(b3)[:8]}…")
+    return dict(_buvid_cache)
+
+
+async def _get_wbi_mixin_key(cookies: dict) -> str:
+    """取 WBI 的 img/sub key 并拼出 32 位 mixin key（6 小时缓存）。"""
+    global _wbi_cache, _wbi_at
+    if _wbi_cache and time.time() - _wbi_at < _WBI_TTL:
+        return _wbi_cache["mixin"]
+    async with httpx.AsyncClient(timeout=10.0, headers={"User-Agent": _BILI_UA}) as c:
+        resp = await c.get(BILI_NAV_API, cookies=cookies,
+                           headers={"Referer": "https://www.bilibili.com/"})
+        data = (resp.json() or {}).get("data") or {}
+    wbi = data.get("wbi_img") or {}
+    img = (wbi.get("img_url") or "").rsplit("/", 1)[-1].split(".")[0]
+    sub = (wbi.get("sub_url") or "").rsplit("/", 1)[-1].split(".")[0]
+    if not img or not sub:
+        raise RuntimeError("B站 WBI key 获取失败（nav 未返回 wbi_img）")
+    mixin = "".join((img + sub)[i] for i in _WBI_MIXIN_TAB)[:32]
+    _wbi_cache = {"mixin": mixin}
+    _wbi_at = time.time()
+    return mixin
+
+
+def _invalidate_bili_caches() -> None:
+    """签名/身份失效时强制下次重新拉取。"""
+    global _buvid_at, _wbi_at
+    _buvid_at = 0.0
+    _wbi_at = 0.0
+
+
+def _invalidate_buvid() -> None:
+    """只换 buvid；WBI key 是全局的，不需要跟着换。"""
+    global _buvid_at
+    _buvid_at = 0.0
+
+
+async def _fetch_dynamic_items_via_login(uid: str) -> list:
+    """登录态兜底：公共接口被风控时用现有 SESSDATA 走 bilibili-api。"""
+    from bilibili_api import dynamic
+    from bilibili_api.utils.network import Credential
+    page = await dynamic.get_dynamic_page_info(
+        Credential(sessdata=get_bili_sessdata()), host_mid=int(uid), pn=1)
+    return (page or {}).get("items") or []
+
+
+async def _fetch_dynamic_items(uid: str, attempts: int = 4) -> list:
+    """拉取指定 UID 的动态列表（公共接口，无需登录）。
+
+    ⚠️ 该接口会间歇返回 `code=0 + items=[]`（实测连续请求时常见，不是真没动态）。
+    空列表时**换一个 buvid 再试**（同一个 buvid 会被分到一直返回空的后端；
+    实测换新 buvid 后能拿到）。**不要传 offset=0**——那会稳定返回空。
+    公共接口重试仍失败、且配置了 SESSDATA 时，用登录态兜底（老路径）。
+    """
+    uid = str(uid)
+    cookies = await _get_buvid()
+    mixin = await _get_wbi_mixin_key(cookies)
+    headers = {"User-Agent": _BILI_UA,
+               "Referer": f"https://space.bilibili.com/{uid}/dynamic",
+               "Accept": "application/json, text/plain, */*"}
+    last_err = ""
+    async with httpx.AsyncClient(timeout=10.0, headers=headers) as client:
+        for i in range(attempts):
+            # features=itemOpusStyle 必须带：否则 /feed/space 返回旧 DRAW 结构，
+            # 正文（major.opus.summary）整个缺失，只剩配图。
+            params = _wbi_sign({"host_mid": uid, "timezone_offset": -480,
+                                "features": "itemOpusStyle", "page": 1}, mixin)
+            resp = await client.get(BILI_DYNAMIC_API, params=params, cookies=cookies)
+            need_new_buvid = False
+            need_new_wbi = False
+            if resp.status_code != 200:
+                last_err = f"HTTP {resp.status_code}"
+                need_new_buvid = need_new_wbi = resp.status_code in (412, 403)
+            else:
+                data = resp.json() or {}
+                code = data.get("code")
+                if code != 0:
+                    last_err = f"code={code} {data.get('message', '')}"
+                    need_new_buvid = need_new_wbi = code in (-352, -403, -412)
+                else:
+                    items = (data.get("data") or {}).get("items") or []
+                    if items:
+                        return items
+                    last_err = "空列表"
+                    need_new_buvid = True
+            if i < attempts - 1:
+                if need_new_wbi:
+                    _invalidate_bili_caches()
+                    cookies = await _get_buvid()
+                    mixin = await _get_wbi_mixin_key(cookies)
+                elif need_new_buvid:
+                    _invalidate_buvid()
+                    cookies = await _get_buvid()
+                await asyncio.sleep(1.0 + i)
+    # 公共接口被风控时用登录态兜底（SESSDATA 失效会自然抛错，被上层忽略）
+    if get_bili_sessdata():
+        try:
+            items = await _fetch_dynamic_items_via_login(uid)
+            if items:
+                print("[B站] 公共动态接口未拿到数据，已用 SESSDATA 登录态兜底")
+                return items
+        except Exception as e:
+            print(f"⚠️ B站动态登录态兜底失败: {str(e)[:120]}")
+    raise RuntimeError(f"B站动态接口连续 {attempts} 次未拿到数据（{last_err}）")
+
+
+async def fetch_latest_dynamic(uid: str) -> dict:
+    """取最新一条动态（含解析），返回 {id, text, image_urls, ...}。
+
+    ⚠️ 公共接口会把**置顶动态**排在 `items[0]`（比最新动态旧得多），
+    不能直接取第一条；按 id 取最大的一条才是真正的最新。
+    """
+    items = await _fetch_dynamic_items(uid)
+    item = max(items, key=lambda it: int(it.get("id_str") or it.get("id") or 0))
+    text = _extract_dynamic_text(item)
+    emote_map = await _get_emote_map()
+    # 动态自带的 emote 映射（若有）优先——UPOWER 定制贴纸往往在这提供 URL
+    item_emotes = item.get("emote") or {}
+    if item_emotes:
+        merged = dict(emote_map)
+        for k, v in item_emotes.items():
+            u = (v or {}).get("url", "") or ""
+            if u:
+                merged[k] = u
+        emote_map = merged
+    clean_text, emote_urls, local_emotes = _parse_emotes(text, emote_map)
+    return {
+        "id": str(item.get("id_str") or item.get("id") or ""),
+        "text": clean_text,
+        "image_urls": _extract_dynamic_images(item),
+        "emote_urls": emote_urls,
+        "local_emotes": local_emotes,
+        # 转发别人的动态：顶层 `orig` 有东西就是转发（接口层取不全原文，所以整条不推）
+        "is_repost": isinstance(item.get("orig"), dict),
+    }
 
 
 async def _download_image(url: str) -> Path:
@@ -139,10 +322,11 @@ async def _get_emote_map() -> dict:
         return _emote_map
     try:
         url = "https://api.bilibili.com/x/emote/user/panel/web"
-        async with httpx.AsyncClient(timeout=10.0,
-                                     headers={"User-Agent": _BILI_UA,
-                                              "Cookie": f"SESSDATA={get_bili_sessdata()}",
-                                              "Referer": "https://t.bilibili.com/"}) as c:
+        sessdata = get_bili_sessdata()
+        headers = {"User-Agent": _BILI_UA, "Referer": "https://t.bilibili.com/"}
+        if sessdata:
+            headers["Cookie"] = f"SESSDATA={sessdata}"
+        async with httpx.AsyncClient(timeout=10.0, headers=headers) as c:
             resp = await c.get(url, params={"business": "dynamic", "build": "0",
                                             "mobi_app": "web", "uid": get_bili_uid()})
             data = resp.json()
@@ -221,43 +405,61 @@ def _extract_dynamic_images(item: dict) -> list:
 class BiliMonitor:
     def __init__(self):
         self.uid = get_bili_uid()
-        self.sessdata = get_bili_sessdata()
         self.state = _load_state()
-        self._warned_no_sessdata = False
         # 基线是否已建（进程内标志，不持久化——每次启动都重新对齐，
         # 避免停机期间的动态/开播在重启后被当新事件推送）
-        self._primed = False
+        # 直播/动态分开记：一个接口失败不该拖住另一个的实时监控。
+        self._live_primed = False
+        self._dynamic_primed = False
+
+    @property
+    def _primed(self) -> bool:
+        """兼容旧测试/调用：两个基线都建好才算整体 primed。"""
+        return self._live_primed and self._dynamic_primed
+
+    @_primed.setter
+    def _primed(self, value: bool) -> None:
+        self._live_primed = self._dynamic_primed = bool(value)
 
     async def poll_once(self, bot) -> None:
         if not self.uid:
             return
         if not self._primed:
             await self._prime()
-        await self._check_live(bot)
-        await self._check_dynamic(bot)
+        if self._live_primed:
+            await self._check_live(bot)
+        if self._dynamic_primed:
+            await self._check_dynamic(bot)
 
     async def _prime(self) -> None:
         """每次启动建基线：记录当前直播/动态状态，不推送"停机期间已发生"的事件。
 
-        基线是进程内一次性的（self._primed），每次 bot 启动都重新对齐——
-        否则重启后会把停机期间的开播/动态当新事件广播给所有好友。
+        基线是进程内一次性的（`_live_primed` / `_dynamic_primed`），每次 bot 启动都重新对齐。
+        **某一项拉取失败时不能把它标记为已建**：否则下一轮成功请求会把停机期间的事件
+        当新事件补推（2026-11-01 微博「快递到了」事故的同型 bug）。失败的部分下轮重试。
         """
-        try:
-            info = await self._fetch_live_status()
-            self.state["last_live_status"] = info["live_status"] == 1
-        except Exception as e:
-            print(f"⚠️ 基线-直播状态失败（忽略）: {e}")
-        try:
-            dyn = await self._fetch_latest_dynamic()
-            cur = dyn.get("id", "")
-            # 水位线只升不降：停机期间她若撤回/置顶，别把基线调低
-            if _bridge_common.is_newer_id(cur, self.state.get("last_dynamic_id", "")):
-                self.state["last_dynamic_id"] = cur
-        except Exception as e:
-            print(f"⚠️ 基线-动态失败（忽略）: {e}")
-        self._primed = True
+        if not self._live_primed:
+            try:
+                info = await self._fetch_live_status()
+                self.state["last_live_status"] = info["live_status"] == 1
+                self._live_primed = True
+            except Exception as e:
+                print(f"⚠️ 基线-直播状态失败（下轮重试，本轮不检查）: {e}")
+        if not self._dynamic_primed:
+            try:
+                dyn = await self._fetch_latest_dynamic()
+                cur = dyn.get("id", "")
+                # 水位线只升不降：停机期间她若撤回/置顶，别把基线调低
+                if _bridge_common.is_newer_id(cur, self.state.get("last_dynamic_id", "")):
+                    self.state["last_dynamic_id"] = cur
+                self._dynamic_primed = True
+            except Exception as e:
+                print(f"⚠️ 基线-动态失败（下轮重试，本轮不检查）: {e}")
         _save_state(self.state)
-        print("[B站] 已建立基线（对齐当前直播/动态状态），之后检测到新的开播/动态才会推送")
+        if self._primed:
+            print("[B站] 已建立基线（对齐当前直播/动态状态），之后检测到新的开播/动态才会推送")
+        else:
+            print("[B站] 基线未完整建立：完成的部分正常监控，失败的部分下轮重试，不会补推停机事件")
 
     # ---- 开播 ----
 
@@ -311,48 +513,10 @@ class BiliMonitor:
     # ---- 动态 ----
 
     async def _fetch_latest_dynamic(self) -> dict:
-        """取最新一条动态，返回 {id, text, image_urls}。
-
-        B站 2026 动态接口要求登录（SESSDATA），由 get_dynamic_page_info 处理 WBI/buvid。
-        """
-        from bilibili_api import dynamic  # 懒加载，避免无关场景的额外依赖开销
-        from bilibili_api.utils.network import Credential
-
-        # 每次轮询重新读 .env.prod，换 SESSDATA 不用重启（B站 SESSDATA 会过期，省去重启）
-        cred = Credential(sessdata=get_bili_sessdata())
-        page = await dynamic.get_dynamic_page_info(cred, host_mid=int(self.uid), pn=1)
-        items = (page or {}).get("items") or []
-        if not items:
-            raise RuntimeError("该 UID 暂无动态")
-        item = items[0]
-        text = _extract_dynamic_text(item)
-        emote_map = await _get_emote_map()
-        # 动态自带的 emote 映射（若有）优先——UPOWER 定制贴纸往往在这提供 URL
-        item_emotes = item.get("emote") or {}
-        if item_emotes:
-            merged = dict(emote_map)
-            for k, v in item_emotes.items():
-                u = (v or {}).get("url", "") or ""
-                if u:
-                    merged[k] = u
-            emote_map = merged
-        clean_text, emote_urls, local_emotes = _parse_emotes(text, emote_map)
-        return {
-            "id": str(item.get("id_str") or item.get("id") or ""),
-            "text": clean_text,
-            "image_urls": _extract_dynamic_images(item),
-            "emote_urls": emote_urls,
-            "local_emotes": local_emotes,
-            # 转发别人的动态：顶层 `orig` 有东西就是转发（接口层取不全原文，所以整条不推）
-            "is_repost": isinstance(item.get("orig"), dict),
-        }
+        """取最新一条动态（公共接口，无需 SESSDATA）。"""
+        return await fetch_latest_dynamic(self.uid)
 
     async def _check_dynamic(self, bot) -> None:
-        if not get_bili_sessdata():
-            if not self._warned_no_sessdata:
-                print("⚠️ BILI_SESSDATA 未配置，动态监控关闭（开播监控正常）。配置后下次轮询即生效。")
-                self._warned_no_sessdata = True
-            return
         try:
             dyn = await self._fetch_latest_dynamic()
         except Exception as e:
@@ -389,6 +553,8 @@ class BiliMonitor:
                     print(f"⚠️ 配图下载失败（忽略，仍发文字）: {e}")
             if image_paths:
                 print(f"[B站] 图文动态：配图 {len(image_paths)} 张（emoji 表情跳过——QQ 无法内联小图）")
+            elif photos:
+                print(f"[B站] 本有 {len(photos)} 张配图，但全部下载失败 → 本次只发文字")
         else:
             for p in (dyn.get("local_emotes") or [])[:MAX_IMG]:
                 image_paths.append(_resize_emote_if_large(p, _EMOJI_MAX_SIDE))

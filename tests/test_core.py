@@ -668,7 +668,7 @@ class TestLengthGuard:
             calls.append(len(messages))
             return seq.pop(0) if seq else "在呢"
 
-        async def fake_probe(uid, msg, hist, client, debug=False):
+        async def fake_probe(uid, msg, hist, client, debug=False, **kwargs):
             _v = '用户发了个偷笑的表情'
             return (_v, {}) if debug else _v       # 纯情绪 → 跳过检索，最小 harness
 
@@ -731,7 +731,7 @@ class TestFallbackReplyNotRemembered:
     async def _run(self, monkeypatch, reply_text):
         captured = {"short": 0, "long": 0}
 
-        async def fake_probe(uid, msg, hist, client, debug=False):
+        async def fake_probe(uid, msg, hist, client, debug=False, **kwargs):
             _v = '用户发了个偷笑的表情'
             return (_v, {}) if debug else _v   # 纯情绪 → 跳过检索，最小 harness
 
@@ -869,7 +869,7 @@ class TestGroupEventAge:
         })
         monkeypatch.setattr(core, "load_schedule", lambda: {})
 
-        async def fake_probe(uid, msg, hist, client, debug=False):
+        async def fake_probe(uid, msg, hist, client, debug=False, **kwargs):
             return (msg, {}) if debug else msg
 
         monkeypatch.setattr(core, "probe_session", fake_probe)
@@ -1129,7 +1129,7 @@ class TestInjectionTraceWrite:
     async def _run(self, monkeypatch, route):
         recorded = []
 
-        async def fake_probe(uid, msg, hist, client, debug=False):
+        async def fake_probe(uid, msg, hist, client, debug=False, **kwargs):
             _v = '用户发了个偷笑的表情'
             return (_v, {}) if debug else _v   # 纯情绪 → 跳过检索，最小 harness
 
@@ -1194,7 +1194,7 @@ class TestGroupMetaSilenceNotSent:
     async def _run(self, monkeypatch, reply_text, addressed):
         recorded = []
 
-        async def fake_probe(uid, msg, hist, client, debug=False):
+        async def fake_probe(uid, msg, hist, client, debug=False, **kwargs):
             return ("用户发了个无语的表情", {})   # 纯情绪 → 跳过检索
 
         async def fake_reply(messages):
@@ -1242,7 +1242,7 @@ class TestGroupHistoryLabels:
     async def test_group_reply_records_reply_to(self, monkeypatch):
         recorded = []
 
-        async def fake_probe(uid, msg, hist, client, debug=False):
+        async def fake_probe(uid, msg, hist, client, debug=False, **kwargs):
             return ("用户发了个无语的表情", {})   # 纯情绪 → 跳过检索
 
         async def fake_reply(messages):
@@ -1284,7 +1284,7 @@ class TestGroupHistoryLabels:
             seen.update(k)
             return [{"role": "system", "content": "x"}]
 
-        async def fake_probe(uid, msg, hist, client, debug=False):
+        async def fake_probe(uid, msg, hist, client, debug=False, **kwargs):
             return ("用户发了个无语的表情", {})
 
         async def fake_reply(messages):
@@ -1427,6 +1427,9 @@ class TestSceneBlock:
         assert "你是在直接与对方聊天" in text
         assert "你就是灰泽满本人" in text
         assert "不是在撰写关于灰泽满的旁白" in text
+        # 身份锚点：社团 + 期数 + 前后辈规则（wiki 资料靠它推理关系）
+        assert "VirtuaReal（二十七期）" in text
+        assert "二十八期及以后是后辈" in text
 
     def test_self_reference_moved_out_of_skeleton(self):
         """自称方式移出骨架，只保留注入末尾一句弱约束（2026-10-27）。
@@ -1440,6 +1443,13 @@ class TestSceneBlock:
         assert "自称方式固定" not in text
         assert "不要让“灰泽满”当一句话的第一个词" not in text
         assert inj.T("selfref") == "回复时，需要自称就用“灰泽满”或“hzm”；偶尔用一次“我”也没关系。"
+
+
+def test_group_history_neutralizes_reply_target():
+    """注入历史时保留“回某位群友”的关系，但不把具体名字喂回去（避免名字起手回喂）。"""
+    lines = ["[3分钟前] 灰泽满（回甲）：在呢", "甲：你好", "[1分钟前] 灰泽满（回乙）：嗯"]
+    assert core._neutralize_group_history(lines) == [
+        "[3分钟前] 灰泽满（回群友）：在呢", "甲：你好", "[1分钟前] 灰泽满（回群友）：嗯"]
 
 
 class TestAssociationInjection:
@@ -1471,6 +1481,16 @@ class TestAssociationInjection:
     def test_absent_by_default(self, monkeypatch):
         msgs = self._build(monkeypatch)
         assert not any(m["content"].startswith("【关联背景】") for m in msgs)
+
+    def test_wiki_context_injected_and_traced(self, monkeypatch):
+        """未知专名的百科背景单独成块，且和关联背景一样进注入轨迹。"""
+        trace = {}
+        msgs = self._build(monkeypatch, trace=trace,
+                           wiki_context="小松绿：VirtuaReal（二十八期）虚拟UP主")
+        hit = [m for m in msgs if m["content"].startswith("【背景资料")]
+        assert hit and "小松绿" in hit[0]["content"]
+        assert "不是她说的话" in hit[0]["content"]
+        assert "wiki" in trace["blocks"]
 
     def test_group_address_note_is_system_only(self, monkeypatch):
         """群聊点名情况走系统元信息，用户消息保持干净（模型没有标记可抄）。"""
@@ -1521,7 +1541,7 @@ class TestAssociationWiring:
     async def test_probe_entities_reach_resolver(self, monkeypatch):
         seen = {}
 
-        async def fake_probe(uid, msg, hist, client, debug=False):
+        async def fake_probe(uid, msg, hist, client, debug=False, **kwargs):
             # 返回"纯情绪"扩充句 → gather_retrieval 直接跳过检索（最小 harness，不调外部）
             return ("用户发了个无语的表情", {"entities": ["东野圭吾"]})
 
@@ -1657,7 +1677,7 @@ class TestMemoryStoresCleanedReply:
     """
 
     async def test_memory_gets_cleaned_reply(self, monkeypatch):
-        async def fake_probe(uid, msg, hist, client, debug=False):
+        async def fake_probe(uid, msg, hist, client, debug=False, **kwargs):
             _v = '用户发了个偷笑的表情'
             return (_v, {}) if debug else _v   # 纯情绪 → 跳过检索，最小 harness
 
@@ -1888,7 +1908,7 @@ class TestHandleChatEmotionOnly:
     防误命中无关样本（曾导致回'喜欢新衣服'）。"""
 
     async def test_emotion_only_skips_retrieval(self, monkeypatch):
-        async def fake_probe(uid, msg, hist, client, debug=False):
+        async def fake_probe(uid, msg, hist, client, debug=False, **kwargs):
             _v = '用户发了个偷笑的表情'
             return (_v, {}) if debug else _v
         monkeypatch.setattr(core, "probe_session", fake_probe)
