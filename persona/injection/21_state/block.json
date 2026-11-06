@@ -1,0 +1,13 @@
+{
+ "_readme": "第 21 块·当前状态（稳定用户卡 + 动态状态，一个块文件两段渲染）。\n【什么时候注】私聊每轮。稳定段靠前（称呼/身份/地点/相处/仪式/兴趣），动态段放最后（时间/天气/直播/话题/情绪）。\n【为什么拆两段】动态每分钟变，放前面会把后面所有块拖成前缀缓存 miss；逻辑上仍是同一类信息。\n【名字进卡】只为“知道他是谁”，不要每轮叫；频率由 name_budget 管，后处理替换已删。\n【改什么】文案改这里；内容由 memory_v2 / context_probe / session_memory 运行时提供。",
+ "id": "state",
+ "order": 21,
+ "title": "当前状态",
+ "when": "私聊每轮",
+ "source": "运行时（memory_v2 / context_probe / session_memory）",
+ "strings": {
+  "stable": "【关于这个绿冻】\n{lines}",
+  "line": "{label}：{value}",
+  "dynamic": "【当前状态】\n{parts}"
+ }
+}

@@ -239,7 +239,7 @@ _TIME_HINT_RE = re.compile(
 def frame_now(now: datetime | None = None) -> str:
     """常驻 frame：日期 + 星期 + 直播状态。**不含精确时间/农历/天气**。
 
-    精确时间、农历、天气都走 `recall(kind=perception/weather)`；这样每轮不会有一个
+    精确时间、农历、天气由 need_triggers 的系统预取按需注入；这样每轮不会有一个
     现成的“都凌晨了”脚本摆在模型面前（2026-10-27 定）。
     """
     dt = _cst(now)

@@ -5,7 +5,6 @@ from src.plugins.chatbot import core
 from src.plugins.chatbot import memory as mem
 from src.plugins.chatbot import rag
 from src.plugins.chatbot import reply_style
-from src.plugins.chatbot.reply_style import call_name_once, maybe_call_name
 from src.plugins.chatbot import routing
 
 
@@ -356,59 +355,6 @@ class TestBatchSummaryInjection:
         assert not any("这批消息的归纳" in m["content"] for m in msgs)
 
 
-class TestCallName:
-    """称呼替换（2026-10-30）：把一次安全的"你"换成对方要的名字。
-
-    背景：用户 2151983431 的回复要么每句都叫"温宝"、要么一句都不叫（工具化检索之后）。
-    现在在已经说出的话上换一个词，落在中间；频率由 NAME_CALL_RATE 控制。
-    """
-
-    def test_replaces_first_you(self):
-        assert call_name_once("明天还来？那灰泽满提前祝你玩到手抽筋。", "温宝")             == "明天还来？那灰泽满提前祝温宝玩到手抽筋。"
-
-    def test_skips_plural_and_greeting(self):
-        assert call_name_once("你们今天好吵。", "温宝") == "你们今天好吵。"
-        assert call_name_once("你好。", "温宝") == "你好。"
-        assert call_name_once("你俩别闹。", "温宝") == "你俩别闹。"
-
-    def test_skips_inside_word(self):
-        """「迷你」里的"你"不是代词——换成"温宝"会变成"迷温宝"。"""
-        assert call_name_once("这是迷你世界。", "温宝") == "这是迷你世界。"
-
-    def test_sentence_initial_you(self):
-        """句首的"你"是最稳的主语位置（曾经因为空 prev 的 `in` 判断被误杀）。"""
-        assert call_name_once("你别这样，你听我说。", "温宝") == "温宝别这样，你听我说。"
-
-    def test_prefers_object_position(self):
-        """多个"你"时优先换宾语位置那个（祝你 > 你高兴）。"""
-        assert call_name_once("你高兴就好，灰泽满提前祝你玩得开心。", "温宝")             == "你高兴就好，灰泽满提前祝温宝玩得开心。"
-
-    def test_skips_quoted(self):
-        assert call_name_once("灰泽满说了「你别闹」。", "温宝") == "灰泽满说了「你别闹」。"
-        # 括号里的"你"多半是心里话/舞台说明，不动；括号外照常换
-        assert call_name_once("（你别闹）灰泽满知道了。", "温宝") == "（你别闹）灰泽满知道了。"
-        assert call_name_once("（心虚）你别闹。", "温宝") == "（心虚）温宝别闹。"
-
-    def test_noop_when_name_already_there(self):
-        assert call_name_once("谢谢温宝。", "温宝") == "谢谢温宝。"
-
-    def test_noop_without_you(self):
-        assert call_name_once("灰泽满知道了。", "温宝") == "灰泽满知道了。"
-
-    def test_rate_zero_and_one(self):
-        assert maybe_call_name("谢谢你。", "温宝", rate=0) == "谢谢你。"
-        assert maybe_call_name("谢谢你。", "温宝", rate=1) == "谢谢温宝。"
-
-    def test_default_rate_replaces(self, monkeypatch):
-        """默认 1.0 = 安全的"你"直接换（用户 2026-10-30 定），不再掷骰子。"""
-        monkeypatch.delenv("NAME_CALL_RATE", raising=False)
-        assert maybe_call_name("谢谢你。", "温宝") == "谢谢温宝。"
-
-    def test_empty_inputs(self):
-        assert call_name_once("", "温宝") == ""
-        assert call_name_once("谢谢你。", "") == "谢谢你。"
-
-
 class TestCleanReply:
     def test_strip_leading_prefix(self):
         assert reply_style.clean_reply("（咽口水）你这又是来投毒的吧……") == "你这又是来投毒的吧……"
@@ -651,16 +597,15 @@ class TestHistoryGapNote:
         assert "[图片：" not in msgs[-1]["content"]
 
 
-class TestLengthGuard:
-    """超长 → 带提醒"重说一遍，短一半"（2026-10-14）。
+class TestLongReplyPreserved:
+    """长回答不再被重写（2026-11-05 删除长度守卫）。
 
-    为什么它是模型内的可靠解法：骨架里"默认往短里走"只能定基调（换模型后尤其明显——
-    gemini 默认 36 字，而她历史水平是 ~29）；`max_tokens` 硬压会腰斩半句。
-    实测阈值 40：只触发约 1/4 轮次，gemini 35.7 → 25.4 字（≈历史水平），ds 完全不触发。
+    踩坑：旧守卫超过 40 字就带提醒"短一半"重生成，把用户明确要的长回答**整段丢掉**，
+    真实聊天里表现为"我要说了→其实什么都没说"（905860780 实测：52 token 的段落被
+    重写成 15 token 的预告）。现在 max_tokens=400 只提供物理空间，长短由模型判断。
     """
 
-    async def _run(self, monkeypatch, replies, guard="1"):
-        monkeypatch.setenv("LENGTH_GUARD", guard)   # ⚠️ 别在这里 delenv——那会把用例设的值删掉
+    async def _run(self, monkeypatch, replies):
         seq = list(replies)
         calls = []
 
@@ -689,20 +634,14 @@ class TestLengthGuard:
         await asyncio.sleep(0)
         return out, calls
 
-    async def test_long_reply_gets_regenerated(self, monkeypatch):
-        long_reply = "字" * (core.LENGTH_GUARD_MAX_CHARS + 5)
-        out, calls = await self._run(monkeypatch, [long_reply, "在呢"])
-        assert out == "在呢", "重说的那句要生效"
-        assert len(calls) == 2, "超长应该触发一次重说"
+    async def test_long_reply_returned_untouched(self, monkeypatch):
+        long_reply = "字" * 120
+        out, calls = await self._run(monkeypatch, [long_reply])
+        assert out == long_reply, "长回答要原样保留，不能再被重写"
+        assert len(calls) == 1, "不该为了压长度多调一次模型"
 
-    async def test_short_reply_untouched(self, monkeypatch):
-        out, calls = await self._run(monkeypatch, ["在呢"])
-        assert out == "在呢" and len(calls) == 1, "没超长就不该多调一次"
-
-    async def test_can_be_disabled(self, monkeypatch):
-        long_reply = "字" * (core.LENGTH_GUARD_MAX_CHARS + 5)
-        out, calls = await self._run(monkeypatch, [long_reply], guard="0")
-        assert out == long_reply and len(calls) == 1
+    def test_max_tokens_leaves_room_for_a_paragraph(self):
+        assert core.CHAT_MAX_TOKENS >= 300, "物理空间要容得下一段完整回答（约 200~300 字）"
 
 
 class TestFallbackReplyNotRemembered:

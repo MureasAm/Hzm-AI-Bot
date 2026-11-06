@@ -1,20 +1,18 @@
 # -*- coding: utf-8 -*-
 """显式 fail-open 触发：只认言语行为，不认话题。"""
 from src.plugins.chatbot import need_triggers as nt
+from src.plugins.chatbot.need_triggers import requests_for
 
 
 def _kinds(msg):
     return [r.get("kind") for r in nt.requests_for(msg)]
 
 
-def test_recall_identity():
-    assert "fact" in _kinds("你还记得我叫什么吗")
-    assert "fact" in _kinds("我是谁")
-
-
-def test_address_negotiation():
-    ks = _kinds("我想亲昵点，你想怎么称呼我")
-    assert "fact" in ks and "interaction_preference" in ks
+def test_identity_and_address_are_in_stable_card():
+    """名字/称呼已经在常驻稳定卡里，不再单独预取（避免同一句话注两遍）。"""
+    assert requests_for("你还记得我叫什么吗") == []
+    assert requests_for("我是谁") == []
+    assert requests_for("我想亲昵点，你想怎么称呼我") == []
 
 
 def test_weather_owner():

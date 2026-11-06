@@ -265,6 +265,17 @@ MEMORY_V2_EXTRACT_PROMPT = """你是灰泽满私聊机器人的记忆候选提�
    · 讲灰泽满/她自己/机器人的不记（跟 fact 同一条铁律）。
    · 时点**不用你写**，系统会带上这句对话发生的时间。
    · 写成**一句话、30 字以内**；这轮没有就留空数组。
+6. events：用户与灰泽满之间、或用户亲口告诉她的、有**时间点/状态变化**的具体事
+   （车祸、捡猫、考试、吵架、约定、一起经历的事）。稳定属性、当天琐事、她自己的直播经历都不算。
+   · what 写成一句自足的话（谁、发生了什么），≤120 字。
+   · subject：user（发生在用户身上）/ her（她明确说过发生在自己身上）/ shared（明确“我们一起/他和我”）。
+   · source：user_told（他说的）/ shared（你们一起）/ her_told（她说的）。
+   · status：ongoing（现在还在/还没结束）/ ended（已经结束/好了）/ planned（以后/答应）/ unknown（判断不出）。
+   · type：health / relationship / study_work / pet / conflict / promise / shared_moment / other。
+   · date：能从话里读出就写 YYYY-MM-DD；读不出留空，不要编。
+   · entities：2–6 个短触发词（猫、车祸、考试），供以后检索。
+   · update_of：如果这轮是【已记过的事件】里同一件事的新状态，填那条事件的 id；否则留空。
+   · 定型文/段子/玩梗/角色扮演不算；拿不准就不写。
 
 【反例清单——抽到这些一律不记】
 - 灰泽满自己/机器人自身的事：版本号、功能、更新日志、"你是不是 AI"、她自己的身份设定。
@@ -331,9 +342,23 @@ temporal_scope 必须是 past/current/future/timeless：用户过去经历用 pa
   ],
   "daily": [
     {{"text": "一句话、30字以内的纯日常事件（吃了什么/几点上课/去哪）"}}
+  ],
+  "events": [
+    {{
+      "date": "YYYY-MM-DD 或空串",
+      "subject": "user|her|shared",
+      "source": "user_told|shared|her_told",
+      "what": "一句自足的话：谁、发生了什么",
+      "status": "ongoing|ended|planned|unknown",
+      "type": "health|relationship|study_work|pet|conflict|promise|shared_moment|other",
+      "entities": ["猫", "车祸"],
+      "confidence": 0.0,
+      "expires_at": "none 或 ISO 时间",
+      "update_of": "已记过的事件 id，或空串"
+    }}
   ]
 }}
-没有候选时返回 {{"items":[], "daily":[]}}。不要 markdown，不要额外文字。
+没有候选时返回 {{"items":[], "daily":[], "events":[]}}。不要 markdown，不要额外文字。
 
 【本轮对话】
 用户：{user_text}
@@ -345,6 +370,9 @@ temporal_scope 必须是 past/current/future/timeless：用户过去经历用 pa
 
 【这个人已经记过的（kind/key=value）】
 {current_summary}
+
+【已记过的事件】（update_of 用这里的 id）
+{current_events}
 
 ⚠️ **写之前先把上面这张清单对一遍——这是这份提示词里最要紧的一步。**
   · 这轮要说的事，**清单里已经有了（哪怕措辞不一样）→ 那是同一件事，用清单里那个 key，
@@ -435,7 +463,7 @@ def parse_extraction_payload(content: str) -> dict:
     `daily` 是 2026-10-17 加的（每日记忆，跟 items 走**同一次调用**）：这里只做
     "是字符串、非空、一轮最多 3 条"的收口，真正的入库闸门在 `daily_memory` 里。
     """
-    empty = {"items": [], "daily": []}
+    empty = {"items": [], "daily": [], "events": []}
     raw = (content or "").strip()
     if raw.startswith("```json"):
         raw = raw[len("```json"):]
@@ -459,7 +487,9 @@ def parse_extraction_payload(content: str) -> dict:
             text = str(d.get("text") or "").strip() if isinstance(d, dict) else ""
             if text:
                 texts.append(text)
-    return {"items": payload["items"][:20], "daily": texts}
+    events = payload.get("events")
+    events = [e for e in events[:10] if isinstance(e, dict)] if isinstance(events, list) else []
+    return {"items": payload["items"][:20], "daily": texts, "events": events}
 
 
 def build_extraction_prompt(
@@ -469,12 +499,14 @@ def build_extraction_prompt(
     current_summary: str,
     session_id: str,
     observed_at: datetime,
+    current_events: str = "（无）",
 ) -> str:
     """Render the strict write-path prompt with bounded untrusted text."""
     return MEMORY_V2_EXTRACT_PROMPT.format(
         observed_at=observed_at.isoformat(),
         session_id=_bounded_text(session_id, MAX_SESSION_ID_CHARS),
         current_summary=_bounded_text(current_summary, 1200) or "（无）",
+        current_events=_bounded_text(current_events, 800) or "（无）",
         user_text=_bounded_text(user_text, 1000),
         assistant_text=_bounded_text(assistant_text, 1000),
     )
@@ -515,13 +547,16 @@ async def extract_and_ingest(
     assistant_text: str,
     session_id: str,
     observed_at: datetime | None = None,
+    zhipu_client: Any = None,
 ) -> list[dict]:
     """Run one strict shadow extraction; failures never escape to chat flow."""
     observed_at = observed_at or datetime.now()
+    from . import event_memory
     prompt = build_extraction_prompt(
         user_text=user_text,
         assistant_text=assistant_text,
         current_summary=_extraction_summary(store, user_id),
+        current_events=event_memory.recent_summary(user_id),
         session_id=session_id,
         observed_at=observed_at,
     )
@@ -531,7 +566,7 @@ async def extract_and_ingest(
             model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.1,
-            max_tokens=500,
+            max_tokens=800,
             **THINKING_DISABLED,
         )
     except Exception:
@@ -544,6 +579,22 @@ async def extract_and_ingest(
     # 每日记忆搭同一次调用（2026-10-17）：判据同源、输入同一份，省一次 LLM。
     if daily_memory.enabled() and payload.get("daily"):
         daily_memory.add_events(user_id, payload["daily"], now=observed_at)
+    # 事件走独立目录（2026-11-05）：和 V2 记忆同一次提取，但存成带日期/状态的事件卡。
+    if payload.get("events"):
+        event_memory.add_events(
+            user_id, payload["events"],
+            source={
+                "session_id": session_id,
+                "observed_at": observed_at.isoformat(),
+                "user_text": user_text,
+                "assistant_text": assistant_text,
+            },
+            now=observed_at,
+        )
+        try:
+            await event_memory.refresh_vectors(user_id, zhipu_client)
+        except Exception:
+            pass
     return store.ingest(
         user_id,
         payload["items"],
@@ -1665,6 +1716,81 @@ class ShadowMemoryStore:
                 break
         return "\n".join(output)
 
+    # ---- 当前状态：稳定卡（2026-11-05） ----
+    # 只放“稳定、可替换、每轮知道不亏”的东西：称呼/身份/地点/相处/仪式/兴趣。
+    # 事件、当天琐事、情绪不进卡。旧状态不删，靠 status/审计留痕。
+    _CARD_ADDRESS_KEYS = {"preferred_name", "name", "nickname"}
+    _CARD_IDENTITY_KEYS = {"identity", "occupation", "background", "student_status"}
+    _CARD_LOCATION_KEYS = {"location", "city", "timezone", "hometown", "school_location"}
+    _CARD_ATTITUDE_KEYS = {"support_style", "banter_tolerance", "directness",
+                           "reply_length", "address_style"}
+
+    def build_state_card(self, user_id: str, *, now: datetime | None = None) -> str:
+        """稳定用户卡：私聊每轮注入。没有可用内容返回空串。"""
+        active = self._active_memories(user_id, now=now)
+        lines: list[str] = []
+
+        def _latest(kind: str, keys: set[str]) -> list[dict]:
+            found = [m for m in active if m.get("kind") == kind and m.get("key") in keys]
+            found.sort(key=lambda m: str(m.get("last_observed_at") or ""), reverse=True)
+            return found
+
+        def _join(items: list[dict], limit: int = 3, width: int = 70) -> str:
+            out = []
+            for m in items[:limit]:
+                value = str(m.get("value") or "").strip().rstrip("。；;")
+                if value and value not in out:
+                    out.append(value[:width])
+            return "；".join(out)
+
+        address = _latest("fact", self._CARD_ADDRESS_KEYS)
+        if address:
+            lines.append(inj.T("state", "line", label="称呼",
+                               value=str(address[0].get("value") or "")[:24]))
+        identity = [m for m in active if m.get("kind") == "fact"
+                    and m.get("key") in self._CARD_IDENTITY_KEYS]
+        identity_text = _join(identity, limit=3, width=50)
+        if identity_text:
+            lines.append(inj.T("state", "line", label="身份", value=identity_text))
+        location = [m for m in active if m.get("kind") == "fact"
+                    and m.get("key") in self._CARD_LOCATION_KEYS]
+        location_text = _join(location, limit=2, width=50)
+        if location_text:
+            lines.append(inj.T("state", "line", label="地点", value=location_text))
+
+        attitude: list[str] = []
+        for m in _latest("interaction_preference", self._CARD_ATTITUDE_KEYS):
+            sentence = inj.behavior_sentence(str(m.get("key") or ""), str(m.get("value") or ""))
+            if sentence:
+                attitude.append(sentence.rstrip("。；;"))
+        for m in [x for x in active if x.get("kind") == "request"]:
+            value = str(m.get("value") or "").strip().rstrip("。；;")
+            if value:
+                attitude.append(value if value.startswith(("他", "希望")) else f"他希望：{value}")
+        if attitude:
+            lines.append(inj.T("state", "line", label="相处", value="；".join(attitude)[:150]))
+
+        rituals = [m for m in active
+                   if m.get("kind") == "interaction_preference"
+                   and str(m.get("key") or "").startswith("ritual_")]
+        if rituals:
+            lines.append(inj.T("state", "line", label="仪式",
+                               value=_join(rituals, limit=2, width=60)))
+        interests = [m for m in active if m.get("kind") == "fact"
+                     and (str(m.get("key") or "").startswith("interest_")
+                          or str(m.get("key") or "").startswith("favorite_"))]
+        interest_text = _join(interests, limit=3, width=40)
+        if interest_text:
+            lines.append(inj.T("state", "line", label="兴趣", value=interest_text))
+
+        out, used = [], 0
+        for line in lines:
+            if used + len(line) + 1 > 340:
+                break
+            out.append(line)
+            used += len(line) + 1
+        return "\n".join(out)
+
     def build_preference_context(
         self,
         user_id: str,
@@ -1678,7 +1804,7 @@ class ShadowMemoryStore:
         """靠前注入：相处方式行为句 + 话题相关事实（system，个体适配）。
 
         used_ids：传入 list 时追加实际注入的记忆 id（条目级注入轨迹用）。
-        include_facts=False 用于注入 v3：fact 走 `recall`，这里只留相处方式行为句。
+        include_facts=False 用于注入 v3：事实进稳定卡，这里只留相处方式行为句。
         """
         active = self._active_memories(user_id, now=now, session_id=session_id)
         return self._fit(self._preference_lines(active, query or "", used_out=used_ids,

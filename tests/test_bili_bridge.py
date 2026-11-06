@@ -759,5 +759,115 @@ class TestRepostDynamicSkipped:
         assert pushed == ["通知:正文"]
 
 
+class TestPublicDynamicFetchRetry:
+    """公共动态接口重试（2026-11-04 翻车修复）。
+
+    实测该接口对匿名请求约一半概率回 `code=0 + 空列表`，且 **WBI 签名过期时
+    同样回空列表**、不报 -352。旧逻辑空列表只换 buvid → 签名轮换后永远空。
+    """
+
+    @staticmethod
+    def _stub(monkeypatch, responses):
+        """把 httpx 客户端换成按顺序回放的假客户端，并记录刷新次数。"""
+        calls = {"get": 0, "invalidated": 0, "buvid": 0, "wbi": 0}
+
+        class FakeResp:
+            def __init__(self, payload, status=200):
+                self.status_code = status
+                self._payload = payload
+
+            def json(self):
+                if isinstance(self._payload, Exception):
+                    raise self._payload
+                return self._payload
+
+        class FakeClient:
+            def __init__(self, *a, **k):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+            async def get(self, url, params=None, cookies=None):
+                idx = min(calls["get"], len(responses) - 1)
+                payload, status = responses[idx]
+                calls["get"] += 1
+                return FakeResp(payload, status)
+
+        async def fake_buvid():
+            calls["buvid"] += 1
+            return {"buvid3": "b3", "buvid4": "b4", "b_nut": "0"}
+
+        async def fake_wbi(cookies):
+            calls["wbi"] += 1
+            return "m" * 32
+
+        def fake_invalidate():
+            calls["invalidated"] += 1
+
+        async def no_sleep(*a, **k):
+            pass
+
+        monkeypatch.setattr(bb.httpx, "AsyncClient", FakeClient)
+        monkeypatch.setattr(bb, "_get_buvid", fake_buvid)
+        monkeypatch.setattr(bb, "_get_wbi_mixin_key", fake_wbi)
+        monkeypatch.setattr(bb, "_invalidate_bili_caches", fake_invalidate)
+        monkeypatch.setattr(bb.asyncio, "sleep", no_sleep)
+        return calls
+
+    async def test_empty_refreshes_wbi_too_and_recovers(self, monkeypatch):
+        items = [{"id_str": "9",
+                  "modules": {"module_dynamic": {"desc": {"text": "正文"}}}}]
+        calls = self._stub(monkeypatch, [
+            ({"code": 0, "data": {"items": []}}, 200),
+            ({"code": 0, "data": {"items": items}}, 200),
+        ])
+        monkeypatch.setattr(bb, "get_bili_sessdata", lambda: "")
+        got = await bb._fetch_dynamic_items("1")
+        assert got == items
+        # 空列表后必须连 WBI 键一起刷新（只换 buvid 会在签名轮换后永远空）
+        assert calls["invalidated"] >= 1
+        assert calls["wbi"] >= 2
+
+    async def test_all_empty_raises_after_attempts(self, monkeypatch):
+        calls = self._stub(monkeypatch, [({"code": 0, "data": {"items": []}}, 200)])
+        monkeypatch.setattr(bb, "get_bili_sessdata", lambda: "")
+        with pytest.raises(RuntimeError, match="空列表"):
+            await bb._fetch_dynamic_items("1")
+        assert calls["get"] == 10
+
+    async def test_expired_sessdata_warns_once_not_per_poll(self, monkeypatch):
+        self._stub(monkeypatch, [({"code": 0, "data": {"items": []}}, 200)])
+        monkeypatch.setattr(bb, "get_bili_sessdata", lambda: "dead")
+        monkeypatch.setattr(bb, "_sessdata_warned", False)
+
+        async def fake_login(uid):
+            raise RuntimeError("接口返回错误代码：-101，信息：账号未登录。")
+
+        monkeypatch.setattr(bb, "_fetch_dynamic_items_via_login", fake_login)
+        printed = []
+        monkeypatch.setattr("builtins.print",
+                            lambda *a, **k: printed.append(" ".join(map(str, a))))
+        for _ in range(2):
+            with pytest.raises(RuntimeError):
+                await bb._fetch_dynamic_items("1")
+        warns = [p for p in printed if "BILI_SESSDATA 已失效" in p]
+        assert len(warns) == 1          # 第二轮不再刷屏
+
+    async def test_invalid_json_counts_as_error_and_recovers(self, monkeypatch):
+        items = [{"id_str": "9", "modules": {}}]
+        calls = self._stub(monkeypatch, [
+            (ValueError("not json"), 200),
+            ({"code": 0, "data": {"items": items}}, 200),
+        ])
+        monkeypatch.setattr(bb, "get_bili_sessdata", lambda: "")
+        got = await bb._fetch_dynamic_items("1")
+        assert got == items
+        assert calls["get"] == 2
+
+
 async def _async(v):
     return v

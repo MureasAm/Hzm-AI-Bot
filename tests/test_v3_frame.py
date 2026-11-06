@@ -28,22 +28,45 @@ def test_perception_now_has_time_and_lunar():
 def test_build_message_list_uses_v3_contexts():
     msgs = core.build_message_list(
         "你好", [], [],
-        now_context="【现在】10月27日 周二，灰泽满现在没有在直播。",
+        state_stable="【关于这个绿冻】\n称呼：小温",
+        state_dynamic="【当前状态】\n10月27日 周二，灰泽满现在没有在直播。",
         time_hint="【本场时段】现在是深夜。",
         prefetch_context="【预取】[{\"text\":\"名字是小温\"}]",
-        tool_note="【工具】需要时调用 recall；不确定就不调用。",
     )
     joined = "\n".join(m["content"] for m in msgs if isinstance(m.get("content"), str))
-    assert "【现在】" in joined
+    assert "【关于这个绿冻】" in joined
+    assert "【当前状态】" in joined
     assert "【本场时段】" in joined
     assert "【预取】" in joined
-    assert "【工具】" in joined
-    # 工具提示在用户消息之前，自称一句在最后
     assert msgs[-1]["role"] == "user"
-    assert msgs[-3]["content"].startswith("【工具】")
     assert "需要自称就用" in msgs[-2]["content"]
     # 不再出现旧的完整感知行（骨架正文里提到这个词不算）
     assert not any(m.get("content", "").startswith("【当前时间】") for m in msgs)
+
+
+def test_state_card_has_stable_slots(tmp_path):
+    state = {"users": {"u": {"memories": [
+        {"id": "a", "kind": "fact", "key": "preferred_name", "value": "学长",
+         "status": "confirmed", "temporal_scope": "timeless", "explicit": True,
+         "evidence_count": 1, "confidence": 0.9},
+        {"id": "b", "kind": "fact", "key": "location", "value": "在广东",
+         "status": "confirmed", "temporal_scope": "current", "explicit": True,
+         "evidence_count": 1, "confidence": 0.9},
+        {"id": "c", "kind": "interaction_preference", "key": "reply_length", "value": "long",
+         "status": "confirmed", "temporal_scope": "timeless", "explicit": True,
+         "evidence_count": 1, "confidence": 0.9},
+        {"id": "d", "kind": "fact", "key": "interest_books", "value": "东野圭吾",
+         "status": "confirmed", "temporal_scope": "timeless", "explicit": True,
+         "evidence_count": 1, "confidence": 0.9},
+    ]}}}
+    p = tmp_path / "state.json"
+    p.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    store = memory_v2.ShadowMemoryStore(state_file=p)
+    card = store.build_state_card("u")
+    assert "称呼：学长" in card
+    assert "地点：在广东" in card
+    assert "多说几句" in card
+    assert "兴趣：东野圭吾" in card
 
 
 def test_profile_context_can_exclude_facts(tmp_path):

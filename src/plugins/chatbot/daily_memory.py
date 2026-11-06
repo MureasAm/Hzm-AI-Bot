@@ -226,7 +226,7 @@ class DailyStore:
         return body[:MAX_CONTEXT_CHARS]
 
     def recall_items(self, user_id: str, *, now: datetime | None = None) -> list[dict]:
-        """给注入 v3 的 `recall(kind=daily)` 用：返回今天仍在有效期内的原始条目。
+        """给“今天问日常”的系统预取用：返回今天仍在有效期内的原始条目。
 
         不套 MIN_ENTRIES_TO_INJECT——工具查询是**按需**的，用户问“我今天干嘛了”时
         只有一条也应当返回；渲染/截断由调用方做。
@@ -264,5 +264,5 @@ def context(user_id: str, *, now: datetime | None = None) -> str:
 
 
 def recall_items(user_id: str, *, now: datetime | None = None) -> list[dict]:
-    """给 `recall(kind=daily)` 用：今天仍有效的原始条目（不套注入门槛）。"""
+    """给系统预取用：今天仍有效的原始条目（不套注入门槛）。"""
     return _DEFAULT_STORE.recall_items(user_id, now=now)

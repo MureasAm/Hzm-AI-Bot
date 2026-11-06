@@ -3,7 +3,7 @@
 """注入 v3 的统一登记表。
 
 一个 kind 一份 KindSpec：主体、有效期、权威、policy、取数 adapter、渲染来源、预算、
-失败方向。**“什么时候注”只在这里定义**；build_frame / recall 只执行 policy。
+失败方向。**“什么时候注”只在这里定义**；build_frame / state_card / event_memory 只执行 policy。
 
 文案仍归 `persona/injection/<NN>/block.json`；这里只登记“这块是什么、归谁、何时可见”。
 """
@@ -43,10 +43,10 @@ class KindSpec:
 
 # 顺序 = 现有注入顺序（缓存/语义顺序，别随便动）。tool/guard 不在 frame 里渲染。
 FRAME_ORDER = (
-    "scene", "identity", "schedule",
+    "scene", "identity", "schedule", "state",
     "interaction_preference", "name_budget", "request", "preference", "core_story",
     "group", "group_thread", "group_address", "terms", "association",
-    "session", "prev_session", "behaviors", "corpus", "commitment",
+    "session", "events", "prev_session", "behaviors", "corpus", "commitment",
     "history", "same_request", "batch", "query_hint",
     "frame_now", "session_time_hint", "mood", "nickname_hint", "daily", "habit",
 )
@@ -58,10 +58,17 @@ REGISTRY: dict[str, KindSpec] = {s.kind: s for s in (
              "core.is_group", "scene/group", 200, "omit", ("scene",)),
     KindSpec("schedule", "周表", "her", "week", "canon", "always",
              "persona.schedule", "schedule/main", 200, "omit", ("schedule",)),
+    KindSpec("state", "当前状态", "conversation", "session", "generated", "always",
+             "memory_v2.state_card + context_probe", "state/stable|dynamic", 420,
+             "inject", ("state",),
+             "稳定段靠前、动态段最后；名字进卡但由 name_budget 管频率"),
+    KindSpec("events", "用户事件", "user", "past", "user_stated", "context",
+             "event_memory.retrieve", "events/main", 300, "empty", ("events",),
+             "明确指涉/实体优先；向量兜底 + judge；带日期/状态/主体"),
     KindSpec("interaction_preference", "相处方式/行为句", "user", "stable", "user_stated",
              "conditional", "memory_v2.interaction_preference", "profile/behaviors", 360,
              "omit", ("profile",),
-             "它是“怎么对她”，不是可查事实；默认 conditional，recall 可补充"),
+             "它是“怎么对她”，不是可查事实；默认 conditional；v3 已并入【当前状态】稳定卡"),
     KindSpec("name_budget", "称呼预算", "user", "session", "generated", "conditional",
              "core.name_budget_note", "profile/name_budget", 80, "omit", ("profile",)),
     KindSpec("request", "长期请求", "user", "stable", "user_stated", "conditional",
@@ -79,7 +86,7 @@ REGISTRY: dict[str, KindSpec] = {s.kind: s for s in (
              "core.group_address_note", "group/address_note", 0, "empty", ("group",)),
     KindSpec("terms", "名词库", "world", "stable", "canon", "conditional",
              "core.build_terms_note", "terms/main", 200, "omit", ("terms",),
-             "绿冻常驻；其余 keyword/LLM 确认；recall(kind=term) 补充"),
+             "绿冻常驻；其余 keyword/LLM 确认"),
     KindSpec("association", "关联背景", "world", "session", "canon", "conditional",
              "retrieval.resolve_associations", "terms/associations", 0, "omit", ("terms",)),
     KindSpec("session", "会话记忆", "conversation", "session", "generated", "context",
@@ -115,7 +122,7 @@ REGISTRY: dict[str, KindSpec] = {s.kind: s for s in (
              "daily_memory.recall_items", "daily/main", 120, "empty", ("daily",)),
     KindSpec("habit", "个人习惯", "user", "stable", "user_stated", "conditional",
              "memory_v2.build_habit_hint", "profile/habit_hint", 120, "omit", ("profile",),
-             "问候/时段/cues 命中；recall(kind=habit) 补充"),
+             "问候/时段/cues 命中"),
     KindSpec("fact", "用户事实", "user", "past", "user_stated", "tool",
              "memory_v2.fact", "profile/fact", 300, "empty", ("profile",)),
     KindSpec("weather", "天气", "user", "now", "api", "tool",

@@ -863,7 +863,7 @@ class TestShadowExtraction:
     def test_parser_fails_closed(self, content):
         # ⚠️ 契约里 **`daily` 也一起回空**：它跟 items 走同一次调用（2026-10-17），
         #    解析失败时两边都不能漏出半个结果。
-        assert parse_extraction_payload(content) == {"items": [], "daily": []}
+        assert parse_extraction_payload(content) == {"items": [], "daily": [], "events": []}
 
     def test_parser_carries_daily_events(self):
         """每日记忆搭同一次调用：`daily` 收成字符串列表，一轮最多 3 条。"""

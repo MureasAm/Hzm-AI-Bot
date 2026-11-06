@@ -1,26 +1,24 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""显式触发 → 系统侧预取（invocation policy ② 的 fail-open 部分）。
+"""显式触发 → 系统侧预取（2026-11-05：不再经过 `recall` 工具）。
 
 只认**言语行为**，不认话题：
-- 回忆/身份
+- 回忆/身份（名字、身份、基本情况）
 - 称呼协商
 - 天气/冷暖
 - 今日日常
 - 精确时间/农历
 
-命中后直接调 `recall`，把结果作为一条 `【预取】` system 消息注入；
-不伪造 tool 消息，所以没有工具能力的降级层也能用。
+命中后直接取数，把结果作为一条 `【预取】` system 消息注入；
+不伪造工具消息，也不依赖模型会不会调工具。
 """
 from __future__ import annotations
 
-import json
 import re
+from datetime import datetime
 
-from . import recall as recall_mod
+from . import context_probe, daily_memory
 
-_RECALL_RE = re.compile(r"(我叫什么|我叫啥|我是谁|记得我|还记得我|你还记得|你记得我|我名字)")
-_ADDRESS_RE = re.compile(r"(叫我|称呼我|怎么称呼|我想亲昵点|叫我什么|叫我啥)")
 _WEATHER_RE = re.compile(
     r"(天气|几度|多少度|冷不冷|冷吗|热不热|热吗|凉不凉|凉吗|暖和吗|"
     r"下雨|下雪|刮风|风大|风很|降温|升温|气温|寒潮)(?<!角度)"
@@ -45,8 +43,7 @@ def place_from_text(text: str) -> str:
     place = m.group(1)
     for w in _PLACE_NOISE:
         place = place.replace(w, "")
-    place = _PLACE_ALIASES.get(place, place)
-    return place if 1 < len(place) <= 8 else ""
+    return _PLACE_ALIASES.get(place, place) if 1 < len(place) <= 8 else ""
 
 
 def _weather_subject(msg: str) -> str:
@@ -58,15 +55,9 @@ def _weather_subject(msg: str) -> str:
 
 
 def requests_for(msg: str) -> list[dict]:
-    """返回本轮需要预取的 recall 请求；空 = 不是显式场景。"""
+    """返回本轮需要预取的请求；空 = 不是显式场景。"""
     m = msg or ""
     out: list[dict] = []
-    if _RECALL_RE.search(m):
-        out.append({"kind": "fact", "subject": "user", "query": "用户的名字、身份和基本情况"})
-    if _ADDRESS_RE.search(m):
-        out.append({"kind": "fact", "subject": "user", "query": "用户希望被怎么称呼"})
-        out.append({"kind": "interaction_preference", "subject": "user",
-                    "query": "称呼和相处方式"})
     if _WEATHER_RE.search(m):
         out.append({"kind": "weather", "subject": _weather_subject(m),
                     "when": "now", "query": "现在天气"})
@@ -81,37 +72,47 @@ def requests_for(msg: str) -> list[dict]:
 async def prefetch(*, user_id: str, msg: str, store, user_city: str,
                    deepseek_client=None, zhipu_client=None, is_group: bool = False,
                    now=None) -> tuple[str, list]:
-    """命中显式场景就取数；返回 (渲染好的 system 文本, 条目)。失败/空返回空串。"""
+    """命中显式场景就取数；返回 (渲染好的 system 文本, 条目摘要)。失败/空返回空串。"""
     reqs = requests_for(msg)
     if not reqs:
         return "", []
-    items, seen = [], set()
+    lines: list[str] = []
     for r in reqs:
+        kind = r.get("kind")
         try:
-            got = await recall_mod.recall(
-                user_id=user_id, query=r.get("query") or "", kind=r.get("kind"),
-                subject=r.get("subject"), when=r.get("when"), limit=3,
-                now=now, store=store, user_city=user_city,
-                deepseek_client=deepseek_client, zhipu_client=zhipu_client,
-                is_group=is_group,
-            )
+            if kind == "weather":
+                if not is_group:
+                    continue          # 私聊的天气已在【当前状态】动态段里，别重复注
+
+                subject = r.get("subject") or ""
+                city = user_city if subject != "her" else ""
+                if subject == "user" and not city:
+                    continue
+                await context_probe.warm_weather(city)
+                text = context_probe.weather_now(city)
+                if text:
+                    lines.append(text)
+            elif kind == "daily":
+                entries = daily_memory.recall_items(user_id)
+                body = "；".join(
+                    daily_memory.render_entry(e, now=now or datetime.now())
+                    for e in entries[:4]
+                )
+                if body:
+                    lines.append(f"今天：{body}")
+            elif kind == "perception":
+                text = context_probe.perception_now(now=now)
+                if text:
+                    lines.append(text)
         except Exception:
             continue
-        for it in got:
-            if it.id in seen:
-                continue
-            seen.add(it.id)
-            items.append(it)
-            if len(items) >= 3:
-                break
-        if len(items) >= 3:
-            break
-    if not items:
+    lines = list(dict.fromkeys(x for x in lines if x))
+    if not lines:
         return "", []
-    body = json.dumps([it.as_dict() for it in items], ensure_ascii=False)
+    body = "；".join(lines)[:360]
     text = (f"【预取】{body}\n"
             f"（这些是用户这一轮明确问到的，直接用；没有的不要编。）")
-    return text[:400], items
+    return text[:400], lines
 
 
-__all__ = ["requests_for", "prefetch"]
+__all__ = ["requests_for", "prefetch", "place_from_text"]

@@ -1,0 +1,11 @@
+{
+ "_readme": "第 22 块·你们之间发生过的事（事件库）。\n【什么时候注】用户明确指涉过去，或同一实体/话题命中时；最多 2 条，带日期/状态/主体。\n【存哪】user_memory/events/<uid>/（events.json / vectors.json / keywords.json）。\n【别写什么】稳定属性（名字/身份/偏好）、当天琐事、她自己的直播经历，都不进这里。\n【注入口径】这是背景：接得上才提，不要主动展开。",
+ "id": "events",
+ "order": 22,
+ "title": "你们之间发生过的事",
+ "when": "命中事件检索时",
+ "source": "运行时（event_memory）",
+ "strings": {
+  "main": "【你们之间发生过的事】\n{context}\n（这是背景；接得上才提，不要主动展开。）"
+ }
+}

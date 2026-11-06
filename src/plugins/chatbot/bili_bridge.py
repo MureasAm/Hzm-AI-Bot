@@ -5,8 +5,10 @@
 - 动态：出现新动态 ID 才推送。**能转成“她会主动说的那句话”时，只发那句（语音优先），
   不再推动态原文/链接**（2026-10-23 用户定）；转不出来/不适合时才发结构化原文通知。
 - 动态走**公共接口**（buvid3/4 + WBI 签名），**不需要 SESSDATA**（2026-10-31 实测）；
-  接口偶发 `code=0 + 空列表`，自动重试 1–2 次即恢复。SESSDATA 只影响 emote panel
-  的完整度（没有时退回动态自带表情映射 + 本地 assets/emotes）。
+  该接口对匿名请求**间歇性返回 `code=0 + 空列表`**（2026-11-04 实测约一半请求为空），
+  且 **WBI 签名键过期同样返回空列表**——两种空无法区分，所以空列表时 buvid 和 WBI
+  一起换、多试几次（实测单次成功 ~1/3–1/2，试 10 次失败率约 1–2%）。SESSDATA 只影响
+  emote panel 的完整度（没有时退回动态自带表情映射 + 本地 assets/emotes）。
 推送目标：灰泽满 QQ 号的所有好友（私聊），NOTIFY_FRIENDS_WHITELIST 可收窄为白名单。
 去重状态（last_live_status / last_dynamic_id / 好友缓存）持久化到 data/bili_state.json，
 重启不重复推送。所有外部调用失败都降级为日志，绝不让监听任务崩溃。
@@ -119,6 +121,20 @@ def _invalidate_buvid() -> None:
     _buvid_at = 0.0
 
 
+# SESSDATA 失效（-101）只提示一次——每轮轮询都打印一遍只会刷屏，
+# 而且公共接口本来就能用，这不是致命故障。
+_sessdata_warned = False
+
+
+def _warn_sessdata_expired() -> None:
+    global _sessdata_warned
+    if _sessdata_warned:
+        return
+    _sessdata_warned = True
+    print("⚠️ BILI_SESSDATA 已失效（-101 账号未登录）：公共接口仍可监控动态，"
+          "登录态兜底/完整表情表不可用。需要时请更新 .env.prod 的 BILI_SESSDATA 后重启")
+
+
 async def _fetch_dynamic_items_via_login(uid: str) -> list:
     """登录态兜底：公共接口被风控时用现有 SESSDATA 走 bilibili-api。"""
     from bilibili_api import dynamic
@@ -128,12 +144,17 @@ async def _fetch_dynamic_items_via_login(uid: str) -> list:
     return (page or {}).get("items") or []
 
 
-async def _fetch_dynamic_items(uid: str, attempts: int = 4) -> list:
+async def _fetch_dynamic_items(uid: str, attempts: int = 10) -> list:
     """拉取指定 UID 的动态列表（公共接口，无需登录）。
 
-    ⚠️ 该接口会间歇返回 `code=0 + items=[]`（实测连续请求时常见，不是真没动态）。
-    空列表时**换一个 buvid 再试**（同一个 buvid 会被分到一直返回空的后端；
-    实测换新 buvid 后能拿到）。**不要传 offset=0**——那会稳定返回空。
+    ⚠️ 该接口会间歇返回 `code=0 + items=[]`：**匿名请求本身就有约一半概率被
+    降级成空列表**（2026-11-04 实测，换 buvid/换参数都一样，同一 buvid 连发
+    8 次空 4 次），而且 **WBI 签名键过期时接口同样回 `code=0 + 空列表`、不报
+    -352**（实测用错误 mixin 签名得到完全一样的空响应）——两种空**无法区分**。
+    所以空列表时 **buvid 和 WBI 键一起换**，并多试几次（单次成功 ~1/3–1/2，试 10 次
+    失败率约 1–2%）。只换 buvid 的旧逻辑遇到签名轮换会**永远空下去**（2026-11-04
+    实际翻车：连续 4 次空列表 + 登录兜底 -101，监控整晚没动静）。
+    **不要传 offset=0**——那会稳定返回空。
     公共接口重试仍失败、且配置了 SESSDATA 时，用登录态兜底（老路径）。
     """
     uid = str(uid)
@@ -156,17 +177,22 @@ async def _fetch_dynamic_items(uid: str, attempts: int = 4) -> list:
                 last_err = f"HTTP {resp.status_code}"
                 need_new_buvid = need_new_wbi = resp.status_code in (412, 403)
             else:
-                data = resp.json() or {}
-                code = data.get("code")
-                if code != 0:
-                    last_err = f"code={code} {data.get('message', '')}"
-                    need_new_buvid = need_new_wbi = code in (-352, -403, -412)
+                try:
+                    data = resp.json() or {}
+                except ValueError:
+                    data = {}
+                if not data:
+                    last_err = "响应不是可解析的 JSON（可能被 WAF 拦截）"
+                    need_new_buvid = need_new_wbi = True
+                elif data.get("code") != 0:
+                    last_err = f"code={data.get('code')} {data.get('message', '')}"
+                    need_new_buvid = need_new_wbi = data.get("code") in (-352, -403, -412)
                 else:
                     items = (data.get("data") or {}).get("items") or []
                     if items:
                         return items
                     last_err = "空列表"
-                    need_new_buvid = True
+                    need_new_buvid = need_new_wbi = True
             if i < attempts - 1:
                 if need_new_wbi:
                     _invalidate_bili_caches()
@@ -175,7 +201,8 @@ async def _fetch_dynamic_items(uid: str, attempts: int = 4) -> list:
                 elif need_new_buvid:
                     _invalidate_buvid()
                     cookies = await _get_buvid()
-                await asyncio.sleep(1.0 + i)
+                # 递增退避，别把重试打成高频请求
+                await asyncio.sleep(0.4 + 0.3 * min(i, 4))
     # 公共接口被风控时用登录态兜底（SESSDATA 失效会自然抛错，被上层忽略）
     if get_bili_sessdata():
         try:
@@ -184,7 +211,11 @@ async def _fetch_dynamic_items(uid: str, attempts: int = 4) -> list:
                 print("[B站] 公共动态接口未拿到数据，已用 SESSDATA 登录态兜底")
                 return items
         except Exception as e:
-            print(f"⚠️ B站动态登录态兜底失败: {str(e)[:120]}")
+            msg = str(e)
+            if "-101" in msg or "账号未登录" in msg:
+                _warn_sessdata_expired()
+            else:
+                print(f"⚠️ B站动态登录态兜底失败: {msg[:120]}")
     raise RuntimeError(f"B站动态接口连续 {attempts} 次未拿到数据（{last_err}）")
 
 
@@ -322,14 +353,20 @@ async def _get_emote_map() -> dict:
         return _emote_map
     try:
         url = "https://api.bilibili.com/x/emote/user/panel/web"
+        params = {"business": "dynamic", "build": "0",
+                  "mobi_app": "web", "uid": get_bili_uid()}
         sessdata = get_bili_sessdata()
         headers = {"User-Agent": _BILI_UA, "Referer": "https://t.bilibili.com/"}
         if sessdata:
             headers["Cookie"] = f"SESSDATA={sessdata}"
         async with httpx.AsyncClient(timeout=10.0, headers=headers) as c:
-            resp = await c.get(url, params={"business": "dynamic", "build": "0",
-                                            "mobi_app": "web", "uid": get_bili_uid()})
-            data = resp.json()
+            data = (await c.get(url, params=params)).json() or {}
+        # SESSDATA 失效（-101）时退回匿名请求：匿名仍能拿到基础表情包。
+        # 别把过期 cookie 换来的空表当成"表情表就这样"永久缓存。
+        if sessdata and data.get("code") not in (0, None):
+            headers.pop("Cookie", None)
+            async with httpx.AsyncClient(timeout=10.0, headers=headers) as c:
+                data = (await c.get(url, params=params)).json() or {}
         m = {}
         for p in (data.get("data") or {}).get("packages") or []:
             for e in (p.get("emote") or []):
