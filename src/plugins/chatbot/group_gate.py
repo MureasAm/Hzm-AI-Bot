@@ -117,7 +117,7 @@ async def should_reply_in_group(deepseek_client, history_text: str, batch_text: 
             model=aux_model(_get_model_name()),
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
-            max_tokens=100,
+            max_tokens=220,
             **THINKING_DISABLED,
         )
         log_cache_usage(resp, "接话门")

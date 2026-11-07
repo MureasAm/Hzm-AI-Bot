@@ -389,7 +389,7 @@ SESSION_PROBE_PROMPT = """你是会话话题追踪器。用户在聊天中刚发
 
 # ==================== LLM 调用 ====================
 
-async def _llm(client, prompt: str, max_tokens: int = 200, temperature: float = 0.2) -> str:
+async def _llm(client, prompt: str, max_tokens: int = 360, temperature: float = 0.2) -> str:
     """调 DeepSeek。失败返回空串（调用方降级）。"""
     try:
         resp = await client.chat.completions.create(
@@ -502,7 +502,7 @@ async def probe_session(user_id: str, user_msg: str, history_text: str, client,
         term_hint=terms_hint(msg) or "（无）",
         scene_note=_scene_note(is_group, group_addressed),
     )
-    content = await _llm(client, prompt, max_tokens=320, temperature=0.2)
+    content = await _llm(client, prompt, max_tokens=560, temperature=0.2)
     expanded = msg
     if not content:
         return (expanded, {}) if debug else expanded

@@ -169,7 +169,7 @@ async def summarize_batch(msgs: list) -> str:
             model=aux_model(_get_model_name()),
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
-            max_tokens=80,
+            max_tokens=200,
             **THINKING_DISABLED,
         )
         log_cache_usage(resp, "批量归纳")
@@ -214,7 +214,7 @@ async def summarize_group_batch(items: list) -> str:
             model=aux_model(_get_model_name()),
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
-            max_tokens=120,
+            max_tokens=240,
             **THINKING_DISABLED,
         )
         log_cache_usage(resp, "群聊归纳")
@@ -251,7 +251,7 @@ async def summarize_forward(raw: str) -> str:
                        f"聊天记录：\n{text[:FORWARD_FOR_SUMMARY_CHARS]}\n\n"
                        "只输出摘要本身，不要任何前缀。"}],
             temperature=0.3,
-            max_tokens=120,
+            max_tokens=240,
             **THINKING_DISABLED,
         )
         log_cache_usage(resp, "转发归纳")
@@ -428,7 +428,7 @@ async def confirm_ambiguous_terms(user_msg: str, deepseek_client=None) -> set:
             model=aux_model(_get_model_name()),
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
-            max_tokens=200,
+            max_tokens=320,
             **THINKING_DISABLED,
         )
         log_cache_usage(resp, "术语消歧")

@@ -246,7 +246,7 @@ async def content_is_clear(deepseek_client, text: str) -> bool:
             model=_get_model_name(),
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
-            max_tokens=80,
+            max_tokens=200,
             **THINKING_DISABLED,
         )
         log_cache_usage(resp, "主动发言")
@@ -472,7 +472,7 @@ async def compose_proactive(content: str, source: str = "B站",
             model=aux_model(_get_model_name()),
             messages=messages,
             temperature=0.9,
-            max_tokens=120,
+            max_tokens=240,
             **THINKING_DISABLED,
         )
         log_cache_usage(resp, "主动发言")

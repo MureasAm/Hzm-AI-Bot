@@ -204,9 +204,9 @@ WEATHER_BASE_URL = "https://devapi.qweather.com"  # 和风 API Host 根；每项
 WEATHER_CACHE_SECONDS = 3600      # 天气进程内缓存 1 小时，省免费额度
 WEATHER_GEO_CACHE_SECONDS = 86400  # 城市名→LocationID 解析缓存 1 天
 # 方向2 视觉
-# 视觉理解模型：默认跟**主模型同一条线路**（linkapi 的 gemini），描述风格与主模型一致。
-# 想换回智谱只需在 .env.prod 写 `VISION_MODEL=glm-4.6v`（client 会按模型名自动选 key/base）。
-VISION_MODEL = "gemini-flash-lite-latest"
+# 视觉理解模型：GLM-5.3-Flash（原生多模态；强制思考，VISION_EXTRA_PARAMS 里压到 low）。
+# 想换回 gemini 就写 `VISION_MODEL=gemini-flash-lite-latest`（client 按模型名自动选 key/base）。
+VISION_MODEL = "glm-5.3-flash"
 VISION_MAX_TOKENS = 512           # 视觉描述输出上限
 # 各视觉模型的额外参数：glm-4.6v 默认会先推理（可拖到 9s+），必须关掉；
 # gemini 不认这个字段，别传（传了可能 400）。

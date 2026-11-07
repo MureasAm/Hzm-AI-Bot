@@ -89,7 +89,7 @@ async def legendary_confirmed(user_msg: str, prompt_template: str, history: str 
             model=aux_model(_get_model_name()),
             messages=[{"role": "user", "content": content}],
             temperature=0,
-            max_tokens=10,
+            max_tokens=120,
             **THINKING_DISABLED,
         )
         log_cache_usage(resp, "梗确认")
@@ -197,7 +197,8 @@ async def classify_l3(deepseek_client, user_msg: str, history_text: str,
             # ⚠️ 别调小：加了 same_request 字段后输出变长，40 token 会把 JSON 从中间截断
             # （实测 raw = '…"same_request": {"what": "要她说带颜色的话（造黄桃）' 断在这儿）
             # → json.loads 报 "Expecting ',' delimiter"，而**每轮都调**，影响所有消息。
-            max_tokens=200,
+            # GLM-5.3-Flash 强制思考时再留余量。
+            max_tokens=320,
             **THINKING_DISABLED,
         )
         log_cache_usage(resp, "行为分类")

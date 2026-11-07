@@ -209,7 +209,7 @@ async def gist_texts(texts: list[str], client=None) -> dict[str, str]:
                 model=config.aux_model(config._get_model_name()),
                 messages=[{"role": "user", "content": PROMPT + hint + payload}],
                 temperature=0.0,
-                max_tokens=min(1600, 110 * len(chunk) + 120),
+                max_tokens=min(2000, 140 * len(chunk) + 200),
                 **THINKING_DISABLED,
             )
             content = config.extract_chat_content(resp)

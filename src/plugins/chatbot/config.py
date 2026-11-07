@@ -325,12 +325,12 @@ def _get_clients():
 # 为什么要两条链：主回复和辅助调用的**经济结构完全不同**。
 # 主回复每次 ~3000 token、且固定前缀大，deepseek 的自动缓存能命中 84%，比 gemini 还便宜；
 # 辅助调用短、前缀多变化，缓存只有 17~72%，deepseek 的输出价（4 倍）开始吃亏。
-# 实测（docs 里记着 2026-10-29 的账）：主回复走 deepseek、辅助走 gemini-2.5-lite 时
+# 实测（docs 里记着 2026-10-29 的账）：主回复走 deepseek、辅助走低价模型时
 # 一周 43.5M 积分（免费额度 50M），全 deepseek 要 59.8M，超额度 20%。
 #
 # 分流规则（用户 2026-10-29 定，按"缓存命中率 × 输出长度"算出来）：
 #   主链（deepseek）：主回复、行为分类（缓存 89%）、记忆提取（78%）、表情包（85%）
-#   辅助链（gemini）：其余全部（话题探测/接话门/群聊归纳/直播记忆判/自述转述/看图/…）
+#   辅助链（GLM-5.3-Flash）：其余全部（话题探测/接话门/群聊归纳/直播记忆判/自述转述/看图/…）
 _aux_clients_cache = None
 
 
@@ -592,9 +592,8 @@ def get_vision_client():
     想单独指定就配 `VISION_API_KEY` / `VISION_API_BASE`，优先级最高。
 
     ⚠️ **别默认跟主端点**（2026-10-30 真实翻车）：主链换成 apigoto 之后，视觉也跟着搬过去了，
-    而 apigoto **没有** `gemini-3.1-flash-lite` → 每次看图都 404「不支持此模型」。
-    视觉是 gemini 家族的活，**天然属于辅助链那一侧**；把默认钉在 AUX 上，
-    以后再换主站也不会把视觉一起带走。
+    视觉按模型家族选端点：`glm-*` → 智谱，其它（gemini…）→ 辅助链。
+    以后换主站也不会把视觉一起带走；VISION_API_KEY / VISION_API_BASE 可单独覆盖。
     """
     global _vision_client_cache
     if _vision_client_cache is not None:

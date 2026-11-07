@@ -97,7 +97,7 @@ async def judge_corpus(deepseek_client, query: str, candidates: list) -> list:
             model=aux_model(_get_model_name()),
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
-            max_tokens=60,
+            max_tokens=200,
             **THINKING_DISABLED,
         )
         log_cache_usage(resp, "直播记忆判")
