@@ -103,6 +103,9 @@ THINKING_DISABLED = {"extra_body": {"thinking": {"type": "disabled"}}, "reasonin
 MODEL_EXTRA_PARAMS = {
     "deepseek-v4.1-flash": {"thinking": {"type": "enabled", "budget_tokens": 0}},
     "gemini-3.8-flash": {"generation_config": {"thinking_level": "low"}},
+    # GLM-5.3-Flash 强制思考、不能关闭；主链降级层只有 400 token，必须压到 low，
+    # 否则 150 token 实测会被思考吃光、正文为空。
+    "glm-5.3-flash": {"reasoning_effort": "low"},
 }
 
 # 单次请求的超时（秒）。**必须显式设**：openai SDK 默认 600s，而上游偶发"只是卡住不返回"
@@ -209,6 +212,7 @@ VISION_MAX_TOKENS = 512           # 视觉描述输出上限
 # gemini 不认这个字段，别传（传了可能 400）。
 VISION_EXTRA_PARAMS = {
     "glm-4.6v": {"extra_body": {"thinking": {"type": "disabled"}}},
+    "glm-5.3-flash": {"extra_body": {"reasoning_effort": "low"}},
 }
 # 方向3 B站联动
 PUSH_INTERVAL = 180               # B站轮询间隔（秒）。别低于 120：带 SESSDATA 的会话调太频繁会被 B站风控顶掉（曾 45s→2-3天失效）
