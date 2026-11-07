@@ -1790,6 +1790,11 @@ class ShadowMemoryStore:
         location_text = _join(location, limit=2, width=50)
         if location_text:
             lines.append(inj.T("state", "line", label="地点", value=location_text))
+        relation = [m for m in active if m.get("kind") == "fact"
+                    and str(m.get("key") or "").startswith("relationship_")]
+        relation_text = _join(relation, limit=2, width=80)
+        if relation_text:
+            lines.append(inj.T("state", "line", label="关系", value=relation_text))
 
         attitude: list[str] = []
         for m in _latest("interaction_preference", self._CARD_ATTITUDE_KEYS):
