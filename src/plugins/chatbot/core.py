@@ -1135,8 +1135,7 @@ def name_budget_note(user_id: str) -> str:
 async def gather_retrieval(query_text: str, retrieval_query: str, history_text: str,
                            deepseek_client, zhipu_client,
                            is_user_msg: bool = True,
-                           extra_preference_ids: list | None = None,
-                           v3_tools: bool = False) -> dict:
+                           extra_preference_ids: list | None = None) -> dict:
     """规范取素材：一段文本该配的东西一次捞齐（人设 + 行为/措辞 + 直播记忆 + 风格样本 + 偏好 + 核心记忆）。
 
     **聊天和主动发言共用这一份**。抽出来的原因：主动发言原来是自己在
@@ -1172,7 +1171,7 @@ async def gather_retrieval(query_text: str, retrieval_query: str, history_text: 
     try:
         await _fill_retrieval(result, query_text, retrieval_query, history_text,
                               deepseek_client, zhipu_client, behaviors, is_user_msg,
-                              extra_preference_ids, v3_tools)
+                              extra_preference_ids)
     except Exception as e:
         # **检索层炸了不能让她变哑巴**：素材按"没检索到"处理，回复/主动发言继续。
         # 踩坑（2026-09-27）：智谱 embedding key 过期 → 检索层抛
@@ -1185,8 +1184,7 @@ async def gather_retrieval(query_text: str, retrieval_query: str, history_text: 
 
 async def _fill_retrieval(result: dict, query_text: str, retrieval_query: str, history_text: str,
                           deepseek_client, zhipu_client, behaviors, is_user_msg: bool,
-                          extra_preference_ids: list | None = None,
-                          v3_tools: bool = False) -> None:
+                          extra_preference_ids: list | None = None) -> None:
     """`gather_retrieval` 的干活部分（单独一层，方便上面统一兜底）。结果写进 result。"""
     behavior_items, corpus_items = [], []
     # L3：归属用 LLM 判意图（不再用 embedding 猜——embedding 按句式聚团，
@@ -1197,15 +1195,10 @@ async def _fill_retrieval(result: dict, query_text: str, retrieval_query: str, h
     # 省一次串行往返；两个函数都自己兜底异常，结果和先后 await 完全一样。
     embed_text = retrieval_query or query_text
     if is_user_msg:
-        if v3_tools:
-            # v3：只要 L3 行为分类；corpus/preference/core_story 不再自动注入。
-            l3 = await classify_l3(deepseek_client, query_text, history_text, behaviors)
-            query_vector = None
-        else:
-            l3, query_vector = await asyncio.gather(
-                classify_l3(deepseek_client, query_text, history_text, behaviors),
-                embed_query(zhipu_client, embed_text),
-            )
+        l3, query_vector = await asyncio.gather(
+            classify_l3(deepseek_client, query_text, history_text, behaviors),
+            embed_query(zhipu_client, embed_text),
+        )
         if l3["behavior"]:
             print(f"[行为] LLM 判定: {l3['behavior']}")
         sr = l3.get("same_request") or {}
@@ -1217,7 +1210,7 @@ async def _fill_retrieval(result: dict, query_text: str, retrieval_query: str, h
     else:
         query_vector = await embed_query(zhipu_client, embed_text)
 
-    if is_user_msg and not v3_tools:
+    if is_user_msg:
         # corpus：**全部交 LLM 判**。门/钩子只决定"把哪些条递过去看"，**不再有直通**。
         # 为什么取消直通（2026-09-29）：实测词重叠这把尺子分不开"说的是谁"——
         #   误报 n7「宝宝我明天要早起我先去睡了」（用户说**自己**）对 #271：ov=0.40
@@ -1237,8 +1230,6 @@ async def _fill_retrieval(result: dict, query_text: str, retrieval_query: str, h
         result["fused_items"] = fuse_and_truncate(corpus_items) + behavior_items
     else:
         result["fused_items"] = fuse_and_truncate(corpus_items, behavior_items)
-    if v3_tools:
-        return   # preference/core_story 不再预先检索（v3 已不自动注入）
     # 第 5 路：偏好（关键词命中）／核心记忆（结晶）
     # 关联边（has_preference）指过来的偏好排最前——"顺着作品/作者落到她的喜好上"比碰巧撞词更该带
     result["preference_items"] = retrieve_preferences(
@@ -1374,7 +1365,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     ctx = await gather_retrieval(query_text, retrieval_query, history_text,
                                  deepseek_client, zhipu_client,
                                  extra_preference_ids=_assoc["preference_ids"],
-                                 v3_tools=v3)
+                                 )
     fused_items = ctx["fused_items"]
     preference_items = ctx["preference_items"]
     core_stories = ctx["core_stories"]
@@ -1517,29 +1508,33 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
             reminders_context = "【本轮提醒】\n" + "\n".join(parts)
         commitment_context = habit_hint = name_budget = nickname_hint = ""
 
-    # 动态段：时间/天气/直播/今天/话题/情绪；v3 私聊才合并，群聊保持原块。
-    if v3 and not is_group:
-        try:
-            await asyncio.wait_for(context_probe.warm_weather(weather_city_turn), timeout=1.5)
-        except Exception:
-            pass
-        _parts = []
+    # 动态段：时间/天气/直播/话题/情绪；历史与连续索要稍后并进来。
+    state_parts: list = []
+    if v3:
+        # 群聊也并进【当前状态】：时间/时段/本场话题；天气和情绪只对私聊有意义。
+        if not is_group:
+            try:
+                await asyncio.wait_for(context_probe.warm_weather(weather_city_turn), timeout=1.5)
+            except Exception:
+                pass
         _frame = now_context or context_probe.frame_now()
         if _frame:
-            _parts.append(_frame.replace("【当前时间】", "", 1))
-        _weather = context_probe.weather_now(weather_city_turn)
-        if _weather:
-            _parts.append(_weather)
+            state_parts.append(_frame.replace("【当前时间】", "", 1))
+        if not is_group:
+            _weather = context_probe.weather_now(weather_city_turn)
+            if _weather:
+                state_parts.append(_weather)
         if time_hint:
-            _parts.append("时段：" + time_hint.replace("【本场时段】", "", 1))
+            state_parts.append("时段：" + time_hint.replace("【本场时段】", "", 1))
         if session_context:
-            _parts.append(session_context)
-        _mood = mood_note(user_id)
-        if _mood:
-            _parts.append("情绪：" + _mood.replace("【用户此刻的情绪】", "", 1))
-        if _parts:
-            state_dynamic = inj.T("state", "dynamic", parts="\n".join(_parts))
-        # 已经并进动态段，别在 build 里再注一遍。
+            state_parts.append(session_context)
+        if _prev_session_note:
+            state_parts.append(_prev_session_note)
+        if not is_group:
+            _mood = mood_note(user_id)
+            if _mood:
+                state_parts.append("情绪：" + _mood.replace("【用户此刻的情绪】", "", 1))
+        # 历史与连续索要稍后并进来；这里先不生成 state_dynamic。
         now_context = ""
         session_context = ""
         emotion_context = ""
@@ -1590,18 +1585,37 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     if is_group:
         # annotate_turn 会把 `（回X）` 换成 `（转述）`；若它没启用/失败，这里再兜底去一次。
         hist_for_injection = _neutralize_group_history(hist_for_injection)
-    v3_fused = ([it for it in fused_items if getattr(it, "source", "") == "behavior"]
-                if v3 else fused_items)
+    # v3 私聊：最近对话 + 连续索要并进【当前状态】动态段，和当前话题放在一起。
+    history_arg = hist_for_injection
+    same_request_arg = ctx.get("same_request")
+    if v3:
+        if isinstance(hist_for_injection, list):
+            _hist_text = "\n".join(ln for ln in hist_for_injection if ln)
+        else:
+            _hist_text = str(hist_for_injection or "")
+        if _hist_text:
+            state_parts.append(inj.T("history", context=_hist_text)
+                              + inj.T("history", "contradiction"))
+            history_arg = []
+        _sr = same_request_arg or {}
+        if int(_sr.get("count") or 1) >= 2:
+            state_parts.append(inj.T(
+                "same_request", count=_sr["count"],
+                what=_sr.get("what") or "同一件事", prev=_sr["count"] - 1))
+            same_request_arg = None
+        if state_parts:
+            state_dynamic = inj.T("state", "dynamic", parts="\n".join(state_parts))
     messages = build_message_list(
-        gen_user_msg, v3_fused, hist_for_injection,
+        gen_user_msg, fused_items, history_arg,
         vision_desc=vision_desc, weather_city=weather_city, batch_summary=batch_summary,
-        preference_items=[] if v3 else preference_items,
-        core_stories=[] if v3 else core_stories,
+        preference_items=preference_items,
+        core_stories=core_stories,
         session_context=session_context, query_hint=query_hint,
         pragmatic_hint=pragmatic_hint,
         denied_terms=denied_terms, group_context=group_context,
-        history_gap_note=history_gap_note, prev_session_note=_prev_session_note,
-        same_request=ctx.get("same_request"),
+        history_gap_note=history_gap_note,
+        prev_session_note="" if v3 else _prev_session_note,
+        same_request=same_request_arg,
         profile_context=profile_context, commitment_context=commitment_context,
         emotion_context=emotion_context, daily_context=daily_context,
         user_transcript=user_transcript, nickname_hint=nickname_hint,

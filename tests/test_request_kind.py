@@ -71,6 +71,12 @@ def test_invalid_target_rejected(tmp_path):
 def test_prompt_has_request_channel():
     assert "request_<target>" in memory_v2.MEMORY_V2_EXTRACT_PROMPT
     assert "一次性请求不是 request" in memory_v2.MEMORY_V2_EXTRACT_PROMPT
+    assert "request_general" in memory_v2.MEMORY_V2_EXTRACT_PROMPT
+
+
+def test_prompt_has_canonical_name_keys():
+    for key in ("real_name", "online_name", "address_terms", "preferred_name"):
+        assert key in memory_v2.MEMORY_V2_EXTRACT_PROMPT
 
 
 def test_name_budget_relaxes_with_address_request(tmp_path, monkeypatch):

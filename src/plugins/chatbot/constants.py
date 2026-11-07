@@ -203,7 +203,7 @@ WEATHER_GEO_CACHE_SECONDS = 86400  # 城市名→LocationID 解析缓存 1 天
 # 方向2 视觉
 # 视觉理解模型：默认跟**主模型同一条线路**（linkapi 的 gemini），描述风格与主模型一致。
 # 想换回智谱只需在 .env.prod 写 `VISION_MODEL=glm-4.6v`（client 会按模型名自动选 key/base）。
-VISION_MODEL = "gemini-3.1-flash-lite"
+VISION_MODEL = "gemini-flash-lite-latest"
 VISION_MAX_TOKENS = 512           # 视觉描述输出上限
 # 各视觉模型的额外参数：glm-4.6v 默认会先推理（可拖到 9s+），必须关掉；
 # gemini 不认这个字段，别传（传了可能 400）。

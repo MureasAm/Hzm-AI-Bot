@@ -4,6 +4,8 @@
 - 开播：状态翻转（未播→直播）才推送一次，带上直播间标题
 - 动态：出现新动态 ID 才推送。**能转成“她会主动说的那句话”时，只发那句（语音优先），
   不再推动态原文/链接**（2026-10-23 用户定）；转不出来/不适合时才发结构化原文通知。
+- **开播自动动态不推**（2026-11-07）：开播会生成一条 `DYNAMIC_TYPE_LIVE_RCMD`，
+  正文为空、只有直播卡片；直播状态由 `_check_live` 单独播报，这类只记水位线。
 - 动态走**公共接口**（buvid3/4 + WBI 签名），**不需要 SESSDATA**（2026-10-31 实测）；
   该接口对匿名请求**间歇性返回 `code=0 + 空列表`**（2026-11-04 实测约一半请求为空），
   且 **WBI 签名键过期同样返回空列表**——两种空无法区分，所以空列表时 buvid 和 WBI
@@ -219,6 +221,23 @@ async def _fetch_dynamic_items(uid: str, attempts: int = 10) -> list:
     raise RuntimeError(f"B站动态接口连续 {attempts} 次未拿到数据（{last_err}）")
 
 
+def _is_live_notice(item: dict) -> bool:
+    """这条动态是不是开播自动生成的直播通知（不是她手动发的动态）。
+
+    实测（2026-11-07）开播会生成 `type=DYNAMIC_TYPE_LIVE_RCMD` /
+    `major.type=MAJOR_TYPE_LIVE_RCMD` 的动态，正文为空、只有直播卡片。
+    它会被当成“最新动态”抓进来，推送成“灰泽满刚刚发了动态哦！（图片动态）”。
+    直播状态已经由 `_check_live` 单独播报，这类动态一律不推。
+    """
+    if str(item.get("type") or "") in {"DYNAMIC_TYPE_LIVE_RCMD", "DYNAMIC_TYPE_LIVE"}:
+        return True
+    md = (item.get("modules") or {}).get("module_dynamic") or {}
+    major = md.get("major") or {}
+    if str(major.get("type") or "") in {"MAJOR_TYPE_LIVE_RCMD", "MAJOR_TYPE_LIVE"}:
+        return True
+    return bool(major.get("live_rcmd") or major.get("live"))
+
+
 async def fetch_latest_dynamic(uid: str) -> dict:
     """取最新一条动态（含解析），返回 {id, text, image_urls, ...}。
 
@@ -247,6 +266,8 @@ async def fetch_latest_dynamic(uid: str) -> dict:
         "local_emotes": local_emotes,
         # 转发别人的动态：顶层 `orig` 有东西就是转发（接口层取不全原文，所以整条不推）
         "is_repost": isinstance(item.get("orig"), dict),
+        # 开播自动通知：只用于水位线，不推送（直播状态另有 _check_live）
+        "is_live_notice": _is_live_notice(item),
     }
 
 
@@ -572,6 +593,16 @@ class BiliMonitor:
         # ⚠️ 仍要**更新水位线**，否则每轮轮询都会重新"发现"它、日志刷屏。
         if dyn.get("is_repost"):
             print("[B站] 这条是转发动态 → 不推送（已记水位线，避免每轮重复判定）")
+            self.state["last_dynamic_id"] = dyn["id"]
+            _save_state(self.state)
+            return
+
+        # **开播自动通知：整条不推**（2026-11-07）。
+        # 开播时 B站会生成一条 DYNAMIC_TYPE_LIVE_RCMD，正文为空、只有直播卡片；
+        # 它会被当成“最新动态”推送成“刚刚发了动态哦！（图片动态）”。
+        # 直播状态已经由 _check_live 单独播报；这里只记水位线，避免每轮重复判定。
+        if dyn.get("is_live_notice"):
+            print("[B站] 这条是开播自动动态 → 不推送（已记水位线）")
             self.state["last_dynamic_id"] = dyn["id"]
             _save_state(self.state)
             return

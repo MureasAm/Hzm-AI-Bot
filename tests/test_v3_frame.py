@@ -58,12 +58,23 @@ def test_state_card_has_stable_slots(tmp_path):
         {"id": "d", "kind": "fact", "key": "interest_books", "value": "东野圭吾",
          "status": "confirmed", "temporal_scope": "timeless", "explicit": True,
          "evidence_count": 1, "confidence": 0.9},
+        {"id": "e", "kind": "fact", "key": "real_name", "value": "胡洋",
+         "status": "confirmed", "temporal_scope": "timeless", "explicit": True,
+         "evidence_count": 1, "confidence": 0.9},
+        {"id": "f", "kind": "fact", "key": "online_name", "value": "千纸鸢",
+         "status": "confirmed", "temporal_scope": "timeless", "explicit": True,
+         "evidence_count": 1, "confidence": 0.9},
+        {"id": "g", "kind": "fact", "key": "address_terms", "value": "学长、机长",
+         "status": "confirmed", "temporal_scope": "timeless", "explicit": True,
+         "evidence_count": 1, "confidence": 0.9},
     ]}}}
     p = tmp_path / "state.json"
     p.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
     store = memory_v2.ShadowMemoryStore(state_file=p)
     card = store.build_state_card("u")
-    assert "称呼：学长" in card
+    assert "本名：胡洋" in card
+    assert "网名：千纸鸢" in card
+    assert "称呼：学长、机长" in card
     assert "地点：在广东" in card
     assert "多说几句" in card
     assert "兴趣：东野圭吾" in card

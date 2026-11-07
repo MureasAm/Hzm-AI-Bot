@@ -59,7 +59,8 @@ _STANDING_COMMITMENT_RE = re.compile(r"以后|天天|每天|每次|一直|长期
 # 换掉了原来那个对不上模型产出的旧名单（preferred_name/name/city）：
 # 模型实际会产 location / timezone / identity 这些，旧名单等于没生效。
 _ALWAYS_ON_FACT_KEYS = {
-    "preferred_name", "name", "nickname", "location", "city",
+    "preferred_name", "name", "nickname", "nickname_called", "address_terms",
+    "real_name", "online_name", "online_id", "location", "city",
     "timezone", "identity", "occupation", "background", "her_nickname",
 }
 # 上面那批里**天然只有一个值**的（名字/地点/时区/职业）——同一 key 的新值必须顶掉旧的。
@@ -176,6 +177,7 @@ MEMORY_V2_EXTRACT_PROMPT = """你是灰泽满私聊机器人的记忆候选提�
      `relationship_confession`、`work_exam_failed`。本身就只有一件事的类别（名字/住地/时区/职业）
      用一个词就够：`preferred_name`、`location`、`timezone`、`occupation`。
      **类别只能从这张表里挑**：
+        名字 `real_name` ／ 网名 `online_name` ／ 称呼 `address_terms`
         住地 `location` ／ 身份 `identity` ／ 健康 `health` ／ 家人 `family` ／ 工作学习 `work`
         关系 `relationship` ／ 喜好 `interest` ／ 习惯 `habit` ／ 过往事件 `past_event`
    · **习惯类（`habit_*`）要把「频率 + 原因」一起写进去**：不是"早上要跑步"，
@@ -207,10 +209,16 @@ MEMORY_V2_EXTRACT_PROMPT = """你是灰泽满私聊机器人的记忆候选提�
    · ⛔ **不许用 `moment` / `info` / `situation` / `experience` / `thing` 这类空壳名**：
      它们既认不了亲（同一件事合不到一起，只会越加越多），也查不出来
      （要问"他表白那次"，翻出来五条分不清哪条是哪条），还白占位置。
-   · `preferred_name` / `nickname` 的 value **只写名字本身**（如"草草子哥"），
-     **不要写成"用户希望被称呼为X"这种整句**——那个句子会被当成名字注入，又长又怪。
-     ⚠️ 只有用户**明确要求灰泽满这样称呼他**（"叫我X""以后叫我X"）才记。
-     "我是绿冻/暖冻"是粉丝身份，不是名字；"云子""云玩家"是网络用语（说他不懂/很云），不是名字；
+   · **名字/称呼固定用这些键，别自造**（2026-11-07 实测：模型自造 real_name/online_name/nickname_called，注入层只认其中一部分，结果“记住了”但之后问本名不知道）：
+     - `real_name`：**本名**（“我叫胡洋”“本名是X”）。
+     - `online_name`：**网名/ID/曾用名**（“网名是千纸鸢”“ID是X”）。
+     - `address_terms`：**他希望灰泽满怎么称呼他**（“叫我学长”“外号是学长、机长”）；多个用「、」写进同一条，一次记全；他改口时用新 value 覆盖。
+     - `preferred_name`：**只记当前首选称呼**（他明确说“以后就叫我X”“首选叫X”）；本名/网名不要塞进这里。
+     - `her_nickname`：**用户给灰泽满起的称呼**（“叫你灰宝”）。
+   · `preferred_name` / `address_terms` 的 value **只写名字本身**（如“草草子哥”“学长、机长”），
+     **不要写成“用户希望被称呼为X”这种整句**——那个句子会被当成名字注入，又长又怪。
+     ⚠️ 只有用户**明确要求灰泽满这样称呼他**才记；"我是绿冻/暖冻"是粉丝身份，不是名字；
+     "云子""云玩家"是网络用语（说他不懂/很云），不是名字；
      玩梗称呼（"爸爸"）和整句（"用户希望被称呼为X"）都不要记。
    · **用户给灰泽满起的称呼**：key=`her_nickname`，value 只写称呼本身（如"灰宝"）。
      只在用户明确说"叫你X""就喊你X""可以叫你X吗"时记；这是对她的昵称，不是她的身份设定。
@@ -257,6 +265,9 @@ MEMORY_V2_EXTRACT_PROMPT = """你是灰泽满私聊机器人的记忆候选提�
    · **只记明确、长期的**；“现在抱抱我”“今天叫一声”是一次性，不记。
    · 能用 interaction_preference 表达的（温柔/直接/称呼方式/回复长度/玩笑尺度）→ 用现有维度，
      不要重复记 request。它不是她的承诺，也不是她的计划。
+· **关系方式**（“我想和你像家人/朋友/伴侣一样相处”）→ `request_general`，
+     value 写“他希望和灰泽满像家人一样相处”这类完整一句；**不要自造
+     `relationship_style` 等 interaction_preference 维度**（会被代码以 invalid_preference_dimension 拒掉）。
    · 频率词（以后/每天/多/一直）是信号；一次/现在/今天不是。
 5. daily：用户**当天很单纯的日常**——吃了什么、几点上课/下课、去哪、什么时候睡的这类
    **纯事件**。只记"有事发生"的句子（"中午吃了炸鸡""下午的课取消了"）。
@@ -1719,7 +1730,10 @@ class ShadowMemoryStore:
     # ---- 当前状态：稳定卡（2026-11-05） ----
     # 只放“稳定、可替换、每轮知道不亏”的东西：称呼/身份/地点/相处/仪式/兴趣。
     # 事件、当天琐事、情绪不进卡。旧状态不删，靠 status/审计留痕。
-    _CARD_ADDRESS_KEYS = {"preferred_name", "name", "nickname"}
+    _CARD_ADDRESS_KEYS = {"preferred_name", "address_terms", "nickname",
+                          "nickname_called", "name"}
+    _CARD_REAL_NAME_KEYS = {"real_name"}
+    _CARD_ONLINE_NAME_KEYS = {"online_name", "online_id"}
     _CARD_IDENTITY_KEYS = {"identity", "occupation", "background", "student_status"}
     _CARD_LOCATION_KEYS = {"location", "city", "timezone", "hometown", "school_location"}
     _CARD_ATTITUDE_KEYS = {"support_style", "banter_tolerance", "directness",
@@ -1743,10 +1757,29 @@ class ShadowMemoryStore:
                     out.append(value[:width])
             return "；".join(out)
 
-        address = _latest("fact", self._CARD_ADDRESS_KEYS)
-        if address:
+        real = _join([m for m in active if m.get("kind") == "fact"
+                      and m.get("key") in self._CARD_REAL_NAME_KEYS], limit=2, width=24)
+        if real:
+            lines.append(inj.T("state", "line", label="本名", value=real))
+        online = _join([m for m in active if m.get("kind") == "fact"
+                        and m.get("key") in self._CARD_ONLINE_NAME_KEYS], limit=2, width=32)
+        if online:
+            lines.append(inj.T("state", "line", label="网名", value=online))
+
+        # 称呼允许多个（本名/网名之外的外号）：按 preferred_name → address_terms →
+        # nickname → nickname_called 的顺序收集、拆分「、，/」并去重，不再只取最近一条。
+        address_terms: list[str] = []
+        for key in ("preferred_name", "address_terms", "nickname", "nickname_called", "name"):
+            for m in active:
+                if m.get("kind") != "fact" or m.get("key") != key:
+                    continue
+                for part in re.split(r"[、,，/]", str(m.get("value") or "")):
+                    part = part.strip().strip("“”\"'")
+                    if part and part not in address_terms:
+                        address_terms.append(part)
+        if address_terms:
             lines.append(inj.T("state", "line", label="称呼",
-                               value=str(address[0].get("value") or "")[:24]))
+                               value="、".join(address_terms)[:60]))
         identity = [m for m in active if m.get("kind") == "fact"
                     and m.get("key") in self._CARD_IDENTITY_KEYS]
         identity_text = _join(identity, limit=3, width=50)
@@ -1785,7 +1818,7 @@ class ShadowMemoryStore:
 
         out, used = [], 0
         for line in lines:
-            if used + len(line) + 1 > 340:
+            if used + len(line) + 1 > 380:
                 break
             out.append(line)
             used += len(line) + 1

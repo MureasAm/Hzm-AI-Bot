@@ -161,3 +161,23 @@ class TestTermsNoAmbiguity:
             for a in t.get("aliases", []):
                 assert a not in kws, \
                     f"{t['keyword']} 的别名 {a!r} 同时是另一个条目的 keyword（同一条会双重注入）"
+
+
+class TestFiveCharSwapMeme:
+    """“灰泽满+两字”的五字互换梗：灰泽满可爱 → 可泽满灰爱。"""
+
+    def test_swapped_pattern_matches_variants(self, terms):
+        term = next(t for t in terms if t["keyword"] == "灰泽满五字互换")
+        assert _matches(term, "可泽满灰爱")
+        assert _matches(term, "笨泽满灰蛋")
+
+    def test_normal_phrase_does_not_match(self, terms):
+        term = next(t for t in terms if t["keyword"] == "灰泽满五字互换")
+        assert not _matches(term, "灰泽满可爱")
+        assert not _matches(term, "可泽满灰")
+
+    def test_term_note_explains_the_swap(self):
+        from src.plugins.chatbot import core
+        note = core.build_terms_note("可泽满灰爱")
+        assert "灰泽满五字互换" in note
+        assert "灰泽满可爱" in note and "可泽满灰爱" in note

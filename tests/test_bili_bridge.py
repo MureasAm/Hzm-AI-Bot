@@ -871,3 +871,44 @@ class TestPublicDynamicFetchRetry:
 
 async def _async(v):
     return v
+
+
+class TestLiveNoticeSkipped:
+    """开播自动动态（DYNAMIC_TYPE_LIVE_RCMD）不推（2026-11-07）。"""
+
+    def test_detect_live_notice_by_type(self):
+        assert bb._is_live_notice({"type": "DYNAMIC_TYPE_LIVE_RCMD"})
+        assert bb._is_live_notice({"type": "DYNAMIC_TYPE_LIVE"})
+
+    def test_detect_live_notice_by_major(self):
+        assert bb._is_live_notice({
+            "modules": {"module_dynamic": {"major": {"type": "MAJOR_TYPE_LIVE_RCMD"}}}
+        })
+        assert bb._is_live_notice({
+            "modules": {"module_dynamic": {"major": {"live_rcmd": {"content": "{}"}}}}
+        })
+
+    def test_normal_dynamic_is_not_live_notice(self):
+        assert not bb._is_live_notice({
+            "type": "DYNAMIC_TYPE_DRAW",
+            "modules": {"module_dynamic": {"major": {"type": "MAJOR_TYPE_OPUS"}}},
+        })
+
+    async def test_live_notice_not_pushed_but_watermark_advances(self, monkeypatch):
+        m = _make_monitor(uid="1", state={"last_dynamic_id": "old"})
+        pushed = []
+
+        async def fake_push(bot, content, image_paths=None, record=True, voice=False):
+            pushed.append(content)
+
+        monkeypatch.setattr(m, "_push", fake_push)
+        monkeypatch.setattr(bb, "_save_state", lambda s: None)
+
+        async def _dyn():
+            return {"id": "new", "text": "", "image_urls": [],
+                    "is_repost": False, "is_live_notice": True}
+
+        monkeypatch.setattr(m, "_fetch_latest_dynamic", _dyn)
+        await m._check_dynamic(FakeBot())
+        assert pushed == []
+        assert m.state["last_dynamic_id"] == "new"
