@@ -1286,7 +1286,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     history_gap_note = humanize_gap(_gap_sec) if _gap_sec is not None else ""
     # 上一场会话（已过期）→「上次聊过」提示。**必须在 probe_session 之前取**——
     # probe 会把 last_active 改写成"现在"，之后再问就永远判成"没过期"。
-    _prev_session_note = previous_session_note(user_id)
+    _prev_session_note = previous_session_note(user_id, include_when=not v3)
     retrieval_query = query_text
     probe_meta: dict = {}
     if query_text:
@@ -1520,6 +1520,8 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         _frame = now_context or context_probe.frame_now()
         if _frame:
             state_parts.append(_frame.replace("【当前时间】", "", 1))
+        if history_gap_note:
+            state_parts.append(f"距上次聊天：{history_gap_note}前")
         if not is_group:
             _weather = context_probe.weather_now(weather_city_turn)
             if _weather:

@@ -199,7 +199,7 @@ def get_session(user_id: str) -> dict:
     return sess
 
 
-def previous_session_note(user_id: str) -> str:
+def previous_session_note(user_id: str, *, include_when: bool = True) -> str:
     """隔得够久（> `PREV_SESSION_NOTE_SECONDS`，**与话题消散同为 3h**）时，给一条带时间的
     「上次聊过」提示；否则空串。
 
@@ -223,7 +223,7 @@ def previous_session_note(user_id: str) -> str:
     gap = session_gap_seconds(user_id)
     if gap is not None and gap <= PREV_SESSION_NOTE_SECONDS:
         return ""   # 没隔够久 → 不提示（话题可能已按 3h 消散，但那不算"旧事重提"）
-    when = f"{humanize_gap(gap)}前" if gap is not None else ""
+    when = f"{humanize_gap(gap)}前" if (include_when and gap is not None) else ""
     body = []
     if topic:
         body.append(f"聊到「{topic}」")

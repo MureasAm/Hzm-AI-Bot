@@ -11,7 +11,9 @@ import argparse
 import asyncio
 import hashlib
 import json
+import os
 import re
+import time
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -294,6 +296,8 @@ async def replay(
             accepted += len(items)
     finally:
         await client.close()
+        if zhipu is not None:
+            await zhipu.close()
 
     report = build_audit_report(load_state(out_dir / "replay_shadow.json"))
     report.update({"turns_replayed": turns, "accepted_updates": accepted})
@@ -349,6 +353,12 @@ async def rebuild(*, paths, limit: int | None = None, gate: bool = True) -> dict
         raise ValueError("未检测到 OPENAI_API_KEY")
     client = AsyncOpenAI(api_key=api_key, base_url=_common.get_openai_base_url())
 
+    from src.plugins.chatbot.constants import ZHIPU_BASE_URL
+
+    zhipu_key = _common.get_api_key("ZHIPU_API_KEY")
+    zhipu = AsyncOpenAI(api_key=zhipu_key or "missing", base_url=ZHIPU_BASE_URL,
+                        max_retries=0, timeout=90) if zhipu_key else None
+
     # 覆盖前先备份旧库（真实数据，别无声抹掉）。
     if DEFAULT_STATE_FILE.exists():
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -384,6 +394,7 @@ async def rebuild(*, paths, limit: int | None = None, gate: bool = True) -> dict
                     assistant_text=str(record.get("reply") or ""),
                     session_id=scope,
                     observed_at=observed_at,
+                    zhipu_client=zhipu,
                 )
                 accepted += len(items)
             except Exception as exc:  # 单轮失败不影响整体重建
@@ -399,6 +410,112 @@ async def rebuild(*, paths, limit: int | None = None, gate: bool = True) -> dict
 def run_rebuild(args) -> None:
     paths = _resolve_inputs(args.input)
     report = asyncio.run(rebuild(paths=paths, limit=args.limit, gate=not args.no_gate))
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+
+
+# ==================== 按用户增量更新（2026-11-08） ====================
+
+def iter_turns_for_users(paths, users, *, days: int | None = None,
+                         limit: int | None = None) -> Iterator[dict]:
+    """只取指定用户的私聊轮次；days=None 表示全量历史。"""
+    wanted = {str(u) for u in users}
+    cut = time.time() - days * 86400 if days else None
+    yielded = 0
+    for record in iter_private_turns(paths, limit=10**9):
+        if str(record.get("session") or "") not in wanted:
+            continue
+        try:
+            t = float(record.get("t") or 0)
+        except (TypeError, ValueError):
+            t = 0
+        if cut is not None and t and t < cut:
+            continue
+        if limit is not None and yielded >= limit:
+            return
+        yielded += 1
+        yield record
+
+
+async def refresh_users(*, paths, users, days: int | None = None,
+                        limit: int | None = None, gate: bool = True,
+                        store=None) -> dict:
+    """按用户增量更新 V2 + 事件库（**不清库、不备份覆盖**）。
+
+    和 `memory-rebuild` 的区别：
+    - 只处理指定用户，不抹掉其他人的记忆；
+    - 用现有 store 叠加，不删文件；
+    - 走线上的 `worth_extracting` 门控，并把 zhipu client 传给提取器，让新事件生成向量。
+    """
+    from openai import AsyncOpenAI
+
+    import nonebot
+
+    try:
+        nonebot.get_driver()
+    except ValueError:
+        nonebot.init()
+
+    from src.plugins.chatbot.memory_v2 import (ShadowMemoryStore, extract_and_ingest,
+                                              worth_extracting)
+    from src.plugins.chatbot.constants import ZHIPU_BASE_URL
+    from src.plugins.chatbot import event_memory
+
+    api_key = _common.get_api_key("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("未检测到 OPENAI_API_KEY")
+    client = AsyncOpenAI(api_key=api_key, base_url=_common.get_openai_base_url(),
+                         max_retries=0, timeout=90)
+    zhipu_key = _common.get_api_key("ZHIPU_API_KEY")
+    zhipu = AsyncOpenAI(api_key=zhipu_key or "missing", base_url=ZHIPU_BASE_URL,
+                        max_retries=0, timeout=90) if zhipu_key else None
+    store = store or ShadowMemoryStore()
+    model = os.environ.get("MEMORY_EXTRACT_MODEL") or _common.get_model_name()
+    stats = {str(u): {"turns": 0, "accepted": 0, "events": 0} for u in users}
+    try:
+        for record in iter_turns_for_users(paths, users, days=days, limit=limit):
+            uid = str(record["session"])
+            user_text = str(record.get("user") or "")
+            if gate and not worth_extracting(user_text):
+                continue
+            try:
+                timestamp = float(record.get("t") or 0)
+            except (TypeError, ValueError):
+                timestamp = 0
+            observed_at = datetime.fromtimestamp(timestamp) if timestamp > 0 else datetime.now()
+            scope = f"{uid}:{int(timestamp // (6 * 3600)) if timestamp else stats[uid]['turns']}"
+            before = len(event_memory._load_events(uid))
+            try:
+                items = await extract_and_ingest(
+                    client=client, model=model, store=store, user_id=uid,
+                    user_text=user_text, assistant_text=str(record.get("reply") or ""),
+                    session_id=scope, observed_at=observed_at, zhipu_client=zhipu,
+                )
+            except Exception as exc:
+                print(f"[update] {uid} 一轮失败（跳过）: {exc!r}")
+                continue
+            after = len(event_memory._load_events(uid))
+            stats[uid]["turns"] += 1
+            stats[uid]["accepted"] += len(items)
+            stats[uid]["events"] += max(0, after - before)
+            total = sum(s["turns"] for s in stats.values())
+            if total % 100 == 0:
+                print(f"[update] 已处理 {total} 轮…", flush=True)
+    finally:
+        await client.close()
+        if zhipu is not None:
+            await zhipu.close()
+    return {"days": days, "users": stats,
+            "total_turns": sum(s["turns"] for s in stats.values()),
+            "total_accepted": sum(s["accepted"] for s in stats.values()),
+            "total_events": sum(s["events"] for s in stats.values())}
+
+
+def run_update(args) -> None:
+    paths = _resolve_inputs(args.input)
+    report = asyncio.run(refresh_users(
+        paths=paths, users=args.user, days=args.days,
+        limit=args.limit, gate=not args.no_gate,
+    ))
     print(json.dumps(report, ensure_ascii=False, indent=2))
 
 

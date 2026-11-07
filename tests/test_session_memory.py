@@ -134,6 +134,12 @@ class TestPreviousSessionNote:
         assert "香水" in note and "聊了檀香" in note
         assert "不是现在正在聊的话题" in note   # 关键：定性，不然她会当成现在
 
+    def test_can_omit_time_when_state_line_carries_it(self, _isolate_file):
+        self._write_stale(_isolate_file, 72 + 1)
+        note = sm.previous_session_note("u1", include_when=False)
+        assert "上次聊过" in note and "香水" in note
+        assert "天前" not in note and "小时前" not in note
+
     def test_missing_timestamp_notes_without_time(self, _isolate_file):
         # 缺时间戳 → 照样提示"上次聊过"，只是说不出隔了多久
         _isolate_file.write_text(json.dumps({"u1": {"topic": "香水", "events": []}},

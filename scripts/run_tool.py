@@ -564,6 +564,24 @@ def _run_memory_rebuild(args):
     memory_v2_tool.run_rebuild(args)
 
 
+def _add_memory_update(sub):
+    p = sub.add_parser("memory-update",
+                       help="按用户增量更新 V2/事件库（不清库、不覆盖；可只跑最近 N 天）")
+    p.add_argument("--user", nargs="+", required=True, help="要更新的 QQ 号（一个或多个）")
+    p.add_argument("-i", "--input", nargs="*", default=None,
+                   help="chat JSONL；缺省读取 data/chat_log/*.jsonl")
+    p.add_argument("--days", type=int, default=None,
+                   help="只处理最近 N 天的聊天；缺省=全量历史")
+    p.add_argument("--limit", type=int, default=None, help="最多处理多少轮")
+    p.add_argument("--no-gate", action="store_true", help="不过 worth_extracting 门控")
+    p.set_defaults(func=_run_memory_update)
+
+
+def _run_memory_update(args):
+    import memory_v2_tool
+    memory_v2_tool.run_update(args)
+
+
 def _add_memory_reflect(sub):
     p = sub.add_parser("memory-reflect",
                        help="批量反思：扫多天聊天记录，找固定仪式/习惯/偏好（默认只出候选）")
@@ -808,6 +826,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_memory_audit(sub)
     _add_memory_replay(sub)
     _add_memory_rebuild(sub)
+    _add_memory_update(sub)
     _add_memory_reflect(sub)
     _add_memory_migrate_moments(sub)
     _add_skeleton_ab(sub)
