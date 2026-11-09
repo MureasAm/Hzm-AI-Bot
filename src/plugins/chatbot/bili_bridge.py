@@ -6,6 +6,8 @@
   不再推动态原文/链接**（2026-10-23 用户定）；转不出来/不适合时才发结构化原文通知。
 - **开播自动动态不推**（2026-11-07）：开播会生成一条 `DYNAMIC_TYPE_LIVE_RCMD`，
   正文为空、只有直播卡片；直播状态由 `_check_live` 单独播报，这类只记水位线。
+- **置顶周表**（2026-11-09）：置顶动态图集里的周表图换了（CDN 文件名哈希变）就推图；
+  「本周周表已更新」公告也当一个触发信号，同一张图只推一次。
 - 动态走**公共接口**（buvid3/4 + WBI 签名），**不需要 SESSDATA**（2026-10-31 实测）；
   该接口对匿名请求**间歇性返回 `code=0 + 空列表`**（2026-11-04 实测约一半请求为空），
   且 **WBI 签名键过期同样返回空列表**——两种空无法区分，所以空列表时 buvid 和 WBI
@@ -146,6 +148,24 @@ async def _fetch_dynamic_items_via_login(uid: str) -> list:
     return (page or {}).get("items") or []
 
 
+# 同一轮轮询里「最新动态」和「置顶动态」共用一次接口结果：这个接口本身就有
+# 约一半概率返回空列表、要靠 buvid/WBI 轮换重试（见 `_fetch_dynamic_items`），
+# 每轮多打一次就多一轮重试，还可能把轮询周期拖长。
+_ITEMS_CACHE: dict[str, tuple[float, list]] = {}
+_ITEMS_CACHE_TTL = 120.0
+
+
+def _cache_dynamic_items(uid: str, items: list) -> None:
+    _ITEMS_CACHE[str(uid)] = (time.time(), items)
+
+
+def _cached_dynamic_items(uid: str) -> list | None:
+    hit = _ITEMS_CACHE.get(str(uid))
+    if hit and time.time() - hit[0] < _ITEMS_CACHE_TTL:
+        return hit[1]
+    return None
+
+
 async def _fetch_dynamic_items(uid: str, attempts: int = 10) -> list:
     """拉取指定 UID 的动态列表（公共接口，无需登录）。
 
@@ -192,6 +212,7 @@ async def _fetch_dynamic_items(uid: str, attempts: int = 10) -> list:
                 else:
                     items = (data.get("data") or {}).get("items") or []
                     if items:
+                        _cache_dynamic_items(uid, items)
                         return items
                     last_err = "空列表"
                     need_new_buvid = need_new_wbi = True
@@ -211,6 +232,7 @@ async def _fetch_dynamic_items(uid: str, attempts: int = 10) -> list:
             items = await _fetch_dynamic_items_via_login(uid)
             if items:
                 print("[B站] 公共动态接口未拿到数据，已用 SESSDATA 登录态兜底")
+                _cache_dynamic_items(uid, items)
                 return items
         except Exception as e:
             msg = str(e)
@@ -238,13 +260,14 @@ def _is_live_notice(item: dict) -> bool:
     return bool(major.get("live_rcmd") or major.get("live"))
 
 
-async def fetch_latest_dynamic(uid: str) -> dict:
+async def fetch_latest_dynamic(uid: str, items: list | None = None) -> dict:
     """取最新一条动态（含解析），返回 {id, text, image_urls, ...}。
 
     ⚠️ 公共接口会把**置顶动态**排在 `items[0]`（比最新动态旧得多），
     不能直接取第一条；按 id 取最大的一条才是真正的最新。
     """
-    items = await _fetch_dynamic_items(uid)
+    if items is None:
+        items = await _fetch_dynamic_items(uid)
     item = max(items, key=lambda it: int(it.get("id_str") or it.get("id") or 0))
     text = _extract_dynamic_text(item)
     emote_map = await _get_emote_map()
@@ -273,6 +296,101 @@ async def fetch_latest_dynamic(uid: str) -> dict:
 
 async def _download_image(url: str) -> Path:
     return await _bridge_common.download_image_to_tmp(url, "hzm_dyn")
+
+
+# ==================== 置顶周表 ====================
+# 灰泽满每周在**置顶动态的图集**里换一张周表（2026-11-09 实测：置顶项
+# `module_tag.text == "置顶"`，周表是 `major.opus.pics[3]`，882×1080，
+# 内容是 `SCHEDULE 11月9日-11月15日`）。换图 = 重新上传，CDN 文件名里的内容哈希会变，
+# 所以按文件名哈希比对，比“看发布时间”可靠（置顶帖是编辑更新，pub_ts 一直是首次发布）。
+_PINNED_TAG = "置顶"
+_DEFAULT_WEEK_PIC_INDEX = 3   # 实测槽位；布局变了会用视觉重新找
+_WEEK_PIC_MAX_TRIES = 6       # 视觉识别最多看几张，防止一次扫 12 张拖住轮询
+
+
+def _pic_hash(url: str) -> str:
+    """图片内容指纹：取 CDN 文件名（去掉扩展名），忽略域名/协议差异。
+
+    同一个文件换 i0/i1 域名不该算“换了图”；重新上传会换文件名，那才是真变了。
+    """
+    name = str(url or "").split("?")[0].rstrip("/").rsplit("/", 1)[-1]
+    return name.rsplit(".", 1)[0]
+
+
+def _find_pinned_item(items: list) -> dict | None:
+    """在动态列表里找置顶项。接口把置顶放第一个，但标记才是权威——
+    没有置顶标记就不认，避免把普通的第一条当周表。"""
+    for it in items or []:
+        tag = ((it.get("modules") or {}).get("module_tag") or {}).get("text") or ""
+        if str(tag).strip() == _PINNED_TAG:
+            return it
+    return None
+
+
+async def fetch_pinned_dynamic(uid: str, items: list | None = None,
+                               use_network: bool = True) -> dict | None:
+    """取置顶动态（{id, text, image_urls, pic_hashes}）；没有置顶返回 None。
+
+    `use_network=False` 时只读本轮 `_fetch_dynamic_items` 的缓存——监控循环每轮
+    已经拉过一次动态列表，不要为了置顶再打一次容易空列表的接口。
+    """
+    if items is None:
+        items = _cached_dynamic_items(uid)
+        if items is None:
+            if not use_network:
+                return None
+            items = await _fetch_dynamic_items(uid)
+    item = _find_pinned_item(items)
+    if not item:
+        return None
+    urls = _extract_dynamic_images(item)
+    return {
+        "id": str(item.get("id_str") or item.get("id") or ""),
+        "text": _extract_dynamic_text(item),
+        "image_urls": urls,
+        "pic_hashes": [_pic_hash(u) for u in urls],
+    }
+
+
+# 「本周周表已更新」这类公告。图片可能先换、公告可能晚到，两个信号都要认。
+_WEEK_TABLE_ANNOUNCE_RE = re.compile(
+    r"(周表|时间表|日程表|直播安排).{0,16}(更新|更了|已更|换了|换新|上新)"
+    r"|(更新|更了|已更|换了|换新|上新).{0,16}(周表|时间表|日程表|直播安排)"
+)
+
+
+def is_week_table_announcement(text: str) -> bool:
+    return bool(_WEEK_TABLE_ANNOUNCE_RE.search(text or ""))
+
+
+_WEEK_TABLE_MARKERS = ("SCHEDULE", "周表", "日程表", "时间表", "时刻表", "直播安排")
+_WEEK_DAY_MARKERS = ("MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN",
+                     "周一", "周二", "周三", "周四", "周五", "周六", "周日")
+
+
+def _desc_looks_like_week_table(desc: str) -> bool:
+    """视觉描述里有没有周表特征（画面文字会被原样写出来）。"""
+    t = (desc or "").upper()
+    if any(m.upper() in t for m in _WEEK_TABLE_MARKERS):
+        return True
+    return sum(1 for m in _WEEK_DAY_MARKERS if m.upper() in t) >= 3
+
+
+async def _image_is_week_table(url: str) -> bool | None:
+    """让视觉模型看一眼是不是周表；失败返回 None（调用方按“不确定”处理）。"""
+    try:
+        from .vision import describe_image
+        from .config import get_vision_client
+        desc = await asyncio.wait_for(
+            describe_image(get_vision_client(), url), timeout=15.0)
+    except Exception as e:
+        print(f"⚠️ 周表视觉识别失败（跳过）: {type(e).__name__}")
+        return None
+    if not desc:
+        return None
+    return _desc_looks_like_week_table(desc)
+
+
 def _resize_emote_if_large(path: Path, max_side: int = 200) -> Path:
     """若表情图边长超过 max_side，缩小到 max_side（保持比例）写临时文件，返回新路径。
 
@@ -582,7 +700,18 @@ class BiliMonitor:
             return
         if not dyn["id"]:
             return
-        if not _bridge_common.is_newer_id(dyn["id"], self.state.get("last_dynamic_id", "")):
+        is_new = _bridge_common.is_newer_id(
+            dyn["id"], self.state.get("last_dynamic_id", ""))
+        # 周表公告 = 一条新动态，正文说「本周周表已更新」。图片可能先换、公告晚到，
+        # 两个信号都要认；公告能接住时就不再推一条光有文字的动态。
+        is_week_announce = bool(is_new and is_week_table_announcement(dyn.get("text", "")))
+        week_handled = False
+        try:
+            week_handled = await self._check_week_table(
+                bot, announcement=dyn if is_week_announce else None)
+        except Exception as e:
+            print(f"⚠️ 周表检查失败（忽略）: {e}")
+        if not is_new:
             # 不是"更新"的动态：已推过的、或比她已发过的更旧（她撤回/置顶后
             # 接口的"最新"会退回旧动态，只判"和上一条不同"会把旧的又推一遍）
             return
@@ -603,6 +732,13 @@ class BiliMonitor:
         # 直播状态已经由 _check_live 单独播报；这里只记水位线，避免每轮重复判定。
         if dyn.get("is_live_notice"):
             print("[B站] 这条是开播自动动态 → 不推送（已记水位线）")
+            self.state["last_dynamic_id"] = dyn["id"]
+            _save_state(self.state)
+            return
+
+        # 周表公告已经被「置顶周表图」那条推送接住 → 只记水位线，别再推一遍文字。
+        if is_week_announce and week_handled:
+            print("[B站] 周表公告已由置顶周表图接管，不再推文字动态")
             self.state["last_dynamic_id"] = dyn["id"]
             _save_state(self.state)
             return
@@ -653,6 +789,117 @@ class BiliMonitor:
             await self._push(bot, notice, image_paths=image_paths, record=True)
         self.state["last_dynamic_id"] = dyn["id"]
         _save_state(self.state)
+
+    # ---- 置顶周表 ----
+
+    async def _discover_week_index(self, urls: list, candidates: list) -> int | None:
+        """视觉识别哪一张是周表：先看候选槽位，再看其它图。
+
+        只在“变了但不是已知槽位”或“第一次遇到这张置顶帖”时才调用——正常每周换图
+        走已知槽位，不花这次视觉调用。最多看 `_WEEK_PIC_MAX_TRIES` 张。
+        """
+        order = []
+        for i in list(candidates or []) + list(range(len(urls))):
+            if 0 <= i < len(urls) and i not in order:
+                order.append(i)
+        for i in order[:_WEEK_PIC_MAX_TRIES]:
+            ok = await _image_is_week_table(urls[i])
+            if ok:
+                return i
+        return None
+
+    async def _push_week_table(self, bot, url: str, pic_hash: str) -> bool:
+        """下载并推送周表图；同一个图只推一次（哈希去重）。返回是否已接手这条公告。"""
+        if pic_hash and pic_hash == self.state.get("last_pushed_week_pic"):
+            return True
+        try:
+            path = await _download_image(url)
+        except Exception as e:
+            print(f"⚠️ 周表图下载失败（本轮不推）: {e}")
+            return False
+        said = None
+        try:
+            said = await compose_proactive("本周周表更新了", "B站",
+                                           image_paths=[path])
+        except Exception as e:
+            print(f"⚠️ 周表主动发言生成失败（只发通知）: {type(e).__name__}")
+        notice = ("灰泽满的周表更新了！\n\n本周直播安排都在这张图里：\n"
+                  f"https://space.bilibili.com/{self.uid}/dynamic")
+        await self._push(bot, said or notice, image_paths=[path],
+                         voice=bool(said), record=True)
+        self.state["last_pushed_week_pic"] = pic_hash
+        print(f"[B站] 周表已更新 -> 推送（{pic_hash[:10]}…）")
+        return True
+
+    async def _check_week_table(self, bot, announcement: dict | None = None) -> bool:
+        """检查置顶动态里的周表图有没有换；返回 True = 这条公告已由周表推送接住。
+
+        - 每周换图：置顶帖 id 不变、图集文件名哈希变 → 推变化的那张。
+        - 公告先到：正文出现「周表已更新」→ 推当前已知槽位的那张（哈希去重）。
+        - 别的图变了（月度大航海礼物/立绘）→ 不动，除非公告同时到。
+        - 第一次见到置顶帖：只建基线，不推（避免每次部署都把本周周表当“新”）。
+        """
+        pinned = await fetch_pinned_dynamic(self.uid, use_network=False)
+        if not pinned or not pinned.get("image_urls"):
+            return False
+        urls = pinned["image_urls"]
+        hashes = pinned["pic_hashes"]
+
+        old_id = self.state.get("pinned_id")
+        old_hashes = list(self.state.get("pinned_pic_hashes") or [])
+        pinned_replaced = bool(old_id and old_id != pinned["id"])
+        first_seen = not old_hashes or pinned_replaced
+
+        if first_seen:
+            self.state["pinned_id"] = pinned["id"]
+            self.state["pinned_pic_hashes"] = hashes
+            if pinned_replaced or not isinstance(self.state.get("week_pic_index"), int):
+                self.state["week_pic_index"] = (
+                    _DEFAULT_WEEK_PIC_INDEX if len(urls) > _DEFAULT_WEEK_PIC_INDEX else 0)
+            if not announcement:
+                _save_state(self.state)
+                print(f"[B站] 已记录置顶图集基线（{len(urls)} 张，"
+                      f"周表槽位第 {self.state['week_pic_index'] + 1} 张）")
+                return False
+        else:
+            old_set = set(old_hashes)
+            changed = [i for i, h in enumerate(hashes) if h not in old_set]
+            idx_state = self.state.get("week_pic_index")
+            candidate = None
+            if changed:
+                if isinstance(idx_state, int) and changed == [idx_state]:
+                    candidate = idx_state
+                elif announcement or len(changed) > 1:
+                    # 槽位可能因为插入/删除/重排而位移：让视觉重新找。
+                    # 单张且不是已知槽位（月度礼物/立绘）不找——那不是周表。
+                    candidate = await self._discover_week_index(urls, changed)
+                    if candidate is None and isinstance(idx_state, int) and idx_state < len(urls):
+                        candidate = idx_state
+                else:
+                    print(f"[B站] 置顶图集有变化但不是周表槽位"
+                          f"（第 {[i + 1 for i in changed]} 张），忽略")
+            elif announcement:
+                if isinstance(idx_state, int) and 0 <= idx_state < len(urls):
+                    candidate = idx_state
+                else:
+                    candidate = await self._discover_week_index(urls, [])
+            if candidate is None or candidate >= len(urls):
+                # 只在真有变化时才落盘，别每 3 分钟写一次状态文件
+                if changed or pinned_replaced:
+                    self.state["pinned_pic_hashes"] = hashes
+                    self.state["pinned_id"] = pinned["id"]
+                    _save_state(self.state)
+                return False
+            self.state["week_pic_index"] = candidate
+
+        idx = self.state.get("week_pic_index") or 0
+        if idx >= len(urls):
+            return False
+        pushed = await self._push_week_table(bot, urls[idx], hashes[idx])
+        self.state["pinned_id"] = pinned["id"]
+        self.state["pinned_pic_hashes"] = hashes
+        _save_state(self.state)
+        return pushed
 
     def _format_dynamic_push(self, text: str) -> str:
         """动态推送模板：结构化通知（真实内容 + 个人空间链接）。

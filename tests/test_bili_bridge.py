@@ -21,6 +21,8 @@ def _no_llm(monkeypatch):
     async def _none(*a, **k):
         return None
     monkeypatch.setattr(bb, "compose_proactive", _none)
+    # 同一轮动态/置顶共用接口缓存——测试之间必须隔离，否则上一条用例的数据会漏进来。
+    monkeypatch.setattr(bb, "_ITEMS_CACHE", {})
 
 
 class FakeBot:
