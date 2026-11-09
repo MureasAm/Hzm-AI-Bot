@@ -719,8 +719,8 @@ def build_message_list(user_msg: str, fused_items: list,
                 # ⚠️ 时间戳**不再**在这里加一行汇总（2026-10-05 改）——
                 #   旧做法是把「距上一轮多久」当一行汇总拼在整块开头，结果 gap=10秒 和 gap=3小时
                 #   注入出来的历史**长得一模一样**，她分不出"刚说完"和"三小时前说的"。
-                #   现在改成：**每条消息自己带 [多久前]**（由 memory.get_user_history_timed 渲染），
-                #   只给事实、不给"该怎么理解"的说明，判断交给模型。
+                #   现在改成：**每条消息自己带发送时间**（由 memory.get_user_history_timed 渲染：
+                #   「今天/昨天 + 时刻 + 距现在多久」），只给事实、不给"该怎么理解"的说明，判断交给模型。
                 #   history_gap_note 参数保留（调用方还在传），但不再拼进历史块。
                 text = inj.T("history", context=context) + inj.T("history", "contradiction")
                 messages.append({"role": "system", "content": text})

@@ -10,6 +10,7 @@
 
 失败一律原样返回（fail-open）：转述写错比复读更伤上下文，宁可退回原句。
 """
+import datetime
 import hashlib
 import io
 import json
@@ -25,7 +26,65 @@ _CACHE_MAX = 3000
 _CACHE: dict[str, str] = {}
 _CACHE_LOADED = False
 
-# 历史行：[3小时前] 灰泽满：…… ／ 群聊：[3小时前] 灰泽满（回甲）：……
+# 历史行的时间前缀（memory.get_user_history_timed 渲染）：`[昨天 17:11｜28小时前] `
+_TIMESTAMP_LEAD_RE = re.compile(r"\[(?P<label>今天|昨天|前天|\d{2}-\d{2}) \d{2}:\d{2}[^\]]*\]")
+
+
+def _ref_date(label: str) -> datetime.date | None:
+    """把日期标签还原成具体日期（`昨天 17:11` 相对"今天"）。解析不了返回 None。"""
+    today = datetime.date.today()
+    if label == "昨天":
+        return today - datetime.timedelta(days=1)
+    if label == "前天":
+        return today - datetime.timedelta(days=2)
+    try:
+        month, day = (int(x) for x in label.split("-"))
+        d = datetime.date(today.year, month, day)
+    except (TypeError, ValueError):
+        return None
+    if d > today:            # 跨年（1 月初记录去年 12 月）
+        try:
+            d = d.replace(year=today.year - 1)
+        except ValueError:
+            return None
+    return d
+
+
+def _localize_day_words(text: str, lead: str) -> str:
+    """跨天历史转述里的相对日期 → 绝对日期；当天的原样保留。
+
+    为什么（2026-11-08，598031963 实测）：11-07 17:11 的「今天20:00不播了」被转述成
+    「她说今天20:00不播了」，脱离原消息日期后，「今天」被模型当成了 11-08 的今天，
+    最终回成「本来要睡，又精神了，就开一会儿测麦」。日期在转述里必须写绝对。
+    """
+    m = _TIMESTAMP_LEAD_RE.search(lead or "")
+    if not m or m.group("label") == "今天":
+        return text
+    ref = _ref_date(m.group("label"))
+    if ref is None:
+        return text
+    tomorrow = ref + datetime.timedelta(days=1)
+    yesterday = ref - datetime.timedelta(days=1)
+
+    def dstr(d: datetime.date) -> str:
+        return f"{d.month}月{d.day}日"
+
+    pairs = [
+        ("今晚", f"{dstr(ref)}晚上"),
+        ("今早", f"{dstr(ref)}早上"),
+        ("明早", f"{dstr(tomorrow)}早上"),
+        ("昨晚", f"{dstr(yesterday)}晚上"),
+        ("今天", dstr(ref)),
+        ("今儿", dstr(ref)),
+        ("明天", dstr(tomorrow)),
+        ("昨天", dstr(yesterday)),
+    ]
+    for old, new in pairs:
+        text = text.replace(old, new)
+    return text
+
+
+# 历史行：[今天 16:02｜5小时前] 灰泽满：…… ／ 群聊：灰泽满（回甲）：……
 _HER_LINE_RE = re.compile(
     r"^(?P<lead>(?:\[[^\]]*\]\s*)*)灰泽满(?:（[^）]*）)?：(?P<text>.*)$", re.S
 )
@@ -284,6 +343,8 @@ async def annotate_turn(history_lines: list[str], user_msg: str, client=None):
         note, core = _split_image_note(text)
         g = gists.get(core)
         if g:
+            # 跨天的转述要把「今天/明天」落成绝对日期，否则远离原消息日期后会被当成现在。
+            g = _localize_day_words(g, m.group("lead"))
             new_text = f"{note} {g}" if note else g
             # 群聊历史里的「回甲」只保留“她在接某位群友”的关系，不把具体名字喂回去；
             # 私聊仍是「灰泽满（转述）」。两者都只是标注，不是她要说的话。

@@ -1,8 +1,10 @@
-"""短期记忆时间戳：老数据（裸字符串）兼容 + **每条消息带「多久前」**。
+"""短期记忆时间戳：老数据（裸字符串）兼容 + **每条消息带发送日期/时刻**。
 
 背景：她以前分不清"刚刚说的"和"三天前说的"。
-2026-10-05 改：不再是"一行汇总拼在历史顶部"，而是**每行自己带 `[3小时前] `**
-——因为旧做法下 gap=10秒 和 gap=3小时 注入出来长得一样，她分不出刚说完还是隔了很久。
+2026-10-05：不再是一行汇总，而是每行自带时间。
+2026-11-08：前缀从「距上一条多久」改成「**今天/昨天/前天/MM-DD + 时刻 + 距现在多久**」——
+旧前缀字面像「距现在」，11-07 17:11 的「今天20:00不播了」被渲染成 `[3小时前]`，
+模型把昨天的安排当成了今晚（598031963 实测）。
 """
 import json
 import time
@@ -10,6 +12,21 @@ import time
 import pytest
 
 from src.plugins.chatbot import memory
+
+
+_REAL_TIME = time
+
+
+class _FakeTime:
+    """把 memory 里的 time 钉在固定时刻，日期标签的用例才不会跨午夜翻车。"""
+    _now = time.mktime(time.strptime("2026-11-08 21:15:00", "%Y-%m-%d %H:%M:%S"))
+
+    @classmethod
+    def time(cls):
+        return cls._now
+
+    localtime = staticmethod(_REAL_TIME.localtime)
+    strftime = staticmethod(_REAL_TIME.strftime)
 
 
 @pytest.fixture
@@ -120,38 +137,66 @@ class TestGroupLabels:
 
 
 class TestTimedHistory:
-    """`get_user_history_timed`：每行带「距上一条多久」，没时间戳的老数据不加前缀。"""
+    """`get_user_history_timed`：每行带「日期定性 + 时刻 + 距现在多久」，老数据不加前缀。"""
 
-    def test_each_line_gets_gap_prefix(self, tmp_memory):
-        now = time.time()
-        t0 = now - 5 * 3600           # 5 小时前
+    def test_lines_carry_date_label_clock_and_age(self, tmp_memory, monkeypatch):
+        monkeypatch.setattr(memory, "time", _FakeTime)
+        now = _FakeTime.time()
+        t3d = now - 3 * 86400 - 3600       # 11-05 20:15，3 天 1 小时前
+        t_y = now - 86400 - 3600           # 11-07 20:15，昨天
+        t_h = now - 3600                   # 11-08 20:15，一小时前
         _write(tmp_memory, {"u": [
-            {"t": t0, "text": "用户：在吗"},
-            {"t": t0 + 600, "text": "灰泽满：在呢"},        # 距上一条 10 分钟
-            {"t": t0 + 600 + 1800, "text": "用户：那个事你还记得吗"},   # 距上一条 30 分钟
+            {"t": t3d, "text": "用户：三天前的"},
+            {"t": t_y, "text": "灰泽满：昨天的"},
+            {"t": t_h, "text": "用户：一小时前的"},
         ]})
         lines = memory.get_user_history_timed("u")
-        assert len(lines) == 3
-        # 每行的时间是**相对上一条**的间隔；第一行相对"现在"。
-        assert lines[0].startswith("[5小时前] ")
-        assert lines[1].startswith("[10分钟前] ")
-        assert lines[2].startswith("[30分钟前] ")
-        assert lines[0].endswith("用户：在吗")
+        d3 = time.strftime("%m-%d %H:%M", time.localtime(t3d))
+        assert lines[0] == f"[{d3}｜3天前] 用户：三天前的"
+        assert lines[1] == "[昨天 20:15｜1天前] 灰泽满：昨天的"
+        assert lines[2] == "[今天 20:15｜1小时前] 用户：一小时前的"
 
     def test_legacy_plain_strings_get_no_prefix(self, tmp_memory):
         _write(tmp_memory, {"u": ["用户：在吗", "灰泽满：在呢"]})
         lines = memory.get_user_history_timed("u")
         assert lines == ["用户：在吗", "灰泽满：在呢"]
 
-    def test_short_gap_gets_no_prefix(self, tmp_memory):
-        """同一场对话内（<90秒）不加前缀——否则每行都挂个 [刚刚]，纯噪音。"""
-        now = time.time()
+    def test_short_gap_gets_no_prefix(self, tmp_memory, monkeypatch):
+        """同一场对话内（<90秒）不挂前缀——"没有前缀"就是现在，挂时刻纯噪音。"""
+        monkeypatch.setattr(memory, "time", _FakeTime)
+        now = _FakeTime.time()
         _write(tmp_memory, {"u": [
             {"t": now - 20, "text": "用户：在吗"},
             {"t": now - 10, "text": "灰泽满：在呢"},
         ]})
         lines = memory.get_user_history_timed("u")
         assert lines == ["用户：在吗", "灰泽满：在呢"]
+
+    def test_cross_day_plan_is_labeled_yesterday_not_hours_ago(self, tmp_memory, monkeypatch):
+        """598031963 的原始翻车：11-07 17:11「今天20:00没有了」曾被渲染成 `[3小时前]`
+        （那是"距上一条"），模型把昨天的安排当成今晚。现在必须是「昨天 + 距现在」。"""
+        monkeypatch.setattr(memory, "time", _FakeTime)
+        def at(s):
+            return time.mktime(time.strptime(s, "%Y-%m-%d %H:%M:%S"))
+        _write(tmp_memory, {"u": [
+            {"t": at("2026-11-07 13:54:51"), "text": "灰泽满：可爱什么，别夸了。"},
+            {"t": at("2026-11-07 17:11:19"), "text": "灰泽满：今天20:00没有了，机架底噪还得等老师回家再调"},
+            {"t": at("2026-11-07 23:28:41"), "text": "灰泽满：十一点半测试麦克风和小玩mc"},
+            {"t": at("2026-11-08 21:14:21"), "text": "灰泽满：灰泽满要睡了，今天难得早睡，明天见"},
+        ]})
+        lines = memory.get_user_history_timed("u")
+        assert lines[0].startswith("[昨天 13:54｜1天前] ")
+        assert lines[1].startswith("[昨天 17:11｜1天前] ")
+        assert lines[2].startswith("[昨天 23:28｜21小时前] ")
+        # 21:14:21 距 21:15 只有 39 秒 → 同一场对话，不挂前缀（没有前缀就是现在）
+        assert lines[3] == "灰泽满：灰泽满要睡了，今天难得早睡，明天见"
+        assert "[3小时前]" not in "\n".join(lines)
+
+    def test_prefix_stripping_accepts_new_and_legacy_formats(self):
+        assert memory.is_bot_line("[3分钟前] 灰泽满：在呢")
+        assert memory.is_bot_line("[昨天 17:11｜28小时前] 灰泽满：在呢")
+        assert memory.bot_line_text("[昨天 17:11｜28小时前] 灰泽满：在呢") == "在呢"
+        assert not memory.is_bot_line("[昨天 17:11｜28小时前] 用户：在吗")
 
 
 class TestLastTurnGap:

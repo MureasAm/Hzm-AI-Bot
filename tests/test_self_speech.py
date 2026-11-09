@@ -82,6 +82,32 @@ async def test_image_note_is_preserved_in_paraphrase():
 
 
 @pytest.mark.asyncio
+async def test_cross_day_gist_rewrites_today_to_absolute_date():
+    """跨天历史的转述里，「今天」必须落成原消息日期（598031963 实测：昨天 17:11 的
+    「今天20:00不播了」被当成今晚，回成「本来要睡，又精神了，就开一会儿测麦」）。"""
+    import datetime
+
+    ref = datetime.date.today() - datetime.timedelta(days=1)
+    day = f"{ref.month}月{ref.day}日"
+    hist = ["[昨天 17:11｜28小时前] 灰泽满：今天20:00没有了，机架底噪还得等老师回家再调嘛"]
+    client, _ = _client('{"gists": ["她说今天20:00不播了，机架底噪要等老师回家再调。"]}')
+    new_hist, _ = await self_speech.annotate_turn(hist, "不播了吗", client)
+    assert new_hist[0] == (
+        f"[昨天 17:11｜28小时前] 灰泽满（转述）："
+        f"她说{day}20:00不播了，机架底噪要等老师回家再调。"
+    )
+
+
+@pytest.mark.asyncio
+async def test_same_day_gist_keeps_today():
+    """当天说的事不改写——「今天」就是今天。"""
+    hist = ["[今天 16:02｜5小时前] 灰泽满：今天20:00没有了"]
+    client, _ = _client('{"gists": ["她说今天20:00不播了。"]}')
+    new_hist, _ = await self_speech.annotate_turn(hist, "嗯", client)
+    assert new_hist[0] == "[今天 16:02｜5小时前] 灰泽满（转述）：她说今天20:00不播了。"
+
+
+@pytest.mark.asyncio
 async def test_environment_claim_is_sanitized():
     assert "网速" not in self_speech._sanitize_gist(
         "x", "她提到虚拟澳洲的网速很慢，能回话就不错了。")

@@ -14,6 +14,7 @@ NoneBot 单进程运行，同一时刻可能有多条消息触发写入，
 长期记忆全部由 `memory_v2` 承担。这里只保留短期记忆 + `humanize_gap`（时长措辞，
 从 v1 搬来——它被 core/session_memory 共用）。
 """
+import datetime
 import json
 import os
 import re
@@ -173,22 +174,61 @@ def get_user_history(user_id: str) -> list:
     return [_entry_text(it) for it in raw]
 
 
+def _day_label(t: float) -> str:
+    """历史行前的日期定性：今天/昨天/前天/MM-DD（更早）。"""
+    try:
+        day = datetime.date.fromtimestamp(float(t))
+        today = datetime.date.fromtimestamp(time.time())
+    except (TypeError, ValueError, OSError, OverflowError):
+        return ""
+    diff = (today - day).days
+    if diff <= 0:
+        return "今天"
+    if diff == 1:
+        return "昨天"
+    if diff == 2:
+        return "前天"
+    return day.strftime("%m-%d")
+
+
+def _timed_prefix(t) -> str:
+    """一条历史的时间前缀：`[昨天 17:11｜28小时前]`（今天则 `[今天 16:02｜5小时前]`）。
+
+    <90 秒的同一场对话不挂前缀（否则每行都顶个时刻，纯噪音；"没有前缀"= 就是现在）。
+    """
+    try:
+        t = float(t)
+    except (TypeError, ValueError):
+        return ""
+    g = humanize_gap(max(0.0, time.time() - t))
+    if not g:
+        return ""
+    label = _day_label(t)
+    if not label:
+        return ""
+    try:
+        clock = time.strftime("%H:%M", time.localtime(t))
+    except (OSError, OverflowError, ValueError):
+        return ""
+    return f"[{label} {clock}｜{g}前] "
+
+
 def get_user_history_timed(user_id: str) -> list:
-    """和 `get_user_history` 同样返回字符串行，但**每行前面带「距上一条多久」**。
+    """和 `get_user_history` 同样返回字符串行，但**隔了时间的行前面带发送时间**。
 
     例：
-        用户：还有十五分钟就九点了，等着等
-        [3小时前] 灰泽满：睡了，你咋还不睡🧑‍🌾
-        [5分钟前] 用户：在吗
+        [今天 20:55｜5分钟前] 用户：在吗
+        [昨天 23:28｜22小时前] 灰泽满：睡了，你咋还不睡🧑‍🌾
 
-    为什么需要它（2026-10-05 用户提出）：
-      原来只把「距上一轮多久」当**一行汇总**拼在整块开头，而**每条消息自己没有时间**。
-      结果 gap=10 秒 和 gap=3 小时 注入出来的【当前会话】/历史**长得一模一样**——
-      她分不出"刚说完"和"三小时前说的"，只能一律当成"正在聊"。
-      这跟「上一场会话」那条不一样：那条只在 >12h 时出现，且自带时间定性。
+    90 秒内的同一场对话不挂前缀（"没有前缀"就是现在）。
 
-    ⚠️ 这里**只给事实（过了多久），不给任何"该怎么理解"的说明**——按项目实测，
-    "管怎么用"的包装语一律无效，事实类信息才有效。判断交给模型。
+    为什么这么改（2026-11-08，598031963 实测）：
+      旧前缀是「**距上一条**多久」，但读起来就是「距现在」——
+      11-07 17:11 的「今天20:00不播了」在 21:15 显示成 `[3小时前]`，
+      11-07 23:28 的「十一点半测麦」显示成 `[6小时前]`，
+      模型把 **22~28 小时前**的计划当成了今晚，说「本来要睡，又精神了，就开一会儿测麦」。
+      前缀语义与字面不一致时，模型一定按字面用。现在每行写**日期定性 + 时刻 + 距现在**，
+      跨天和「今晚」的歧义在数据层就消掉了。
 
     没有时间戳的老数据（裸字符串）不给前缀，不猜。
     """
@@ -196,28 +236,10 @@ def get_user_history_timed(user_id: str) -> list:
     if not raw:
         return []
     out = []
-    prev_t = None
     for it in raw:
         text = _entry_text(it)
         t = it.get("t") if isinstance(it, dict) else None
-        prefix = ""
-        if t is not None and prev_t is not None:
-            try:
-                g = humanize_gap(max(0.0, float(t) - float(prev_t)))
-                if g:
-                    prefix = f"[{g}前] "
-            except (TypeError, ValueError):
-                prefix = ""
-        elif t is not None and prev_t is None:
-            # 第一行：相对"现在"（它可能已经是几小时前的了，正是要让她知道的那条）
-            try:
-                g = humanize_gap(max(0.0, time.time() - float(t)))
-                if g:
-                    prefix = f"[{g}前] "
-            except (TypeError, ValueError):
-                prefix = ""
-        out.append(prefix + text)
-        prev_t = t if t is not None else prev_t
+        out.append((_timed_prefix(t) if t is not None else "") + text)
     return out
 
 
@@ -348,8 +370,11 @@ def append_bot_message(user_id: str, text: str) -> None:
     _append_lines(user_id, [f"灰泽满：{text}"])
 
 
-# 历史行可能带 `[3小时前] ` 前缀（get_user_history_timed 渲染的），判断"谁说的"要先剥掉
-_TIMED_PREFIX_RE = re.compile(r"^\[[^\]]{0,12}前\]\s*")
+# 历史行可能带时间前缀：新格式 `[昨天 17:11｜28小时前] `，旧格式 `[3小时前] `。
+# 判断"谁说的"要先剥掉（self_speech / is_bot_line / bot_line_text 共用）。
+_TIMED_PREFIX_RE = re.compile(
+    r"^\[(?:(?:今天|昨天|前天|\d{2}-\d{2}) [^\]]*|[^\]]{0,12}前)\]\s*"
+)
 
 # 对方发言的行首标签：私聊「用户：」，群聊「群聊：甲：…」（2026-10-23 起）。
 USER_LABELS = ("用户：", "群聊：")
