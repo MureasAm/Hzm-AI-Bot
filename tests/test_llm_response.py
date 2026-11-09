@@ -7,6 +7,7 @@
 功能悄悄失灵（记忆提取/行为分类拿到空串当"这次没结果"）。
 """
 from types import SimpleNamespace
+import asyncio
 import json
 import time
 
@@ -258,6 +259,42 @@ class TestModelFallbackChain:
                             ("m3", "三层的", None))
         chain._down_until.update({0: time.monotonic() + 60, 1: time.monotonic() + 60})
         assert _text(await chain.create(model="m1", messages=[])) == "三层的"
+
+    async def test_all_cooling_probes_earliest_not_only_last(self):
+        """三层一起被标 down 后不能只盯最后一层：先探冷却最早到期的（可能已恢复）。
+
+        2026-11-09 实测：全挂只试最后一层会锁死——中间层恢复了也不会被试，
+        所有请求持续打最后一层，把它的网络抖动放大成"没有下一层了"。
+        """
+        chain = self._chain(("m1", "一层的", None), ("m2", None, RuntimeError("二")),
+                            ("m3", None, RuntimeError("三")))
+        now = time.monotonic()
+        chain._down_until.update({0: now + 10, 1: now + 60, 2: now + 180})
+        assert _text(await chain.create(model="m1", messages=[])) == "一层的"
+        assert 0 not in chain._down_until, "探通了就该回到这一层"
+
+    async def test_all_cooling_single_flight_probe(self):
+        """全挂时同一层只放一个探测请求；并发会自然分散到下一层。"""
+        one, two, three = [], [], []
+        chain = self._chain(("m1", None, RuntimeError("一"), one),
+                            ("m2", None, RuntimeError("二"), two),
+                            ("m3", None, RuntimeError("三"), three))
+        now = time.monotonic()
+        chain._down_until.update({0: now + 10, 1: now + 20, 2: now + 30})
+        await asyncio.gather(*[chain.create(model="m1", messages=[]) for _ in range(3)],
+                             return_exceptions=True)
+        assert (len(one), len(two), len(three)) == (1, 1, 1)
+
+    def test_all_cooling_pick_skips_layers_already_being_probed(self):
+        chain = self._chain(("m1", None, RuntimeError("一")), ("m2", None, RuntimeError("二")),
+                            ("m3", None, RuntimeError("三")))
+        now = time.monotonic()
+        chain._down_until.update({0: now + 10, 1: now + 20, 2: now + 30})
+        assert chain._pick()[0][0] == 0
+        chain._probing.add(0)
+        assert chain._pick()[0][0] == 1
+        chain._probing.add(1)
+        assert chain._pick()[0][0] == 2
 
     # ---- 429 是"慢一点"，不是"坏了"（2026-10-14）----
 

@@ -204,9 +204,10 @@ WEATHER_BASE_URL = "https://devapi.qweather.com"  # 和风 API Host 根；每项
 WEATHER_CACHE_SECONDS = 3600      # 天气进程内缓存 1 小时，省免费额度
 WEATHER_GEO_CACHE_SECONDS = 86400  # 城市名→LocationID 解析缓存 1 天
 # 方向2 视觉
-# 视觉理解模型：GLM-5.3-Flash（原生多模态；强制思考，VISION_EXTRA_PARAMS 里压到 low）。
-# 想换回 gemini 就写 `VISION_MODEL=gemini-flash-lite-latest`（client 按模型名自动选 key/base）。
-VISION_MODEL = "glm-5.3-flash"
+# 视觉理解模型：u-ai.me · gemini-3.1-flash-lite（原生多模态；走辅助链端点）。
+# 2026-11-10 从智谱 GLM 切过来：智谱 key 余额/限流导致视觉调用经常失败。
+# 想换回 GLM 就写 `VISION_MODEL=glm-5.3-flash`（client 按模型名自动选智谱端点）。
+VISION_MODEL = "gemini-3.1-flash-lite"
 VISION_MAX_TOKENS = 512           # 视觉描述输出上限
 # 各视觉模型的额外参数：glm-4.6v 默认会先推理（可拖到 9s+），必须关掉；
 # gemini 不认这个字段，别传（传了可能 400）。

@@ -117,16 +117,15 @@ class _ChainCompletions:
     为什么要它（2026-10-14 实测）：中转站的 gemini 线路从 13:00 起**整条 500 挂了 75 分钟**，
     而 bot 只会一轮一轮地回兜底文案——**端点/模型级故障不该让整只 bot 变哑巴**。
 
-    链的形状（用户 2026-10-14 定）：**gemini → luna → deepseek 官方**。
-    - 前两层是**同一个端点**的不同模型（中转站上换 model 名就行）；
-    - 最后一层是**另一个端点**（deepseek 官方，最稳）。
-    备用用**同一套参数**喂（`THINKING_DISABLED` + `reasoning_effort=none` 三家实测都吃），
-    只是换个 model 名。全链都挂了 → 照原样把最后一个异常抛出去（调用方照旧兜底成一句人话）。
+    链的形状由 `.env.prod` 决定（2026-11-10：主链 DeepSeek 官方 → u-ai gemini；
+    辅助链 u-ai gemini）。各层用**同一套参数**喂（`THINKING_DISABLED` +
+    `reasoning_effort=none` 实测都吃），只是换 model/端点。
+    全链都挂了 → 照原样把最后一个异常抛出去（调用方照旧兜底成一句人话）。
 
     ⚠️ **一次失败就"全线切走"，但会自己回来**（用户 2026-10-14 两轮定稿）：
     某一层挂掉后，后续调用先绕开它（否则按真实流量的轮次间隔，几乎每次都要白等）；
-    绕开多久见 `_CHAIN_RETRY_SEC` / `_CHAIN_FLAKY_SEC` 两档——**默认 10 分钟回头探一次**，
-    探通了就用回来。中间那个"永远不回头"的版本只活了一轮：
+    绕开多久见 `_CHAIN_RETRY_SEC` / `_CHAIN_FLAKY_SEC` 两档——**硬失败 3 分钟、
+    网络/限流 1 分钟**回头探一次，探通了就用回来。中间那个"永远不回头"的版本只活了一轮：
     用户当天就发现"滑到 deepseek 之后就一直在 deepseek"，而**最贵的恰恰是那一层**。
     """
 
@@ -139,6 +138,7 @@ class _ChainCompletions:
         # 软失败（形状坏）走 `_CHAIN_FLAKY_SEC`，与这里无关——两档的理由见文件头那段。
         self._cooldown = cooldown if cooldown is not None else _CHAIN_RETRY_SEC
         self._down_until: dict[int, float] = {}
+        self._probing: set[int] = set()   # 正在探测（全挂时同一层只放一个请求过去）
         self._last_i = 0             # 上次实际用的是第几层（用来打"降级 / 回到"那行日志）
 
     def _mark_down(self, i: int, soft: bool = False) -> None:
@@ -151,63 +151,93 @@ class _ChainCompletions:
         self._down_until[i] = float("inf") if sec <= 0 else time.monotonic() + sec
 
     def _pick(self):
-        """挑这次要试的层：跳过已标记"挂了"的；全挂了就只试**最后一层**（通常是最稳的官方端点）。"""
+        """挑这次要试的层：跳过已标记"挂了"的；全挂了也别只盯着最后一层。
+
+        全挂时的旧做法是只试最后一层（假设官方端点最稳）。实测（2026-11-09）这会
+        锁死：三层一起被网络抖动标 down 后，中间层恢复了也不会被试，所有请求持续
+        打最后一层，把它的抖动放大成"没有下一层了"。
+        现在按**冷却最早到期**的顺序挑一层去探，并且同一层同一时刻只放一个请求
+        （`_probing`）——群聊一轮十几路并发，不该同时撞同一个刚恢复的层。
+        """
         now = time.monotonic()
         alive = [(i, l) for i, l in enumerate(self._layers) if now >= self._down_until.get(i, 0.0)]
-        return alive or [(len(self._layers) - 1, self._layers[-1])]
+        if alive:
+            return alive
+        order = sorted(range(len(self._layers)),
+                       key=lambda i: self._down_until.get(i, 0.0))
+        for i in order:
+            if i not in self._probing:
+                return [(i, self._layers[i])]
+        # 全都在探测中：退回最后一层，至少让请求有地方去（本轮不再重复探别的层）
+        return [(order[-1], self._layers[order[-1]])]
 
     async def create(self, **kwargs):
         last_err = None
         t0 = time.monotonic()
-        for i, (client, model, label, extra) in self._pick():
-            # ⚠️ `model is None` = **别动调用方传进来的模型名**（第 1 层就是这么标的）。
-            # 踩坑（2026-10-14 当场撞到）：写成 `{**kwargs, "model": model}` 会把调用方的
-            # 模型名覆盖成 None → 上游收到 `model=null` → 400 invalid_request_error，
-            # 而那条错误会被当成"主模型挂了"，白白降级。
-            payload = kwargs if model is None else {**kwargs, "model": model}
-            if extra:
-                # 这一层自己的参数（见 `constants.MODEL_EXTRA_PARAMS`）——**按层**盖，
-                # 不动别的层：换个模型可能就换一套"关思考"的写法。
-                payload = {**payload, "extra_body": {**(payload.get("extra_body") or {}), **extra}}
+        picked = self._pick()
+        for pos, (i, (client, model, label, extra)) in enumerate(picked):
+            # 这一层正在冷却、却仍被挑出来探：登记为"探测中"，防止并发请求同时撞它
+            probing = time.monotonic() < self._down_until.get(i, 0.0) or i in self._probing
+            if probing:
+                self._probing.add(i)
             try:
-                resp = await client.chat.completions.create(**payload)
-            except Exception as e:
-                last_err = e
-                # **"抖一下"和"真挂了"要分开**——两类都不该用 10 分钟的长窗口：
-                #   · 429 = "你问太快了"（实测中转站 luna 连发 5 次后桶就空，之后全 0.2s 被拒）；
-                #   · **APIConnectionError = 网络层连不上**，请求**可能根本没到站**
-                #     （2026-10-15 用户发现："我这其中转站没收到失败日志，但代码报了
-                #     APIConnectionError"——**两边对得上**，因为那是本地/链路的问题）。
-                #     这种错**一点也不能说明那条渠道坏了**，锁它十分钟等于白花钱走贵的那层。
-                soft = isinstance(e, (RateLimitError, APIConnectionError))
-                self._mark_down(i, soft=soft)
-                nxt = "全线切到下一层" if i < len(self._layers) - 1 else "没有下一层了"
-                if isinstance(e, RateLimitError):
-                    kind = "限流（慢一点，不是坏了）"
-                elif isinstance(e, APIConnectionError):
-                    kind = "连不上（网络层，不是它坏了）"
-                else:
-                    kind = type(e).__name__
-                print(f"⚠️ 模型 {label} 调用失败（{kind}: {str(e)[:60]}）→ {nxt}")
-                continue
-            # ⚠️ **HTTP 成功 ≠ 拿到能用的响应**（2026-10-14 真实撞到）：
-            # 上游偶发返回 `choices` 为空/null 的"200 响应"，链以前只认异常、把它当成功返回，
-            # 于是下游 `extract_chat_content` 才发现形状不对——**那时已经在链外了，不会再降级**，
-            # 整轮就掉进 "小满现在不在哦~"。现在形状不对也当这一层失败，继续往下试。
-            reason = _bad_shape_reason(resp)
-            if reason and i < len(self._layers) - 1:
-                self._mark_down(i, soft=True)      # 抖了一下 ≠ 挂了，一分钟后就再来试
-                print(f"⚠️ 模型 {label} 返回异常（{reason}）→ 全线切到下一层")
-                continue
-            self._down_until.pop(i, None)          # 它活着，清掉冷却
-            _SERVED_BY.set(label)                  # 记下"这轮是谁答的"（日志/账本都要用）
-            _LATENCY.set((id(resp), round((time.monotonic() - t0) * 1000)))
-            if i != self._last_i:
-                # 降级和**回升**都报一句——不然"回到 gemini 了"在日志里看不出来
-                print(f"[模型] {'降级到' if i > self._last_i else '回到'}第 {i + 1} 层：{label}")
-                self._last_i = i
-            # 最后一层就算形状不对也**照原样返回**——让调用方照旧报一句能看懂的错
-            return resp
+                # ⚠️ `model is None` = **别动调用方传进来的模型名**（第 1 层就是这么标的）。
+                # 踩坑（2026-10-14 当场撞到）：写成 `{**kwargs, "model": model}` 会把调用方的
+                # 模型名覆盖成 None → 上游收到 `model=null` → 400 invalid_request_error，
+                # 而那条错误会被当成"主模型挂了"，白白降级。
+                payload = kwargs if model is None else {**kwargs, "model": model}
+                if extra:
+                    # 这一层自己的参数（见 `constants.MODEL_EXTRA_PARAMS`）——**按层**盖，
+                    # 不动别的层：换个模型可能就换一套"关思考"的写法。
+                    payload = {**payload, "extra_body": {**(payload.get("extra_body") or {}), **extra}}
+                try:
+                    resp = await client.chat.completions.create(**payload)
+                except Exception as e:
+                    last_err = e
+                    # **"抖一下"和"真挂了"要分开**——两类都不该用 10 分钟的长窗口：
+                    #   · 429 = "你问太快了"（实测中转站 luna 连发 5 次后桶就空，之后全 0.2s 被拒）；
+                    #   · **APIConnectionError = 网络层连不上**，请求**可能根本没到站**
+                    #     （2026-10-15 用户发现："我这其中转站没收到失败日志，但代码报了
+                    #     APIConnectionError"——**两边对得上**，因为那是本地/链路的问题）。
+                    #     这种错**一点也不能说明那条渠道坏了**，锁它十分钟等于白花钱走贵的那层。
+                    soft = isinstance(e, (RateLimitError, APIConnectionError))
+                    self._mark_down(i, soft=soft)
+                    has_next = pos < len(picked) - 1
+                    if has_next:
+                        nxt = "全线切到下一层"
+                    elif len(self._layers) > 1:
+                        nxt = "本轮没有可再试的层（其余在冷却）"
+                    else:
+                        nxt = "没有下一层了"
+                    if isinstance(e, RateLimitError):
+                        kind = "限流（慢一点，不是坏了）"
+                    elif isinstance(e, APIConnectionError):
+                        kind = "连不上（网络层，不是它坏了）"
+                    else:
+                        kind = type(e).__name__
+                    print(f"⚠️ 模型 {label} 调用失败（{kind}: {str(e)[:60]}）→ {nxt}")
+                    continue
+                # ⚠️ **HTTP 成功 ≠ 拿到能用的响应**（2026-10-14 真实撞到）：
+                # 上游偶发返回 `choices` 为空/null 的"200 响应"，链以前只认异常、把它当成功返回，
+                # 于是下游 `extract_chat_content` 才发现形状不对——**那时已经在链外了，不会再降级**，
+                # 整轮就掉进 "小满现在不在哦~"。现在形状不对也当这一层失败，继续往下试。
+                reason = _bad_shape_reason(resp)
+                if reason and pos < len(picked) - 1:
+                    self._mark_down(i, soft=True)      # 抖了一下 ≠ 挂了，一分钟后就再来试
+                    print(f"⚠️ 模型 {label} 返回异常（{reason}）→ 全线切到下一层")
+                    continue
+                self._down_until.pop(i, None)          # 它活着，清掉冷却
+                _SERVED_BY.set(label)                  # 记下"这轮是谁答的"（日志/账本都要用）
+                _LATENCY.set((id(resp), round((time.monotonic() - t0) * 1000)))
+                if i != self._last_i:
+                    # 降级和**回升**都报一句——不然"回到 gemini 了"在日志里看不出来
+                    print(f"[模型] {'降级到' if i > self._last_i else '回到'}第 {i + 1} 层：{label}")
+                    self._last_i = i
+                # 最后一层就算形状不对也**照原样返回**——让调用方照旧报一句能看懂的错
+                return resp
+            finally:
+                if probing:
+                    self._probing.discard(i)
         raise last_err
 
 
