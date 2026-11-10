@@ -3,6 +3,7 @@
 所有外部调用（B站接口、好友列表、私聊、状态写入）全部 mock/打桩。
 """
 import asyncio
+import time
 
 import pytest
 
@@ -70,6 +71,68 @@ class TestLiveTransition:
         # 仍在直播 → 不重复推
         await m._check_live(bot)
         assert len(pushed) == 1
+
+    async def test_live_end_pushes_duration(self, monkeypatch):
+        """下播通知（2026-11-10）：已结束 + 本次时长；只推一次。"""
+        start = int(time.time()) - 3 * 3600 - 25 * 60
+        m = _make_monitor(uid="1", state={
+            "last_live_status": True, "live_started_at": start})
+        pushed = []
+
+        async def fake_push(bot, content, image_paths=None, record=True, voice=False):
+            pushed.append(content)
+
+        async def _live():
+            return {"live_status": 0, "title": "", "live_time": start}
+
+        monkeypatch.setattr(m, "_push", fake_push)
+        monkeypatch.setattr(m, "_fetch_live_status", _live)
+        monkeypatch.setattr(bb, "_save_state", lambda s: None)
+
+        await m._check_live(FakeBot())
+        assert pushed == ["灰泽满宣布直播结束~\n本次时长：3小时25分钟"]
+        assert "live_started_at" not in m.state, "下播后清掉，下次开播重新记"
+        assert m.state["last_live_status"] is False
+
+        # 一直是未播 → 不重复推
+        await m._check_live(FakeBot())
+        assert len(pushed) == 1
+
+    async def test_live_end_without_start_time_is_unknown(self, monkeypatch):
+        m = _make_monitor(uid="1", state={"last_live_status": True})
+        pushed = []
+
+        async def fake_push(bot, content, image_paths=None, record=True, voice=False):
+            pushed.append(content)
+
+        async def _live():
+            return {"live_status": 0, "title": "", "live_time": 0}
+
+        monkeypatch.setattr(m, "_push", fake_push)
+        monkeypatch.setattr(m, "_fetch_live_status", _live)
+        monkeypatch.setattr(bb, "_save_state", lambda s: None)
+
+        await m._check_live(FakeBot())
+        assert pushed == ["灰泽满宣布直播结束~\n本次时长：未知"]
+
+    async def test_live_end_uses_api_live_time_if_state_missing(self, monkeypatch):
+        """状态里没记开播时间（老数据/手动清过）→ 用接口的 live_time 补。"""
+        start = int(time.time()) - 2 * 3600
+        m = _make_monitor(uid="1", state={"last_live_status": True})
+        pushed = []
+
+        async def fake_push(bot, content, image_paths=None, record=True, voice=False):
+            pushed.append(content)
+
+        async def _live():
+            return {"live_status": 0, "title": "", "live_time": start}
+
+        monkeypatch.setattr(m, "_push", fake_push)
+        monkeypatch.setattr(m, "_fetch_live_status", _live)
+        monkeypatch.setattr(bb, "_save_state", lambda s: None)
+
+        await m._check_live(FakeBot())
+        assert pushed == ["灰泽满宣布直播结束~\n本次时长：2小时"]
 
     async def test_offline_to_live_with_cover_downloads(self, monkeypatch):
         """开播且带封面时，下载封面并传给 _push（失败不阻塞）。"""
@@ -914,3 +977,35 @@ class TestLiveNoticeSkipped:
         await m._check_dynamic(FakeBot())
         assert pushed == []
         assert m.state["last_dynamic_id"] == "new"
+
+
+class TestLiveDuration:
+    @pytest.mark.parametrize("sec,expected", [
+        (None, "未知"),
+        (0, "未知"),
+        (-5, "未知"),
+        (30, "不到1分钟"),
+        (35 * 60, "35分钟"),
+        (2 * 3600, "2小时"),
+        (2 * 3600 + 35 * 60, "2小时35分钟"),
+    ])
+    def test_format(self, sec, expected):
+        assert bb._format_live_duration(sec) == expected
+
+    async def test_prime_while_live_records_start(self, monkeypatch):
+        """bot 启动时她已经在播：把接口的 live_time 记下来，下播才能算时长。"""
+        start = int(time.time()) - 600
+        m = _make_monitor(uid="1", state={})
+
+        async def _live():
+            return {"live_status": 1, "title": "直播中", "live_time": start}
+
+        async def _dyn():
+            return {"id": "new", "text": "", "image_urls": []}
+
+        monkeypatch.setattr(m, "_fetch_live_status", _live)
+        monkeypatch.setattr(m, "_fetch_latest_dynamic", _dyn)
+        monkeypatch.setattr(bb, "_save_state", lambda s: None)
+
+        await m._prime()
+        assert m.state["live_started_at"] == start

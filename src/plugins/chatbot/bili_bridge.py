@@ -2,6 +2,8 @@
 
 启动时注册后台任务，周期性轮询灰泽满本人的 B站账号：
 - 开播：状态翻转（未播→直播）才推送一次，带上直播间标题
+- **下播**（2026-11-10）：直播中→未播 推「灰泽满宣布直播结束~ / 本次时长：X小时Y分钟」，
+  用接口的 `live_time` 算，重启也能补回来
 - 动态：出现新动态 ID 才推送。**能转成“她会主动说的那句话”时，只发那句（语音优先），
   不再推动态原文/链接**（2026-10-23 用户定）；转不出来/不适合时才发结构化原文通知。
 - **开播自动动态不推**（2026-11-07）：开播会生成一条 `DYNAMIC_TYPE_LIVE_RCMD`，
@@ -432,6 +434,39 @@ def _live_open_message(room_title: str, room_id: int = 0) -> str:
     return f"灰泽满宣布开播！\n\n今天的内容是：{title}\n\n{url}"
 
 
+def _format_live_duration(seconds) -> str:
+    """直播时长说成人话：2小时35分钟 / 35分钟 / 不到1分钟；算不出来给「未知」。"""
+    try:
+        sec = int(float(seconds))
+    except (TypeError, ValueError):
+        return "未知"
+    if sec <= 0:
+        return "未知"
+    if sec < 60:
+        return "不到1分钟"
+    hours, minutes = divmod(sec // 60, 60)
+    if hours and minutes:
+        return f"{hours}小时{minutes}分钟"
+    if hours:
+        return f"{hours}小时"
+    return f"{minutes}分钟"
+
+
+def _live_end_message(started_at=None, now=None) -> str:
+    """下播播报（用户 2026-11-10 定）：
+
+    灰泽满宣布直播结束~
+    本次时长：2小时35分钟
+    """
+    duration = None
+    if started_at:
+        try:
+            duration = float(now if now is not None else time.time()) - float(started_at)
+        except (TypeError, ValueError):
+            duration = None
+    return f"灰泽满宣布直播结束~\n本次时长：{_format_live_duration(duration)}"
+
+
 # 转发动态里，被转发原文最多带几个字进正文——
 # 目的是让通知模板/主动发言"知道在说什么"，不是把整篇公告搬进来。
 _FORWARD_TEXT_MAX = 150
@@ -617,7 +652,13 @@ class BiliMonitor:
         if not self._live_primed:
             try:
                 info = await self._fetch_live_status()
-                self.state["last_live_status"] = info["live_status"] == 1
+                is_live = info["live_status"] == 1
+                self.state["last_live_status"] = is_live
+                if is_live and info.get("live_time"):
+                    # 重启时她可能已经在播：把本次开播时间补回来，下播才能算时长
+                    self.state["live_started_at"] = info["live_time"]
+                else:
+                    self.state.pop("live_started_at", None)
                 self._live_primed = True
             except Exception as e:
                 print(f"⚠️ 基线-直播状态失败（下轮重试，本轮不检查）: {e}")
@@ -657,6 +698,8 @@ class BiliMonitor:
             "live_status": int(info.get("live_status", 0)),
             "title": str(info.get("title", "")),
             "room_id": int(info.get("room_id", 0) or 0),
+            # 本次开播时间（epoch 秒）：下播时用它算时长；重启后也能从接口补回来
+            "live_time": int(info.get("live_time", 0) or 0),
             # 直播封面：优先主播设置封面(cover_from_user)，空则回退关键帧(keyframe)
             "cover": str(info.get("cover_from_user", "") or info.get("keyframe", "") or ""),
         }
@@ -670,6 +713,10 @@ class BiliMonitor:
 
         is_live = info["live_status"] == 1  # 1=直播中, 2=轮播
         was_live = bool(self.state.get("last_live_status", False))
+        live_time = info.get("live_time") or 0
+        if is_live and live_time > 0:
+            # 接口每次都会给本次开播时间；以它为准，重启/漏轮也能算对时长
+            self.state["live_started_at"] = live_time
         if is_live and not was_live:
             content = _live_open_message(info["title"], info.get("room_id", 0))
             print(f"[B站] 检测到开播 -> {content}")
@@ -683,6 +730,13 @@ class BiliMonitor:
                 except Exception as e:
                     print(f"⚠️ 直播封面下载失败（忽略，仍发文字）: {e}")
             await self._push(bot, content, image_paths=image_paths)
+        elif (not is_live) and was_live:
+            # 下播通知（用户 2026-11-10 定）：已结束 + 本次时长
+            started_at = self.state.get("live_started_at") or live_time
+            content = _live_end_message(started_at)
+            print(f"[B站] 检测到下播 -> {content}")
+            await self._push(bot, content)
+            self.state.pop("live_started_at", None)
         self.state["last_live_status"] = is_live
         _save_state(self.state)
 
