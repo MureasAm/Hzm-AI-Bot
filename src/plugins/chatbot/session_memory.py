@@ -19,7 +19,7 @@ import os
 import re
 import threading
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from .memory import archive_legacy_file
 from . import injection as inj
@@ -63,6 +63,16 @@ MOOD_STALE_SECONDS = MOOD_INJECT_SECONDS
 PREV_SESSION_NOTE_SECONDS = SESSION_STALE_SECONDS
 # 「上次聊过」最多带几条当时的事件（整场搬进来会挤上下文，只要够唤起记忆就行）
 PREV_SESSION_EVENTS_MAX = 2
+# 动作回执最多保留几条（表情包/语音）；下一轮注入只看最近 10 分钟。
+MAX_LAST_ACTIONS = 3
+# 「以后都用语音」这种短期模式的有效期（秒）：到期自动失效，每轮仍由主模型重新判断。
+VOICE_PREF_SECONDS = 600
+# 动作流水（带结果），给初步测试/人工抽检用；不影响运行时注入。
+ACTION_LOG_FILE = PROJECT_ROOT / "data" / "action_log.jsonl"
+# 语音模式的用户表达（只认“以后/一直/都/每天”这类长期请求；“发条语音”只管当前轮）。
+_VOICE_ON_RE = re.compile(r"(以后|一直|都|每天).{0,8}(用|发)?语音|语音(跟|和)我说话|再发.{0,2}语音")
+_VOICE_OFF_RE = re.compile(r"(别|不要|不用|不想)(再)?(发|用)?语音|还是打字|打字吧")
+_STICKER_OFF_RE = re.compile(r"(别|不要|不用|少)(再)?(发|用)?(表情包?|图)")
 
 _lock = threading.Lock()
 
@@ -197,6 +207,139 @@ def get_session(user_id: str) -> dict:
     if gap > SESSION_STALE_SECONDS:
         return {"topic": "", "events": [], "last_active": ""}
     return sess
+
+
+def actions_note(user_id: str, *, now: datetime | None = None,
+                 max_age: float = 600) -> str:
+    """最近一次「说了之外的动作」——给下一轮主模型知道自己刚才做过什么。
+
+    2026-11-11 试点：表情包/语音由独立链路执行，主回复模型原本完全看不见。
+    这里只回**表情包/用户反馈**这类不进对话历史的动作；语音形态改由短期历史行上的
+    `[语音]` 标记承载（2026-11-13，单一真值，避免两处各记一份）。
+    """
+    sess = _raw_session(user_id)
+    actions = sess.get("last_actions") or []
+    if not actions:
+        return ""
+    now = now or datetime.now()
+    parts = []
+    for a in actions[-MAX_LAST_ACTIONS:]:
+        try:
+            age = (now - datetime.fromisoformat(str(a.get("t") or ""))).total_seconds()
+        except (ValueError, TypeError):
+            continue
+        if age < 0 or age > max_age:
+            continue
+        kind = str(a.get("kind") or "")
+        detail = str(a.get("detail") or "").strip()
+        ok = bool(a.get("ok", True))
+        if kind == "sticker":
+            if not ok:
+                parts.append("表情包发送失败")
+            else:
+                parts.append(f"发了一张「{detail}」表情包" if detail else "发了一张表情包")
+        elif kind == "feedback" and detail:
+            parts.append(detail)
+    return ("上一轮动作：" + "、".join(parts)) if parts else ""
+
+
+def _write_action_log(user_id: str, record: dict) -> None:
+    """动作流水（审计用，不参与注入）。失败静默，不影响聊天。"""
+    try:
+        ACTION_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(ACTION_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"user": user_id, **record}, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
+def log_action_event(user_id: str, kind: str, detail: str = "", *, ok: bool = True) -> None:
+    """只写动作流水，不进会话状态（语音的注入形态由历史行负责）。"""
+    kind = str(kind or "").strip()
+    if not kind:
+        return
+    _write_action_log(user_id, {
+        "kind": kind, "detail": str(detail or "")[:20],
+        "ok": bool(ok), "t": datetime.now().isoformat(),
+    })
+
+
+def add_last_action(user_id: str, kind: str, detail: str = "", *, ok: bool = True) -> None:
+    """记录一次动作回执（表情包/反馈）：进会话状态（下一轮注入）并写流水。"""
+    kind = str(kind or "").strip()
+    if not kind:
+        return
+    now = datetime.now()
+    record = {
+        "kind": kind,
+        "detail": str(detail or "")[:20],
+        "ok": bool(ok),
+        "t": now.isoformat(),
+    }
+    with _lock:
+        sess = _raw_session(user_id)
+        actions = list(sess.get("last_actions") or [])
+        actions.append(record)
+        sess["last_actions"] = actions[-MAX_LAST_ACTIONS:]
+        _write_json(_file_for(user_id), sess)
+    _write_action_log(user_id, record)
+
+
+def set_voice_preference(user_id: str, seconds: float = VOICE_PREF_SECONDS) -> None:
+    """用户明确说“以后都用语音”时，记一个带有效期的短期模式。"""
+    with _lock:
+        sess = _raw_session(user_id)
+        sess["voice_pref_until"] = (
+            datetime.now() + timedelta(seconds=max(30.0, float(seconds)))).isoformat()
+        _write_json(_file_for(user_id), sess)
+
+
+def clear_voice_preference(user_id: str) -> None:
+    with _lock:
+        sess = _raw_session(user_id)
+        if sess.pop("voice_pref_until", None) is not None:
+            _write_json(_file_for(user_id), sess)
+
+
+def voice_preference_active(user_id: str, *, now: datetime | None = None) -> bool:
+    until = str(_raw_session(user_id).get("voice_pref_until") or "")
+    if not until:
+        return False
+    try:
+        return datetime.fromisoformat(until) > (now or datetime.now())
+    except (ValueError, TypeError):
+        return False
+
+
+def voice_preference_note(user_id: str, *, now: datetime | None = None) -> str:
+    """短期语音模式给主模型的事实提示（不含“该怎么用”的包装语）。"""
+    until = str(_raw_session(user_id).get("voice_pref_until") or "")
+    if not until:
+        return ""
+    now = now or datetime.now()
+    try:
+        left = (datetime.fromisoformat(until) - now).total_seconds()
+    except (ValueError, TypeError):
+        return ""
+    if left <= 0:
+        return ""
+    return f"对方最近明确希望你用语音说话（还剩约 {max(1, int(left // 60) + 1)} 分钟）"
+
+
+def note_modality_feedback(user_id: str, user_msg: str) -> None:
+    """从用户这句话里读“以后都用语音 / 别发语音 / 别发表情”这类长期反馈。
+
+    只在**明确长期请求**时改短期模式；当前轮“发条语音”仍交给主模型的 [[语音]] 标记。
+    """
+    msg = str(user_msg or "")
+    if _VOICE_OFF_RE.search(msg):
+        clear_voice_preference(user_id)
+        add_last_action(user_id, "feedback", "对方让你别发语音", ok=False)
+        return
+    if _VOICE_ON_RE.search(msg):
+        set_voice_preference(user_id)
+    if _STICKER_OFF_RE.search(msg):
+        add_last_action(user_id, "feedback", "对方让你别发表情", ok=False)
 
 
 def previous_session_note(user_id: str, *, include_when: bool = True) -> str:
@@ -559,6 +702,10 @@ async def probe_session(user_id: str, user_msg: str, history_text: str, client,
     if new_event and new_event != "null" and not _is_duplicate_event(new_event, events):
         events.append(new_event)
     events = events[-MAX_EVENTS_PER_SESSION:]
+    # 动作回执由执行层写在对话之后；probe 每轮重写 session，必须原样带上，
+    # 否则下一轮主模型看不到“上一轮发过表情包/语音”。
+    last_actions = list(prev.get("last_actions") or [])[-MAX_LAST_ACTIONS:]
+    voice_pref_until = str(prev.get("voice_pref_until") or "")
 
     with _lock:
         # topic_since = **这个话题是什么时候开始的**（2026-10-05 加）。
@@ -577,7 +724,10 @@ async def probe_session(user_id: str, user_msg: str, history_text: str, client,
             "events": events,
             "last_active": now_iso,
             "topic_since": topic_since,
+            "last_actions": last_actions,
         }
+        if voice_pref_until:
+            record["voice_pref_until"] = voice_pref_until
         # mood 只在读出情绪时覆盖；没读出就沿用上一轮的（直到 3h 自然消散）。
         # 注意：cold session 时 prev 是空的 → 旧 mood 也随之丢弃，符合"和话题一起消散"。
         if mood:

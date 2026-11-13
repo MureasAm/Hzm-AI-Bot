@@ -204,19 +204,27 @@ WEATHER_BASE_URL = "https://devapi.qweather.com"  # 和风 API Host 根；每项
 WEATHER_CACHE_SECONDS = 3600      # 天气进程内缓存 1 小时，省免费额度
 WEATHER_GEO_CACHE_SECONDS = 86400  # 城市名→LocationID 解析缓存 1 天
 # 方向2 视觉
-# 视觉理解模型：u-ai.me · gemini-3.1-flash-lite（原生多模态；走辅助链端点）。
-# 2026-11-10 从智谱 GLM 切过来：智谱 key 余额/限流导致视觉调用经常失败。
-# 想换回 GLM 就写 `VISION_MODEL=glm-5.3-flash`（client 按模型名自动选智谱端点）。
-VISION_MODEL = "gemini-3.1-flash-lite"
+# 视觉理解模型：furry.vg · agnes-3.0-flash（原生多模态；`VISION_API_BASE/KEY` 指 furry.vg）。
+# 2026-11-13 全链路切 agnes：主/辅/视觉同一模型；u-ai 的 gemini/glm 视觉通道已不可用。
+# 它不吃“关思考”的额外参数（VISION_EXTRA_PARAMS 无条目），看图正常。
+VISION_MODEL = "agnes-3.0-flash"
 VISION_MAX_TOKENS = 512           # 视觉描述输出上限
 # 各视觉模型的额外参数：glm-4.6v 默认会先推理（可拖到 9s+），必须关掉；
 # gemini 不认这个字段，别传（传了可能 400）。
 VISION_EXTRA_PARAMS = {
     "glm-4.6v": {"extra_body": {"thinking": {"type": "disabled"}}},
     "glm-5.3-flash": {"extra_body": {"reasoning_effort": "low"}},
+    # v4.1 默认思考；看图时思考会吃光 512 额度（实测 818 reasoning、正文空）
+    "deepseek-v4.1-flash-1017": {
+        "extra_body": {"thinking": {"type": "disabled"}},
+        "reasoning_effort": "none",
+    },
 }
 # 方向3 B站联动
-PUSH_INTERVAL = 180               # B站轮询间隔（秒）。别低于 120：带 SESSDATA 的会话调太频繁会被 B站风控顶掉（曾 45s→2-3天失效）
+# 微博仍用 PUSH_INTERVAL（180s，风控敏感）；B站动态/直播单独用 BILI_INTERVAL。
+# 动态接口现在走公共 buvid+WBI，不需要 SESSDATA；60s 是折中：够早，又不至于把匿名接口打成高频。
+PUSH_INTERVAL = 180               # 微博轮询间隔（秒）。别低于 120：带 SESSDATA 的会话调太频繁会被风控顶掉
+BILI_INTERVAL = 60                # B站动态+直播轮询间隔（秒）；公共动态接口不需要 cookie
 BILI_STATE_FILE = PROJECT_ROOT / "data" / "bili_state.json"   # 开播/动态去重状态持久化
 WEIBO_STATE_FILE = PROJECT_ROOT / "data" / "weibo_state.json" # 微博去重状态持久化
 

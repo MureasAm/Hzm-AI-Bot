@@ -21,8 +21,8 @@ from .bg import spawn
 from .core import (
     handle_chat, summarize_batch, summarize_group_batch, _get_clients, _compose_record_msg,
 )
-from .config import set_llm_route, get_vision_client, aux_clients_or
-from .memory import get_user_history, append_user_history, humanize_gap
+from .config import set_llm_route, get_vision_client, aux_clients_or, get_voice_enabled
+from .memory import get_user_history, append_user_history, humanize_gap, mark_last_bot_modality
 from .group_gate import should_reply_in_group, _addressed_to_her
 from .chatlog import log_turn
 from .stickers import pick_sticker, log_event
@@ -447,6 +447,12 @@ async def _flush(win: _UserWindow) -> None:
         record_kwargs["record_text"] = _compose_record_msg(_clean_group_record(combined), vision_desc)
     group_batch_note = (f"本批 {len(msgs)} 条"
                         if not win.is_private and len(msgs) >= 2 else "")
+    # 长期偏好反馈（“以后都用语音 / 别发语音 / 别发表情”）：在本轮生成前落到会话，
+    # 这样【当前状态】和语音判定都能立刻看到。当前轮“发条语音”仍由主模型标记决定。
+    try:
+        session_memory.note_modality_feedback(win.target_id, combined)
+    except Exception as e:
+        print(f"⚠️ 动作偏好记录失败（忽略）: {e}")
     reply = await handle_chat(win.target_id, combined, vision_desc=vision_desc,
                               batch_summary=batch_summary, is_group=not win.is_private,
                               user_transcript=user_transcript,
@@ -468,6 +474,9 @@ async def _flush(win: _UserWindow) -> None:
             reply = (reply[:m.start()] + reply[m.end():]).strip()
         # 模型偶尔会把用户消息里的 [1] 当成自己的编号照抄；群聊开头剥掉。
         reply = re.sub(r"^\s*\[\d+\]\s*", "", reply).strip()
+    # 动作意图挂在她这句的 Reply 上（handle_chat 已剥掉 [[语音]]/[[表情:类别]] 标记）；
+    # clean_reply 返回普通 str，会把这个属性丢掉，所以先取出来。
+    actions = getattr(reply, "actions", {}) or {}
     reply = clean_reply(reply)  # 去括号前缀 + 整条至多 1 个括号
     if not reply:
         # 未点名的群聊批次，模型输出的是“没点我/保持潜水”式元回复 → 这批就当没接。
@@ -486,7 +495,9 @@ async def _flush(win: _UserWindow) -> None:
     # 成功就不刷文字分段（互斥不双发）；未启用/合成失败时 send_voice 返回 False，
     # 落回下方文字分段兜底，绝不影响收到回复。
     # 用户点名要语音（消息里带"语音"）→ force：短句也读，别让人白问一句。
-    if should_voice(reply, force=voice_requested(combined)):
+    if should_voice(reply, force=(voice_requested(combined)
+                                  or bool(actions.get("voice"))
+                                  or session_memory.voice_preference_active(win.target_id))):
         if win.generation != my_gen:
             # 已经被新消息取代：别再占 GPU 去合成（合成了也送不出去）
             print("[读秒] 语音：已被新消息取代，跳过合成")
@@ -499,10 +510,19 @@ async def _flush(win: _UserWindow) -> None:
         # （取决于插话有没有落在合成那几秒里）。
         # 语义上也说得通：文字分段是"发一段是一段"，语音是一条整消息，
         # 所以"已开始就等于第一段已发出"。
-        if await asyncio.shield(send_voice(win.bot, win.target_id, win.is_private, reply)):
+        voice_ok = await asyncio.shield(
+            send_voice(win.bot, win.target_id, win.is_private, reply))
+        if get_voice_enabled():
+            # 只有真的发出语音才给最后一条历史标 [语音]；TTS 失败回退文字时不标。
+            # 语音形态是**历史行自己的元数据**，不再往 last_actions 里另记一份。
+            if voice_ok:
+                mark_last_bot_modality(win.target_id, "voice", reply_text=reply)
+            session_memory.log_action_event(win.target_id, "voice", ok=voice_ok)
+        if voice_ok:
             # 语音之后**也补表情包**（用户 2026-10-05）：原来这里直接 return，
             # 表情包永远是语音轮的盲区。表情包自己有"十分对应才发"的闸门，不会硬凑。
-            await _maybe_send_sticker(win, reply)
+            await _maybe_send_sticker(win, reply, context=combined,
+                                      preferred_group=str(actions.get("sticker") or ""))
             return
 
     parts = split_reply(reply) if SPLIT_REPLY_ENABLED else [reply]
@@ -521,7 +541,8 @@ async def _flush(win: _UserWindow) -> None:
 
     # 表情包：文字发完之后，若某张表情与这句话"十分对应"就补一张。
     # （语音那条路在上面单独调了一次——它提前 return，不在这里。）
-    await _maybe_send_sticker(win, reply)
+    await _maybe_send_sticker(win, reply, context=combined,
+                              preferred_group=str(actions.get("sticker") or ""))
 
 
 # 表情包冷却状态：**必须按 target_id 持久，不能挂在 _UserWindow 上**。
@@ -540,7 +561,8 @@ def _sticker_st(target_id: str) -> dict:
                     "sent": False, "topic": None})
 
 
-async def _maybe_send_sticker(win: _UserWindow, reply: str) -> None:
+async def _maybe_send_sticker(win: _UserWindow, reply: str,
+                              context: str = "", preferred_group: str = "") -> None:
     """双闸：同一话题只发一张 + 发过之后 5 轮内不再发。
 
     - 话题闸：同一 `topic_since` 已经发过 → 跳过。只有换话题才解除。
@@ -563,10 +585,23 @@ async def _maybe_send_sticker(win: _UserWindow, reply: str) -> None:
         log_event("cooldown", session=win.target_id, kind=kind)
         return
     deepseek_client, zhipu_client = _get_clients()
+    # 语境给表情包模型：只看 reply 时它不知道对面刚说了什么/什么情绪，
+    # 只能判断“这句话像不像委屈”，判断不了“该不该安慰”。（2026-11-11 试点）
+    ctx_parts = []
+    if context:
+        ctx_parts.append(f"用户刚说：{context[:200]}")
+    _topic = str(session_memory.get_session(win.target_id).get("topic") or "").strip()
+    if _topic:
+        ctx_parts.append(f"当前话题：{_topic}")
+    _mood = session_memory.mood_note(win.target_id)
+    if _mood:
+        ctx_parts.append(_mood.replace("【用户此刻的情绪】", "情绪：", 1).strip())
     # avoid 传**全部**最近发过的**类别**（不只最近 1 个）：光防"连着发"不够，
     # 用户报的是"同类"太频繁 —— 换个话题回来还会撞上同一类。
     hit = await pick_sticker(deepseek_client, reply, avoid_groups=st["recent"],
-                             session=win.target_id, kind=kind, zhipu_client=zhipu_client)
+                             session=win.target_id, kind=kind, zhipu_client=zhipu_client,
+                             context="\n".join(ctx_parts),
+                             preferred_group=preferred_group)
     if not hit:
         st["turns"] += 1
         return
@@ -577,10 +612,14 @@ async def _maybe_send_sticker(win: _UserWindow, reply: str) -> None:
         else:
             await win.bot.send_group_msg(group_id=win.target_id, message=img)
         print(f"[表情包] 已发送 {hit['id']}［{hit.get('group', '')}］")
+        session_memory.add_last_action(win.target_id, "sticker",
+                                       str(hit.get("group") or hit["id"]))
         log_event("sent", session=win.target_id, kind=kind, sticker=hit,
                   why=str(hit.get("_source") or "llm"))
     except Exception as e:
         print(f"⚠️ 表情包发送失败（忽略）: {e}")
+        session_memory.add_last_action(
+            win.target_id, "sticker", str(hit.get("group") or hit["id"]), ok=False)
         log_event("sent_failed", session=win.target_id, kind=kind, sticker=hit, why=str(e))
     st["turns"] = 0
     st["sent"] = True

@@ -47,10 +47,11 @@ from .routing import (
 from .reply_style import (
     clean_reply, is_echo_reply, is_emotion_only_query, uses_time_hook, starts_with_name,
     uses_hollow_opener, repeated_formula, is_meta_silence,
+    extract_action_tags, Reply,
 )
 from .session_memory import (
     probe_session, build_session_context, get_session, is_emoji_msg, previous_session_note,
-    mood_note,
+    mood_note, actions_note, voice_preference_note,
 )
 from .term_hints import terms_hint_block
 
@@ -380,12 +381,16 @@ def _hits_on_demand_term(msg: str) -> bool:
     return False
 
 
-async def confirm_ambiguous_terms(user_msg: str, deepseek_client=None) -> set:
+async def confirm_ambiguous_terms(user_msg: str, aux_client=None) -> set:
     """LLM 语境确认（词→意思的准确性守卫）。
 
     对 `confirm:true` 且本轮命中的术语，用一次便宜 LLM 判断"这个词在这个语境下是否真指它定义的含义"，
     返回应剔除的 keyword 集合（交给 build_terms_note 跳过）。防止 pattern/短词命中误触
     （如'满区'命中'怎么这么区'，可能是普通形容词用法而非黑话）。
+
+    ⚠️ **必须传辅助链客户端**：下面用的是 `aux_model(...)`（u-ai 的 gemini）。
+    2026-11-10 实测：传主客户端（DeepSeek 官方端点）会把 gemini 模型名发过去，
+    每次都 400 "The supported API model names are ..."，并把这层打进 3 分钟冷却。
 
     失败/无客户端默认放行（返回空集，不丢注入）——和 legendary_confirmed 同策略。
     """
@@ -408,9 +413,9 @@ async def confirm_ambiguous_terms(user_msg: str, deepseek_client=None) -> set:
             candidates.append(t)
     if not candidates:
         return set()
-    if deepseek_client is None:
+    if aux_client is None:
         try:
-            deepseek_client, _ = aux_clients_or(_get_clients)
+            aux_client, _ = aux_clients_or(_get_clients)
         except Exception:
             return set()
     lines = "\n".join(f"- {t['keyword']}：{t.get('meaning', '')[:80]}" for t in candidates)
@@ -424,7 +429,7 @@ async def confirm_ambiguous_terms(user_msg: str, deepseek_client=None) -> set:
         '都适用输出 {"exclude": []}'
     )
     try:
-        resp = await deepseek_client.chat.completions.create(
+        resp = await aux_client.chat.completions.create(
             model=aux_model(_get_model_name()),
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
@@ -465,7 +470,8 @@ def build_message_list(user_msg: str, fused_items: list,
                        request_context: str = "",
                        reminders_context: str = "",
                        state_stable: str = "", state_dynamic: str = "",
-                       event_context: str = "") -> list:
+                       event_context: str = "",
+                       show_actions: bool = False) -> list:
     """按优先级组装发送给模型的消息列表。
 
     fused_items 为融合后的 RetrievalItem 列表（corpus + behavior），按源分组注入。
@@ -858,6 +864,21 @@ def build_message_list(user_msg: str, fused_items: list,
         _mark("reminders")
         if trace is not None:
             trace.setdefault("values", {})["reminders"] = reminders_context[:300]
+
+    # 可用动作（第 23 块，2026-11-11 试点）：只列能力，不写“什么时候该用”。
+    # 主动发言路径不注（它不是聊天，主模型也不执行这条链路的动作）。
+    if show_actions:
+        # 类别用**真实表情组名**，别让模型照着示例瞎编（编的类别会被执行层丢掉）
+        try:
+            from .stickers import load_stickers
+            groups = sorted({str(s.get("group") or "").strip()
+                             for s in load_stickers() if s.get("group")})
+        except Exception:
+            groups = []
+        messages.append({"role": "system", "content": inj.T(
+            "actions", groups="、".join(groups) or "（暂无表情）")})
+        hit_blocks.append("actions")
+        _mark("actions")
 
     # 自称方式（第 21 块，2026-10-27 用户定）：骨架里不再写整段自称规则，
     # 只在**所有注入之后、用户消息之前**留一句弱约束。实测（60 条真实消息）：
@@ -1532,6 +1553,13 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
             state_parts.append(session_context)
         if _prev_session_note:
             state_parts.append(_prev_session_note)
+        # 她上一轮做过的动作（表情包/语音）——执行层写的回执，主动让她“知道”自己做过。
+        _actions = actions_note(user_id)
+        if _actions:
+            state_parts.append(_actions)
+        _voice_pref = voice_preference_note(user_id)
+        if _voice_pref:
+            state_parts.append(_voice_pref)
         if not is_group:
             _mood = mood_note(user_id)
             if _mood:
@@ -1571,7 +1599,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
                           + (f"（更自然的反应：{_st}）" if _st else ""))
         print(f"[语用] {_pa} → {pragmatic_hint[:60]}")
     # 术语语境确认：confirm:true 的命中做一次便宜 LLM 判断，剔除误触词条（词→意思守卫）
-    denied_terms = await confirm_ambiguous_terms(user_msg, deepseek_client)
+    denied_terms = await confirm_ambiguous_terms(user_msg, aux_client)
     # 条目级注入轨迹：build 时填"实际注入了哪些块/条目"，回复生成后再补称呼是否被用，
     # 由下面统一落盘（只有 私/群 真实聊天路径写，和 block_hits 同一个闸）。
     injection_trace: dict = {}
@@ -1632,6 +1660,8 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         request_context=request_context, reminders_context=reminders_context,
         state_stable=state_stable, state_dynamic=state_dynamic,
         event_context=event_context,
+        show_actions=(get_flag("ACTION_TAGS", "1").strip().lower()
+                      not in ("0", "false", "no", "off")),
     )
 
     # --- 🤖 调用大模型 ---
@@ -1756,13 +1786,16 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         # 用户的这句话也随之不留——但她这轮并没有真的回应过，不记比记错干净。
         print("[记忆] 本轮是兜底回复（生成失败），不写入短期/长期记忆")
         return reply
+    # 动作标记（[[语音]] / [[表情:类别]]）先剥掉：它绝不能进记忆/转述/发送。
+    # 剥出来的意图挂到 Reply 上，由 chat_window 执行（语音/表情包）。
+    no_tag_reply, actions = extract_action_tags(reply)
     # 未点名的群聊批次：模型如果把内部标记说成了回复（「没点我」「（不说话，潜水）」），
     # 视为这批她不说话——只记用户侧，不发。点名后的“关我什么事”是正常斗嘴，不拦。
-    if is_group and not group_addressed and is_meta_silence(clean_reply(reply)):
+    if is_group and not group_addressed and is_meta_silence(clean_reply(no_tag_reply)):
         print("[群聊] 模型输出的是“没点名/潜水”式元回复 → 这批不发，只记用户侧")
         append_user_history(user_id, record_msg, "", user_label=_user_label)
         return ""
-    cleaned_reply = clean_reply(reply)
+    cleaned_reply = clean_reply(no_tag_reply)
     append_user_history(user_id, record_msg, cleaned_reply,
                         user_label=_user_label, reply_label=_reply_label)
     # 预转述她这句：下一轮注入直接命中缓存，把转述开销挪出关键路径。
@@ -1772,7 +1805,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     # --- 📝 异步更新长期记忆（V2；会话级记忆已在对话前 probe_session 同步更新） ---
     if not is_group:  # 群会话不建用户记忆卡
         spawn(update_memory_v2_shadow_task(
-            user_id, record_msg, reply, memory_scope_id,
+            user_id, record_msg, no_tag_reply, memory_scope_id,
         ))
 
-    return reply
+    return Reply(no_tag_reply, actions)

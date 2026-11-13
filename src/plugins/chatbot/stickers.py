@@ -57,12 +57,16 @@ STICKER_PROMPT = """灰泽满刚说了一句话，判断要不要给她配一张
 - **只有表情和这句话十分对应时才发。宁可不发**——发错比不发难看得多。
 - 大多数回复都不配表情包（真人也是聊好几轮才用一张）。
 - 表情是**配她自己这句话的情绪**，不是评论别人。
+- **有语境时按语境判断**：对面在难过/认真求助时别发搞笑表情；语境没给就只看这句话。
+
+【语境】
+{context}
 
 【可选表情包】
 {options}
 
 【她刚说的】
-{reply}{avoid}
+{reply}{avoid}{preferred}
 
 只输出 JSON：{{"id": "选中的表情 id" 或 null, "why": "不超过15字"}}"""
 
@@ -233,12 +237,17 @@ def _options_text(items: list) -> str:
 
 
 async def pick_sticker(deepseek_client, reply: str, avoid_groups: list | None = None,
-                       session="", kind: str = "", zhipu_client=None) -> dict | None:
+                       session="", kind: str = "", zhipu_client=None,
+                       context: str = "", preferred_group: str = "") -> dict | None:
     """给这句话挑一张表情；没有十分对应的返回 None。
 
     `avoid_groups`：**最近发过的类别**（不是单张）——别连着发观感相近的图。
     用户 2026-10-04 定：同一类里可能有好几张（委屈 3 张、无语无奈 4 张），
     按单张去重挡不住"换一张还是同一个味道"。
+
+    `context`（2026-11-11 试点）：用户刚说的话/话题/情绪。只看 reply 时模型只能判
+    "这句话像不像委屈"，判断不了"对面刚失恋，该不该安慰"。
+    `preferred_group`：主回复模型主动指定的类别；必须是真实存在的组，否则忽略。
 
     失败一律返回 None（**不发**）——发错表情比不发难看得多，这里和接话门相反，
     宁可少发不可发错。
@@ -248,13 +257,18 @@ async def pick_sticker(deepseek_client, reply: str, avoid_groups: list | None = 
     items = load_stickers()
     if not items:
         return None
+    preferred = str(preferred_group or "").strip()
+    groups = {str(it.get("group") or "").strip() for it in items}
+    if preferred not in groups:
+        preferred = ""            # 模型编的类别不认，退回普通判断
 
     # 快路①：明显不值得判断的回复直接跳过 LLM（仅 STICKER_FAST=1 时启用）。
-    if fast_enabled() and not fast_gate(reply):
+    # 主模型明确点了类别时不走快路——它比向量更知道这句想要什么。
+    if fast_enabled() and not preferred and not fast_gate(reply):
         log_event("none", session=session, kind=kind, why="fast_gate")
         return None
     # 快路②：embedding 选组；高置信度直接发，低置信度才回退 LLM。
-    if fast_enabled():
+    if fast_enabled() and not preferred:
         hit = await fast_pick(reply, avoid_groups, zhipu_client)
         if hit:
             print(f"[表情包] 向量选 {hit['id']}［{hit.get('group', '')}］")
@@ -267,12 +281,16 @@ async def pick_sticker(deepseek_client, reply: str, avoid_groups: list | None = 
     if avoid_groups:
         names = "、".join(dict.fromkeys(avoid_groups))
         avoid = f"\n\n【最近已经发过的类别，别再选这些类别里的】{names}"
+    preferred_block = (f"\n\n【她这句话想配的类别】{preferred}"
+                       f"（优先从这一类里选；没有合适的仍可不发）") if preferred else ""
 
     try:
         resp = await deepseek_client.chat.completions.create(
             model=_get_model_name(),
             messages=[{"role": "user", "content": STICKER_PROMPT.format(
-                reply=reply.strip(), options=_options_text(items), avoid=avoid)}],
+                reply=reply.strip(), options=_options_text(items), avoid=avoid,
+                context=(context or "").strip() or "（只看到这句话）",
+                preferred=preferred_block)}],
             temperature=0,
             max_tokens=80,
             **THINKING_DISABLED,

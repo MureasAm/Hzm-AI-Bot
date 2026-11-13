@@ -1,5 +1,6 @@
 """core 层：图片消息记忆记录 + 图片消息处理逻辑的单元测试。"""
 import asyncio
+from types import SimpleNamespace
 
 from src.plugins.chatbot import core
 from src.plugins.chatbot import memory as mem
@@ -1963,3 +1964,31 @@ class TestL3AndEmbedConcurrent:
         monkeypatch.setattr(core, "embed_query", fake_embed)
         result = {"fused_items": [], "preference_items": [], "core_stories": [], "same_request": None}
         await core._fill_retrieval(result, "今天直播好累", "", "", None, None, [], False)
+
+
+async def test_term_confirm_uses_aux_client(monkeypatch):
+    """术语消歧用的是 aux_model（gemini）——客户端必须也是辅助链。
+
+    2026-11-10 实测：拿主客户端（DeepSeek 官方）会发 gemini 模型名过去，
+    每轮 400 "The supported API model names are ..."。
+    """
+    calls = []
+
+    class _Completions:
+        async def create(self, **kw):
+            calls.append(kw)
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content='{"exclude": []}'))],
+                usage=None,
+            )
+
+    fake = SimpleNamespace(chat=SimpleNamespace(completions=_Completions()))
+    monkeypatch.setattr(core, "aux_clients_or", lambda fallback: (fake, None))
+
+    def _boom():
+        raise AssertionError("不该用主客户端")
+
+    monkeypatch.setattr(core, "_get_clients", _boom)
+
+    assert await core.confirm_ambiguous_terms("又爆了") == set()
+    assert calls and calls[0]["model"] == core.aux_model(core._get_model_name())

@@ -1234,3 +1234,69 @@ class TestHabitHint:
         assert msgs[-1]["role"] == "user"
         assert msgs[-3]["content"] == "【你记得的事】测试"
         assert "需要自称就用" in msgs[-2]["content"]
+
+
+def test_address_terms_requires_explicit_request(store, clock):
+    """2026-11-10：990772382 常用「区泽满」称呼她，不能当用户自己的称呼。"""
+    rejected = store.ingest(
+        "u1",
+        [{"kind": "fact", "key": "address_terms", "value": "区泽满",
+          "explicit": True, "confidence": 0.9}],
+        source=_source(now=clock, user="我知道\n经典八点半\n区泽满"),
+        now=clock,
+    )
+    assert rejected == []
+
+    accepted = store.ingest(
+        "u1",
+        [{"kind": "fact", "key": "address_terms", "value": "学长、机长",
+          "explicit": True, "confidence": 0.9}],
+        source=_source(now=clock, user="以后叫我学长就行，外号可以叫机长"),
+        now=clock,
+    )
+    assert accepted and accepted[0]["value"] == "学长、机长"
+
+
+def test_her_name_variant_never_stored_as_user_name(store, clock):
+    """「区泽满」是她的谐音称呼：写进任何用户名字字段都要拒收。"""
+    for key in ("address_terms", "preferred_name", "real_name", "online_name"):
+        accepted = store.ingest(
+            "u1",
+            [{"kind": "fact", "key": key, "value": "区泽满",
+              "explicit": True, "confidence": 0.9}],
+            source=_source(now=clock, user="以后叫我区泽满"),
+            now=clock,
+        )
+        assert accepted == [], key
+
+    # 反过来：用户给她起的称呼可以（her_nickname 不是用户名字字段）
+    accepted = store.ingest(
+        "u1",
+        [{"kind": "fact", "key": "her_nickname", "value": "区泽满",
+          "explicit": True, "confidence": 0.9}],
+        source=_source(now=clock, user="区泽满"),
+        now=clock,
+    )
+    assert accepted and accepted[0]["key"] == "her_nickname"
+
+
+def test_canonical_name_keys_still_accept_normal_values(store, clock):
+    for key, value, text in [
+        ("real_name", "胡洋", "本名是胡洋"),
+        ("online_name", "千纸鸢", "网名是千纸鸢"),
+        ("preferred_name", "小温", "以后叫我小温"),
+    ]:
+        accepted = store.ingest(
+            "u1",
+            [{"kind": "fact", "key": key, "value": value,
+              "explicit": True, "confidence": 0.9}],
+            source=_source(now=clock, user=text),
+            now=clock,
+        )
+        assert accepted and accepted[0]["value"] == value, key
+
+
+def test_prompt_warns_name_direction():
+    prompt = memory_v2.MEMORY_V2_EXTRACT_PROMPT
+    assert "区泽满" in prompt
+    assert "绝不能" in prompt

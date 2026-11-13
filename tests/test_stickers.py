@@ -223,3 +223,31 @@ class TestRecentStoresGroup:
         topic["v"] = "t2"   # 换话题；冷却 0，轮次闸不挡
         await cw._maybe_send_sticker(win, "草")
         assert len(calls) == 2 and calls[-1] == ["吐槽"]
+
+
+    @pytest.mark.asyncio
+    async def test_context_and_preferred_reach_prompt(self, two_stickers):
+        seen = {}
+
+        class _Capture(_StubClient):
+            async def create(self, **kw):
+                seen["prompt"] = kw["messages"][0]["content"]
+                return await super().create(**kw)
+
+        await pick_sticker(_Capture(content='{"id": null}'), "好啦好啦",
+                           context="用户刚失恋，情绪很低落", preferred_group="无语无奈")
+        assert "用户刚失恋" in seen["prompt"]
+        assert "想配的类别" in seen["prompt"] and "无语无奈" in seen["prompt"]
+
+    @pytest.mark.asyncio
+    async def test_unknown_preferred_group_is_ignored(self, two_stickers):
+        seen = {}
+
+        class _Capture(_StubClient):
+            async def create(self, **kw):
+                seen["prompt"] = kw["messages"][0]["content"]
+                return await super().create(**kw)
+
+        await pick_sticker(_Capture(content='{"id": null}'), "好啦好啦",
+                           preferred_group="不存在的类别")
+        assert "想配的类别" not in seen["prompt"]

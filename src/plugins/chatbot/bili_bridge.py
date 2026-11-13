@@ -37,7 +37,7 @@ from .bg import spawn
 from .constants import BILI_STATE_FILE
 from .proactive import compose_proactive, broadcast_proactive
 from . import _bridge_common
-from .config import get_bili_uid, get_bili_sessdata, get_notify_whitelist, get_push_interval
+from .config import get_bili_uid, get_bili_sessdata, get_notify_whitelist, get_bili_interval
 
 LIVE_STATUS_API = "https://api.live.bilibili.com/room/v1/Room/get_status_info_by_uids"
 
@@ -1009,7 +1009,7 @@ class BiliMonitor:
 
 async def _monitor_loop() -> None:
     monitor = BiliMonitor()
-    interval = get_push_interval()
+    interval = get_bili_interval()
     print(f"[B站] 监听启动: uid={monitor.uid}, 轮询间隔={interval}s（±随机抖动防风控）")
     while True:
         try:
@@ -1017,8 +1017,8 @@ async def _monitor_loop() -> None:
             await monitor.poll_once(bot)
         except Exception as e:
             print(f"⚠️ B站监听轮询异常（继续）: {e}")
-        # 随机抖动：固定间隔是典型机器人特征，B站风控会据此识别并顶会话
-        await asyncio.sleep(max(interval + random.uniform(-20, 30), 30))
+        # 随机抖动：固定间隔是典型机器人特征；B站用独立的 BILI_INTERVAL（默认 60s）
+        await asyncio.sleep(max(interval + random.uniform(-10, 10), 30))
 
 
 # NoneBot 未初始化时（离线工具/单测直接 import 本模块）跳过启动注册，

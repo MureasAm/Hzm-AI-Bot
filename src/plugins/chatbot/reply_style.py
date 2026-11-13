@@ -553,3 +553,40 @@ def is_emotion_only_query(query: str) -> bool:
     """
     q = (query or "").strip()
     return q.startswith("用户发") and "表情" in q
+
+
+# ==================== 动作标记（2026-11-11 试点） ====================
+# 主回复模型可以主动选动作：句末写 [[语音]] / [[表情:委屈]]。
+# 标记**绝不发出去**，由 chat_window 解析后交给语音/表情包链路执行。
+_ACTION_TAG_RE = re.compile(r"\[\[\s*(语音|表情\s*[:：]\s*([^\[\]]{1,12}))\s*\]\]")
+
+
+class Reply(str):
+    """回复字符串 + 本轮动作意图；继承 str，老的 `== "..."` 用法全部不变。"""
+
+    def __new__(cls, value, actions=None):
+        obj = super().__new__(cls, value)
+        obj.actions = dict(actions or {})
+        return obj
+
+
+def extract_action_tags(text: str) -> tuple[str, dict]:
+    """剥掉 [[语音]] / [[表情:类别]]，返回 (干净文本, {"voice": bool, "sticker": str})。
+
+    标记是**模型对下游动作的意图**，不是给人看的话；任何链路（发送/记忆/转述）
+    都必须用剥掉后的文本。重复标记以最后一个为准，不报错。
+    """
+    actions = {"voice": False, "sticker": ""}
+
+    def _sub(m):
+        if m.group(1) == "语音":
+            actions["voice"] = True
+        else:
+            actions["sticker"] = (m.group(2) or "").strip()
+        return ""
+
+    clean = _ACTION_TAG_RE.sub(_sub, text or "")
+    # 标记常跟在句末，剥掉后别留双空格/悬空逗号
+    clean = re.sub(r"[ 	]{2,}", " ", clean).strip()
+    clean = re.sub(r"[，,、]\s*$", "", clean).strip()
+    return clean, actions

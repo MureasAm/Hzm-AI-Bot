@@ -19,20 +19,20 @@ EXPECTED_IDS = [
     "identity", "schedule", "profile", "preferences", "core_stories", "group",
     "terms", "session", "prev_session", "behaviors", "corpus", "commitment",
     "history", "same_request", "batch", "query_hint", "now", "mood", "daily",
-    "selfref", "state", "events",
+    "selfref", "state", "events", "actions",
 ]
 
 
 # ---------------------------------------------------------------- 目录结构
 
-def test_all_23_blocks_load():
+def test_all_24_blocks_load():
     blocks = inj.load_blocks()
     assert sorted(blocks) == sorted(EXPECTED_IDS), "块的 id 集合变了"
 
 
-def test_order_is_0_to_22_and_unique():
+def test_order_is_0_to_23_and_unique():
     orders = [inj.load_blocks()[b]["order"] for b in EXPECTED_IDS]
-    assert sorted(orders) == list(range(0, 23)), "序号必须 0..20 且不重复"
+    assert sorted(orders) == list(range(0, 24)), "序号必须 0..23 且不重复"
 
 
 def test_folder_prefix_matches_order():

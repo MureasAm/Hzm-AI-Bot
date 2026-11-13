@@ -14,7 +14,7 @@ from nonebot import get_driver
 from openai import AsyncOpenAI, RateLimitError, APIConnectionError
 
 from .constants import (
-    VISION_MODEL, PUSH_INTERVAL, WEATHER_BASE_URL,
+    VISION_MODEL, PUSH_INTERVAL, BILI_INTERVAL, WEATHER_BASE_URL,
     DEEPSEEK_BASE_URL, ZHIPU_BASE_URL, DEFAULT_MODEL, PROJECT_ROOT, LLM_TIMEOUT_SEC,
     MODEL_EXTRA_PARAMS,
 )
@@ -689,6 +689,14 @@ def get_push_interval() -> int:
         return int(get_config("push_interval", PUSH_INTERVAL))
     except (TypeError, ValueError):
         return PUSH_INTERVAL
+
+
+def get_bili_interval() -> int:
+    """B站动态+直播轮询间隔（秒）；`BILI_INTERVAL` 可单独覆盖，不影响微博。"""
+    try:
+        return int(get_config("bili_interval", BILI_INTERVAL))
+    except (TypeError, ValueError):
+        return BILI_INTERVAL
 
 
 def get_voice_enabled() -> bool:

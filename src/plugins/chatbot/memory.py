@@ -239,7 +239,10 @@ def get_user_history_timed(user_id: str) -> list:
     for it in raw:
         text = _entry_text(it)
         t = it.get("t") if isinstance(it, dict) else None
-        out.append((_timed_prefix(t) if t is not None else "") + text)
+        # 消息形态（2026-11-13）：语音发出的那条在行首标 [语音]，文字不标（默认）。
+        # 它和发送时间一样是**消息元数据**，不是她说的话；发送成功后由 chat_window 回写。
+        modality = "[语音] " if isinstance(it, dict) and it.get("modality") == "voice" else ""
+        out.append((_timed_prefix(t) if t is not None else "") + modality + text)
     return out
 
 
@@ -370,10 +373,44 @@ def append_bot_message(user_id: str, text: str) -> None:
     _append_lines(user_id, [f"灰泽满：{text}"])
 
 
-# 历史行可能带时间前缀：新格式 `[昨天 17:11｜28小时前] `，旧格式 `[3小时前] `。
+def mark_last_bot_modality(user_id: str, modality: str = "voice",
+                           *, reply_text: str | None = None) -> None:
+    """把**最后一条她说的话**标成语音/文字形态（发送成功后回写）。
+
+    为什么要回写而不是发送前标（2026-11-13）：语音决定发生在 handle_chat 返回之后，
+    TTS 可能失败并回退文字。只有 send_voice 返回 True 才该标 voice；失败时不标
+    （默认就是文字），避免留下“说过语音”的假记忆。
+
+    `reply_text`：可选的兜底文案（生成失败）不会写进历史；传本轮实际发出去的文本，
+    只有它和最后一条 bot 行一致时才标，避免把上一条历史误标成本轮语音。
+
+    历史行是 `{t, text}`；这里只改最后一条 bot 行，用户行不动。老数据裸字符串跳过。
+    """
+    modality = str(modality or "").strip().lower()
+    if modality not in ("voice", "text"):
+        return
+    expected = str(reply_text).strip() if reply_text is not None else None
+    with _memory_lock:
+        history = _load_raw_history(user_id)
+        for it in reversed(history):
+            if not isinstance(it, dict):
+                continue
+            if not is_bot_line(_entry_text(it)):
+                continue
+            if expected is not None and bot_line_text(_entry_text(it)) != expected:
+                return
+            if modality == "text":
+                it.pop("modality", None)
+            else:
+                it["modality"] = modality
+            _write_json(_file_for(user_id), history)
+            return
+
+
+# 历史行可能带时间前缀和形态标签：`[今天 16:02｜5小时前] [语音] 灰泽满：……`。
 # 判断"谁说的"要先剥掉（self_speech / is_bot_line / bot_line_text 共用）。
 _TIMED_PREFIX_RE = re.compile(
-    r"^\[(?:(?:今天|昨天|前天|\d{2}-\d{2}) [^\]]*|[^\]]{0,12}前)\]\s*"
+    r"^(?:\[(?:(?:今天|昨天|前天|\d{2}-\d{2}) [^\]]*|[^\]]{0,12}前|语音|文字)\]\s*)+"
 )
 
 # 对方发言的行首标签：私聊「用户：」，群聊「群聊：甲：…」（2026-10-23 起）。
@@ -407,9 +444,11 @@ def bot_line_text(line: str) -> str:
 __all__ = [
     "load_short_memory",
     "get_user_history",
+    "get_user_history_timed",
     "get_last_turn_gap_seconds",
     "append_user_history",
     "append_bot_message",
+    "mark_last_bot_modality",
     "is_bot_line",
     "bot_line_text",
     "humanize_gap",

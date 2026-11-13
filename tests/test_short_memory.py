@@ -313,3 +313,35 @@ class TestPerSessionFiles:
         tmp_memory.write_text("{坏掉的 json", encoding="utf-8")
         memory.append_user_history("u1", "在吗", "在")
         assert memory.get_user_history("u1") == ["用户：在吗", "灰泽满：在"]
+
+
+class TestModality:
+    def test_voice_modality_renders_and_strips(self, tmp_memory):
+        memory.append_user_history("u", "在吗", "晚安啦")
+        memory.mark_last_bot_modality("u", "voice")
+        lines = memory.get_user_history_timed("u")
+        assert lines[0] == "用户：在吗"
+        assert lines[-1] == "[语音] 灰泽满：晚安啦"
+        assert memory.is_bot_line(lines[-1])
+        assert memory.bot_line_text(lines[-1]) == "晚安啦"
+        # 标回文字 → 标签消失
+        memory.mark_last_bot_modality("u", "text")
+        assert memory.get_user_history_timed("u")[-1] == "灰泽满：晚安啦"
+
+    def test_mismatched_reply_is_not_marked(self, tmp_memory):
+        """兜底文案没写进历史时，不能把上一条历史误标成本轮语音。"""
+        memory.append_user_history("u", "在吗", "上一轮的话")
+        memory.mark_last_bot_modality("u", "voice", reply_text="这一轮没进历史")
+        assert "[语音]" not in memory.get_user_history_timed("u")[-1]
+
+    def test_modality_survives_time_prefix(self, tmp_memory, monkeypatch):
+        monkeypatch.setattr(memory, "time", _FakeTime)
+        now = _FakeTime.time()
+        _write(tmp_memory, {"u": [
+            {"t": now - 3600, "text": "灰泽满：一小时前那句"},
+        ]})
+        memory.mark_last_bot_modality("u", "voice")
+        line = memory.get_user_history_timed("u")[0]
+        assert line.startswith("[今天 20:15｜1小时前] [语音] 灰泽满：")
+        assert memory.is_bot_line(line)
+        assert memory.bot_line_text(line) == "一小时前那句"

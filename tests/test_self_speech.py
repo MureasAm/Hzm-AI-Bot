@@ -180,3 +180,14 @@ async def test_disabled_returns_original(monkeypatch):
     new_hist, new_msg = await self_speech.annotate_turn(hist, msg, client)
     assert comp.calls == 0
     assert new_hist == hist and new_msg == msg
+
+
+@pytest.mark.asyncio
+async def test_voice_modality_prefix_is_preserved():
+    """历史行的 [语音] 是消息形态，不是语气词；转述后必须保留。"""
+    hist = ["[今天 16:02｜5小时前] [语音] 灰泽满：少来，灰泽满才不和绿冻命中注定呢。"]
+    client, _ = _client('{"gists": ["她否认和对方命中注定。"]}')
+    new_hist, _ = await self_speech.annotate_turn(hist, "嗯", client)
+    assert new_hist[0] == (
+        "[今天 16:02｜5小时前] [语音] 灰泽满（转述）：她否认和对方命中注定。"
+    )

@@ -176,6 +176,11 @@ class TestPromptContent:
         assert "私聊版" in p
         assert "不是对它的评论" in p
 
+    def test_prompt_says_combine_text_and_image(self):
+        """2026-11-11：有配图时正文和图一起组织这句话，不再只当"⬇️"的指代目标。"""
+        p = proactive.PROACTIVE_PROMPT
+        assert "正文和配图一起看" in p
+
     def test_prompt_keeps_the_no_invention_rule(self):
         """原文里没有的不许补——这条是原版就有的经验（"写稿"那例），改版时别弄丢。"""
         p = proactive.PROACTIVE_PROMPT
@@ -280,7 +285,7 @@ class TestContentJudge:
 
 
 class TestDescribeFirstImage:
-    """配图描述：给"⬇️/这个/图片里那个"当指代目标。"""
+    """配图描述：有图就读（2026-11-11 起不再等正文指图）。"""
 
     async def test_no_image_returns_empty(self):
         assert await proactive._describe_first_image(object(), None) == ""
@@ -345,8 +350,8 @@ class TestImageBlock:
         await compose_proactive("晚安，明天见", "B站")
         assert "【这条的配图】" not in captured[-1]
 
-    async def test_no_image_read_when_content_does_not_point_at_it(self, monkeypatch):
-        """内容没指配图 → **不读图、不注入**（避免往上下文里塞无关图的噪声）。"""
+    async def test_image_read_even_when_content_does_not_point_at_it(self, monkeypatch):
+        """有图就读（2026-11-11 用户定）：正文和图一起组织，不再只认"⬇️/这个"。"""
         calls = []
 
         async def spy(client, paths):
@@ -357,8 +362,9 @@ class TestImageBlock:
         monkeypatch.setattr(proactive, "_get_clients", lambda: (self._client(captured), object()))
 
         await compose_proactive("今天下雨，出门记得带伞", "B站", image_paths=["x.jpg"])
-        assert calls == []                       # 没读图
-        assert "【这条的配图】" not in captured[-1]
+        assert calls == [["x.jpg"]]              # 读了图
+        assert "【这条的配图】" in captured[-1]
+        assert "正文和配图是同一件事" in captured[-1]
 
     @pytest.mark.parametrize("text", [
         "到这个⬇️里面鲨会儿人", "图里那个是什么", "看这个配图", "👇的链接",

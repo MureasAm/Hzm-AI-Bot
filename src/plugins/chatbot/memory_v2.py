@@ -76,10 +76,17 @@ _SINGLE_VALUED_FACT_KEYS = {
 # 名字类事实的代码闸门（2026-10-19）：模型会把"云子"（网络用语，嫌她不懂/很云）、
 # "我是绿冻"（粉丝身份）、"用户希望被称呼为X"（整句）都当成 preferred_name。
 # 名字必须是**用户明确要求她这样称呼**，且 value 本身像名字。
-_NAME_KEYS = {"preferred_name", "name", "nickname"}
-_NAME_REQUEST_RE = re.compile(r"叫我|称呼我|喊我|管我叫|名字叫|我叫|以后叫|可以叫")
-_NAME_VALUE_OK_RE = re.compile(r"^[一-鿿A-Za-z0-9_\-·]{1,12}$")
+_NAME_KEYS = {"preferred_name", "name", "nickname", "nickname_called",
+              "address_terms", "real_name", "online_name"}
+_NAME_REQUEST_RE = re.compile(
+    r"叫我|称呼我|喊我|管我叫|名字叫|名字是|我叫|本名|真名|网名|曾用名|"
+    r"外号|以前叫|ID是|以后叫|可以叫|首选叫", re.IGNORECASE)
+_NAME_VALUE_OK_RE = re.compile(r"^[一-鿿A-Za-z0-9_\-·、]{1,12}$")
 _NAME_VALUE_BAD_WORDS = ("用户", "希望", "称呼", "自称", "或者", "不叫")
+# 她自己的名字/常见变体：**绝不能**被当成"用户的称呼/本名/网名"。
+# 2026-11-10 实测：990772382 常把"灰泽满"叫成"区泽满"，提取模型把「区泽满」
+# 存成了 address_terms，之后她反过来叫用户"区泽满"。名字类事实必须先过这一关。
+_HER_NAME_TOKENS = ("灰泽满", "灰泽", "泽满", "小满", "满姐", "满神", "灰宝", "hazel")
 
 _KINDS = {"fact", "interaction_preference", "commitment", "request"}
 _ACTIONS = {"upsert", "retract"}
@@ -215,13 +222,19 @@ MEMORY_V2_EXTRACT_PROMPT = """你是灰泽满私聊机器人的记忆候选提�
      - `address_terms`：**他希望灰泽满怎么称呼他**（“叫我学长”“外号是学长、机长”）；多个用「、」写进同一条，一次记全；他改口时用新 value 覆盖。
      - `preferred_name`：**只记当前首选称呼**（他明确说“以后就叫我X”“首选叫X”）；本名/网名不要塞进这里。
      - `her_nickname`：**用户给灰泽满起的称呼**（“叫你灰宝”）。
+     - ⚠️ **方向别搞反**：用户直接叫灰泽满某个词（如“区泽满”“满姐”）是**他对她的称呼**，
+       不是 `address_terms`，更不是他的名字；反复这样叫可以记 `her_nickname`。
+       她的名字和变体（灰泽满、小满、满姐、灰宝、Hazel，以及“区泽满”这类谐音）**绝不能**
+       写进 `address_terms` / `preferred_name` / `real_name` / `online_name`。
    · `preferred_name` / `address_terms` 的 value **只写名字本身**（如“草草子哥”“学长、机长”），
      **不要写成“用户希望被称呼为X”这种整句**——那个句子会被当成名字注入，又长又怪。
      ⚠️ 只有用户**明确要求灰泽满这样称呼他**才记；"我是绿冻/暖冻"是粉丝身份，不是名字；
      "云子""云玩家"是网络用语（说他不懂/很云），不是名字；
      玩梗称呼（"爸爸"）和整句（"用户希望被称呼为X"）都不要记。
    · **用户给灰泽满起的称呼**：key=`her_nickname`，value 只写称呼本身（如"灰宝"）。
-     只在用户明确说"叫你X""就喊你X""可以叫你X吗"时记；这是对她的昵称，不是她的身份设定。
+     用户明确说"叫你X""就喊你X""可以叫你X吗"时记；**用户反复用某个词直接称呼她**
+     （哪怕是在玩谐音/口误，如"区泽满"）也算，记 `her_nickname`。
+     这是对她的昵称，不是她的身份设定。
      ⚠️ 只记这个称呼事实，**不要**借此改变她的自称——她默认仍自称"灰泽满"；
      用户后来说"还是叫灰泽满吧/别叫X了"，对 `her_nickname` 输出 action=retract。
    · temporal_scope：**经历**用 past（可叠加，不倒旧的）；**地域/时区/身份**这类长期成立用 timeless；
@@ -1167,6 +1180,8 @@ def _name_fact_rejection(key: str, value: str, source: dict) -> str:
         return "name_value_not_a_name"
     if any(w in value for w in _NAME_VALUE_BAD_WORDS):
         return "name_value_not_a_name"
+    if any(tok in (value or "").lower() for tok in _HER_NAME_TOKENS):
+        return "name_looks_like_her_name"
     return ""
 
 

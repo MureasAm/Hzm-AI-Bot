@@ -20,8 +20,8 @@
      缺了"写什么"这半边，硬说一句只会说歪或说空。
   ② 生成时的 NULL：模型写着发现**不适合**主动说（纯转发/抽奖/广告/打卡）→ 不发。
 
-**配图也给它看**（`image_paths`）：她在内容里写"⬇️/这个/图片里那个"时指的是配图，
-不给图它就只会拿正文里别的名字瞎填（2026-09-27 实测踩坑）。
+**配图也给它看**（`image_paths`）：2026-11-11 起**有图就读**——正文和图是同一件事的两半，
+模型要按「正文 + 图里明确看得到的」一起组织这句话；只有图是装饰/看不清时才只按正文说。
 
 **投递**（2026-10-23 用户定）：主动发言生成后只发她那句——语音优先，失败/不适合再发文字；
 不再推动态/微博原文，配图随她说的话一起发。`broadcast_proactive` 负责广播：
@@ -163,6 +163,9 @@ PROACTIVE_PROMPT = """你刚在网上发了一条内容。现在要**把这条�
   要挑时区（她人在澳洲、观众在国内），挑错就差几个小时，而原文的相对说法本来就准。
   踩坑（2026-10-11 真实发出）：动态写"好无聊 **10分钟**后来玩会儿游戏吧"，
   那句成了"**十点后**来玩会儿游戏嘛"——把 19:55 说成了 22:00，粉丝按错的时间等了俩小时。
+- ⚠️ **有配图时，正文和配图一起看**：正文讲的事 + 图里明确看得到的看点/内容，
+  合成一句对绿冻有用的话；图里没有的别编，正文没说的也别靠想象补。
+  图只是装饰、看不清、或跟正文对不上时，才只按正文说。
 - ⚠️ **别把内容里两件事揉成一件**：「⬇️ / 这个 / 图片里那个」指的是**配图**，
   不是正文里另外那个名字——拿它去填就会把两件事说混。
   反例（错的）：内容「会到这个⬇️里面鲨会儿人」+ 正文另有"20:00多来玩BanG Dream"
@@ -216,7 +219,7 @@ def judge_enabled() -> bool:
     return os.environ.get("PROACTIVE_JUDGE", "1") != "0"
 
 
-async def content_is_clear(deepseek_client, text: str) -> bool:
+async def content_is_clear(aux_client, text: str) -> bool:
     """这条内容够不够撑起一句主动搭话？（"写不完了"这种说不清的拦下来）
 
     **失败一律放行（True）**：和接话门同一个兜底方向——"该说时不说"比"多说一句"
@@ -242,8 +245,8 @@ async def content_is_clear(deepseek_client, text: str) -> bool:
     prompt = PROACTIVE_JUDGE_PROMPT.format(content=text)
     prompt += terms_hint_block(text, max_terms=2, max_chars=200)
     try:
-        resp = await deepseek_client.chat.completions.create(
-            model=_get_model_name(),
+        resp = await aux_client.chat.completions.create(
+            model=aux_model(_get_model_name()),
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
             max_tokens=200,
@@ -262,11 +265,11 @@ async def content_is_clear(deepseek_client, text: str) -> bool:
 
 
 async def _describe_first_image(vision_client, image_paths) -> str:
-    """第一张配图的视觉描述，给"⬇️/这个/图片里那个"当**指代目标**；失败返回空串。
+    """第一张配图的视觉描述：给主动发言提供「图里有什么」；失败返回空串。
 
-    **只描述、不判断**：这里不管内容对不对，只把图里有什么说清楚——
-    没有它，模型面对一个箭头只能瞎填（实测：她把"到这个⬇️里面鲨会儿人"和正文里
-    另一句"来玩 BanG Dream"揉成了一句，说成"来玩 BanG Dream 顺便鲨会儿人"）。
+    **只描述、不判断**：这里不管内容对不对，只把图里有什么说清楚。
+    2026-11-11 起不再等正文出现「⬇️/这个」才读——正文和图一起进提示词，
+    否则正文只有一句、真正看点全在配图里的动态，她会说得干巴巴或说歪。
 
     不抛异常（与调用方并行跑，抛了会连累整条生成）。
     """
@@ -434,15 +437,15 @@ async def compose_proactive(content: str, source: str = "B站",
     set_llm_route("主动")   # 用量分账：这条链路的调用单独算一档（见 config._ROUTE）
 
     try:
-        deepseek_client, zhipu_client = aux_clients_or(_get_clients)
+        aux_client, zhipu_client = aux_clients_or(_get_clients)
         # 配图描述与"够不够"判断**并行**跑：两者互不依赖，串行等于白等多一次调用。
-        # 且**只在她指了配图时**才读（"到这个⬇️里面"），否则那条描述是纯噪声。
-        want_image = bool(image_paths) and bool(_REFERS_TO_IMAGE_RE.search(text))
+        # **有图就读**（2026-11-11 用户定）：正文和图是同一件事的两半，不能等她写
+        # "⬇️/这个"才看图——很多动态正文只写一句，真正的看点全在配图里。
         desc_task = (asyncio.create_task(_describe_first_image(get_vision_client(), image_paths))
-                     if want_image else None)
+                     if image_paths else None)
         try:
             # 第一道闸：内容自己说不说得清。说不清 → 不发这一句（原文通知照发，信息不丢）。
-            if not await content_is_clear(deepseek_client, text):
+            if not await content_is_clear(aux_client, text):
                 return None
             image_desc = await desc_task if desc_task else ""
         finally:
@@ -452,11 +455,12 @@ async def compose_proactive(content: str, source: str = "B站",
         image_block = ""
         if image_desc:
             image_block = (f"\n【这条的配图】{image_desc}"
-                           f"\n（她内容里写「⬇️」「这个」「图片里那个」时，指的就是这张图）")
+                           f"\n（正文和配图是同一件事：正文说的 + 图里明确看得到的，一起组织这句话；"
+                           f"她写「⬇️」「这个」「图片里那个」时，指的就是这张图）")
         # 素材：跟聊天同一个入口取。
         # `is_user_msg=False`——这条动态是**她自己发的**，不是"用户说的话"，
         # 所以跳过两个前提不成立的层（L3 行为、corpus 的"用户是不是在问她"判）。
-        ctx = await gather_retrieval(text, text, "", deepseek_client, zhipu_client,
+        ctx = await gather_retrieval(text, text, "", aux_client, zhipu_client,
                                      is_user_msg=False)
 
         # 组装：跟聊天同一套（周表 / 当前时间+直播状态 / 名词库 / 偏好 / 核心记忆…）。
@@ -468,7 +472,7 @@ async def compose_proactive(content: str, source: str = "B站",
             core_stories=ctx["core_stories"],
         )
 
-        resp = await deepseek_client.chat.completions.create(
+        resp = await aux_client.chat.completions.create(
             model=aux_model(_get_model_name()),
             messages=messages,
             temperature=0.9,

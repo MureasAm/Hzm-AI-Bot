@@ -49,6 +49,7 @@ FRAME_ORDER = (
     "session", "events", "prev_session", "behaviors", "corpus", "commitment",
     "history", "same_request", "batch", "query_hint",
     "frame_now", "session_time_hint", "mood", "nickname_hint", "daily", "habit",
+    "actions",
 )
 
 REGISTRY: dict[str, KindSpec] = {s.kind: s for s in (
@@ -132,6 +133,9 @@ REGISTRY: dict[str, KindSpec] = {s.kind: s for s in (
              "context_probe.perception_now", "now/perception", 80, "empty", ("now",)),
     KindSpec("guard", "输出侧守卫", "conversation", "turn", "canon", "guard",
              "reply_style/core", "", 0, "omit", ()),
+    KindSpec("actions", "可用动作", "her", "stable", "canon", "always",
+             "core.build_message_list", "actions/main", 120, "omit", ("actions",),
+             "只列能力（语音/表情包），不写什么时候该发；标记由 reply_style 解析"),
     KindSpec("selfref", "自称方式（收尾）", "her", "stable", "canon", "guard",
              "core.build_message_list", "selfref/main", 80, "inject", ("selfref",),
              "每轮最后一句；弱约束，允许少量第一人称（2026-10-27）"),

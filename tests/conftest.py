@@ -52,6 +52,8 @@ def _isolate_local_stores(tmp_path, monkeypatch):
     monkeypatch.setattr(session_memory, "SESSION_DIR", tmp_path / "session")
     monkeypatch.setattr(session_memory, "SESSION_MEMORY_FILE", tmp_path / "session.json")
     monkeypatch.setattr(session_memory, "_migrated", False)
+    # 动作流水（2026-11-11）：测试写动作回执会落到真实 data/action_log.jsonl——同一类坑，收掉。
+    monkeypatch.setattr(session_memory, "ACTION_LOG_FILE", tmp_path / "action_log.jsonl")
     # LLM 用量账本（2026-10-13）：跑用例时调用过 log_cache_usage 就会往
     # data/llm_usage.jsonl 追加——那是**真实花费的账**，不能被测试记录污染。
     monkeypatch.setattr(config, "USAGE_LOG_FILE", tmp_path / "llm_usage.jsonl")
