@@ -8,20 +8,21 @@
 
 ---
 
-| 灰泽满Hazel，永远16岁的风纪委员。<br><br>根据直播内容，以可插拔、循环式的记忆让灰泽满活在私聊环境。 | <img src="assets/img/hazel_stand.png" width="220" alt="灰泽满立绘"> |
-|:---|---:|
+<img src="assets/img/hazel_stand.png" width="220" align="right" alt="灰泽满立绘">
 
-<table>
-  <tr>
-    <td width="64%" valign="middle">
-      <img src="assets/img/chat_demo.png" width="100%" alt="真实聊天记录">
-    </td>
-    <td valign="middle">
-      <p><b>「你会陪我到什么时候呢？」</b></p>
-      <p><b>「会一直在的。<br>只要你们还愿意听灰泽满说话。」</b></p>
-    </td>
-  </tr>
-</table>
+**灰泽满Hazel，永远16岁的风纪委员。**
+
+根据直播内容，以可插拔、循环式的记忆让灰泽满活在私聊环境。
+
+<br clear="right">
+
+<img src="assets/img/chat_demo.png" width="560" align="left" alt="真实聊天记录">
+
+**「你会陪我到什么时候呢？」**
+
+**「会一直在的。只要你们还愿意听灰泽满说话。」**
+
+<br clear="left">
 
 ## 她做到了什么
 
