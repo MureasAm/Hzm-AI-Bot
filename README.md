@@ -8,13 +8,20 @@
 
 ---
 
-| 灰泽满（Hazel），虚拟主播，官方人设是「永远 16 岁的风纪委员」——嘴硬、傲娇、爱自嘲，心里藏着一堆没说出口的话。<br><br>这个仓库做的事，是把她从直播里「搬」到 QQ 里：不是写一段人设让模型演，而是把她说过的话、怎么反应、记得什么，拆成数据，再一点点拼回去。<br><br>目标不是「能聊天」，是「像她」。 | <img src="assets/img/hazel_stand.png" width="220" alt="灰泽满立绘"> |
+| 灰泽满Hazel，永远16岁的风纪委员。<br><br>根据直播内容，以可插拔、循环式的记忆让灰泽满活在私聊环境。 | <img src="assets/img/hazel_stand.png" width="220" alt="灰泽满立绘"> |
 |:---|---:|
 
-<p align="center">
-  <img src="assets/img/chat_demo.png" width="640" alt="真实聊天记录">
-</p>
-<p align="center"><sub>「你会陪我到什么时候呢？」「会一直在的。只要你们还愿意听灰泽满说话。」</sub></p>
+<table>
+  <tr>
+    <td width="64%" valign="middle">
+      <img src="assets/img/chat_demo.png" width="100%" alt="真实聊天记录">
+    </td>
+    <td valign="middle">
+      <p><b>「你会陪我到什么时候呢？」</b></p>
+      <p><b>「会一直在的。<br>只要你们还愿意听灰泽满说话。」</b></p>
+    </td>
+  </tr>
+</table>
 
 ## 她做到了什么
 
