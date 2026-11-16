@@ -145,6 +145,6 @@ docs/                   # 6 份正文 + 历史存档区
 
 ## 最后
 
-一些想表达的内容和调查问卷，详见 [作者手记](ABOUT.md) 
+简单的调查问卷：https://v.wjx.cn/vm/txe5Gze.aspx# 一些想表达的内容，详见 [作者手记](ABOUT.md) 
 
 MIT License © 2026 MureasAm
