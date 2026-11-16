@@ -147,4 +147,7 @@ docs/                   # 6 份正文 + 历史存档区
 
 简单的调查问卷：https://v.wjx.cn/vm/txe5Gze.aspx# 一些想表达的内容，详见 [作者手记](ABOUT.md) 
 
+
+
+如果你是真的就好了...
 MIT License © 2026 MureasAm
