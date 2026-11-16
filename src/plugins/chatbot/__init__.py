@@ -29,6 +29,7 @@ from .constants import AUTO_ACCEPT_FRIEND, PROJECT_ROOT, AT_SELF_MARK
 from .qq_faces import face_name
 from . import bili_bridge  # noqa: F401  导入即注册启动时的后台监听任务
 from . import weibo_bridge  # noqa: F401  导入即注册启动时的微博后台监听任务
+from . import reminders  # noqa: F401  导入即注册启动时的定时提醒轮询
 from . import chat_window
 
 chat = on_message(priority=10, block=True)

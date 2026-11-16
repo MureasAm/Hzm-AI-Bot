@@ -43,6 +43,8 @@ def _isolate(monkeypatch):
     # 不打网络：客户端打桩，检索直接返回空（风格样本那条路本来就允许失败）
     monkeypatch.setattr(proactive, "_get_clients",
                         lambda: (_StubClient(content='{"unused": 1}'), object()))
+    # 单测统一走主链桩；主回复专用链的选路由生产配置负责
+    monkeypatch.setattr(proactive, "reply_enabled", lambda: False)
 
     # 检索现在在 core.gather_retrieval 里（主动发言走主链路），所以打桩打在 core 上
     async def _no_embed(*a, **k):
@@ -99,6 +101,12 @@ class TestGenerate:
         # 偶尔会多写一句解释——私聊里蹦出一大段很出戏
         _with_llm(monkeypatch, content="睡了，晚安。\n（这句是解释为什么要睡了）")
         assert await compose_proactive("发了个晚安动态") == "睡了，晚安。"
+
+    @pytest.mark.asyncio
+    async def test_planning_output_is_dropped(self, monkeypatch):
+        # 主动发言没有主回复的重写兜底：命中规划/旁白就整条不发，退回原文通知
+        _with_llm(monkeypatch, content="这句先接住，系统要求尽量别再叫名字，灰泽满可以回：那就好。")
+        assert await compose_proactive("今天发了个动态") is None
 
     @pytest.mark.asyncio
     async def test_empty_content_returns_none(self, monkeypatch):

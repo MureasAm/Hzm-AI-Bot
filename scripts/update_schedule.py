@@ -2,6 +2,10 @@
 # -*- coding: utf-8 -*-
 """半自动更新灰泽满周表：识图 OCR 一张"每周直播时间表"图 → 写 persona/injection/02_schedule/schedule.json。
 
+⚠️ 2026-11-17 起，B 站置顶周表图变化时 bot 会自动调用
+`src/plugins/chatbot/schedule_ocr.py` 做同样的 OCR 并写 weekly（还会清周表缓存，无需重启）。
+本脚本保留给**手动预览/兜底**；改 PROMPT 或清洗规则时，两边要同步。
+
 识图走阿里云百炼千问（DASHSCOPE，D:\\CLAUDE CODE\\.env 里配好的 key，和 vision.js 同一套），
 不用手动把图上的字抄下来。
 

@@ -271,6 +271,10 @@ MEMORY_V2_EXTRACT_PROMPT = """你是灰泽满私聊机器人的记忆候选提�
        记忆里却只有 `address_style` 一条。这类是用户对相处方式的**明确要求**，必须记。）
 3. commitment：灰泽满本轮明确答应用户、需要以后兑现的事。承诺只从灰泽满回复中提取，
    用户自己的计划不是灰泽满的承诺；actor 必须是 assistant，explicit 必须为 true。
+   · **定时提醒**：如果本轮有【提醒请求】数据（见底部 reminder_block），且灰泽满在回复里
+     明确答应，输出一条 commitment；value 写**提醒内容本身**（如「扔垃圾」），
+     另外带 `"due_at": "<提醒请求里给的 ISO8601>"`——**直接抄，不要自己换算时间**，
+     也不要把时间重复写进 value。没有明确答应（只回“嗯/再说吧/没有承诺”）就不要输出。
 4. request：用户希望灰泽满**以后**怎么对待他的长期请求（频率/方式类），但现有
    interaction_preference 表达不了的。比如“以后多叫叫我名字”“每天多抱抱我”“你以后主动点”。
    · key 固定 `request_<target>`，target 只能是 address / affection / initiative / tone / general；
@@ -361,6 +365,7 @@ temporal_scope 必须是 past/current/future/timeless：用户过去经历用 pa
       "actor": "assistant",
       "target": "address|affection|initiative|tone|general（仅 request）",
       "scope": "standing|session（仅 request）",
+      "due_at": "ISO8601（仅定时提醒的 commitment；其它条目省略或空串）",
       "habit": {{"type": "routine|interaction", "cadence": "daily|weekly|monthly|regular|once|unknown", "period": "morning|noon|afternoon|evening|night|any|unknown", "cues": ["2-8个短触发词"]}}
     }}
   ],
@@ -392,6 +397,7 @@ temporal_scope 必须是 past/current/future/timeless：用户过去经历用 pa
 观测时间：{observed_at}
 证据会话：{session_id}
 
+{reminder_block}
 【这个人已经记过的（kind/key=value）】
 {current_summary}
 
@@ -524,13 +530,26 @@ def build_extraction_prompt(
     session_id: str,
     observed_at: datetime,
     current_events: str = "（无）",
+    reminder_hint: dict | None = None,
 ) -> str:
     """Render the strict write-path prompt with bounded untrusted text."""
+    reminder_block = "【提醒请求】（无）"
+    if isinstance(reminder_hint, dict) and not reminder_hint.get("ambiguous") \
+            and reminder_hint.get("due_at"):
+        what = _bounded_text(reminder_hint.get("what"), 200)
+        due = _bounded_text(reminder_hint.get("due_at"), 60)
+        reminder_block = (
+            f"【提醒请求】已确认：due_at={due}，内容={what}。"
+            "如果灰泽满在回复里明确答应，输出一条 commitment（value 写提醒内容本身，"
+            f"不要带时间；另带 \"due_at\": \"{due}\"）；"
+            "没有明确答应就不要输出。"
+        )
     return MEMORY_V2_EXTRACT_PROMPT.format(
         observed_at=observed_at.isoformat(),
         session_id=_bounded_text(session_id, MAX_SESSION_ID_CHARS),
         current_summary=_bounded_text(current_summary, 1200) or "（无）",
         current_events=_bounded_text(current_events, 800) or "（无）",
+        reminder_block=reminder_block,
         user_text=_bounded_text(user_text, 1000),
         assistant_text=_bounded_text(assistant_text, 1000),
     )
@@ -572,6 +591,7 @@ async def extract_and_ingest(
     session_id: str,
     observed_at: datetime | None = None,
     zhipu_client: Any = None,
+    reminder_hint: dict | None = None,
 ) -> list[dict]:
     """Run one strict shadow extraction; failures never escape to chat flow."""
     observed_at = observed_at or datetime.now()
@@ -583,6 +603,7 @@ async def extract_and_ingest(
         current_events=event_memory.recent_summary(user_id),
         session_id=session_id,
         observed_at=observed_at,
+        reminder_hint=reminder_hint,
     )
     prompt += terms_hint_block(user_text, max_terms=2, max_chars=200)
     try:
@@ -693,6 +714,12 @@ def _commitment_expires_at(item: dict, now: datetime) -> str | None:
     """
     if item.get("kind") != "commitment":
         return None
+    due = _iso(item.get("due_at"))
+    if due is not None:
+        if due.tzinfo is not None:
+            due = due.astimezone().replace(tzinfo=None)
+        # 定时提醒：至少留到到点后 1 小时，别被普通承诺 TTL 提前清掉。
+        return (max(due, now) + timedelta(hours=1)).isoformat()
     days = _VALID_FOR_DAYS.get(str(item.get("valid_for") or ""))
     if days:
         return (now + timedelta(days=days)).isoformat()
@@ -1338,6 +1365,14 @@ class ShadowMemoryStore:
             if item.get("actor") != "assistant" or not explicit:
                 return None, "assistant_commitment_required"
 
+        due_at = ""
+        if kind == "commitment":
+            parsed_due = _iso(_bounded_text(item.get("due_at"), 64))
+            if parsed_due is not None:
+                if parsed_due.tzinfo is not None:
+                    parsed_due = parsed_due.astimezone().replace(tzinfo=None)
+                due_at = parsed_due.isoformat()
+
         normalized = {
             "kind": kind,
             "key": key,
@@ -1349,6 +1384,8 @@ class ShadowMemoryStore:
             "valid_for": valid_for,
             "source": normalized_source,
         }
+        if due_at:
+            normalized["due_at"] = due_at
         if kind == "request":
             normalized["target"] = request_target
             normalized["scope"] = request_scope
@@ -1448,6 +1485,8 @@ class ShadowMemoryStore:
                     if item["kind"] == "request":
                         existing["target"] = item.get("target")
                         existing["scope"] = item.get("scope")
+                    if item.get("due_at"):
+                        existing["due_at"] = item["due_at"]
                     expires_at = (_fact_expires_at(item, now)
                                   or _commitment_expires_at(item, now)
                                   or _request_expires_at(item, now))
@@ -1484,6 +1523,8 @@ class ShadowMemoryStore:
                     if item["kind"] == "request":
                         existing["target"] = item.get("target")
                         existing["scope"] = item.get("scope")
+                    if item.get("due_at"):
+                        existing["due_at"] = item["due_at"]
                     expires_at = (_fact_expires_at(item, now)
                                   or _commitment_expires_at(item, now)
                                   or _request_expires_at(item, now))
@@ -1574,6 +1615,60 @@ class ShadowMemoryStore:
                 continue
             active.append(memory)
         return active
+
+    def due_commitments(self, now: datetime | None = None) -> list[dict]:
+        """到点、还没投递过的 commitment（定时提醒的唯一读入口）。
+
+        提醒不另存一份文本：调度器读的就是 commitment；发送后
+        `mark_reminder_delivered` 把它标成 done，注入层就不会再当"未完成约定"。
+        """
+        now = now or datetime.now()
+        if now.tzinfo is not None:
+            now = now.astimezone().replace(tzinfo=None)
+        out: list[dict] = []
+        with self._lock:
+            state = self._load()
+        for user_id, user in (state.get("users") or {}).items():
+            for memory in (user.get("memories") or []):
+                if memory.get("kind") != "commitment":
+                    continue
+                if memory.get("status") != "active" or memory.get("reminded_at"):
+                    continue
+                due = _iso(memory.get("due_at"))
+                if due is None:
+                    continue
+                if due.tzinfo is not None:
+                    due = due.astimezone().replace(tzinfo=None)
+                if due <= now:
+                    rec = json.loads(json.dumps(memory, ensure_ascii=False))
+                    rec["user_id"] = user_id
+                    rec["session_id"] = (
+                        (memory.get("source") or {}).get("session_id")
+                        or (memory.get("session_ids") or [""])[-1]
+                    )
+                    out.append(rec)
+        out.sort(key=lambda m: m.get("due_at") or "")
+        return out
+
+    def mark_reminder_delivered(self, user_id: str, memory_id: str,
+                                now: datetime | None = None) -> bool:
+        now = now or datetime.now()
+        if now.tzinfo is not None:
+            now = now.astimezone().replace(tzinfo=None)
+        with self._lock:
+            state = self._load()
+            user = (state.get("users") or {}).get(str(user_id))
+            if not user:
+                return False
+            for memory in (user.get("memories") or []):
+                if memory.get("id") != memory_id:
+                    continue
+                memory["reminded_at"] = now.isoformat()
+                memory["status"] = "done"
+                user["updated_at"] = now.isoformat()
+                self._save(state)
+                return True
+        return False
 
     def _select_facts(self, active: list[dict], query: str) -> list[dict]:
         # `habit_*` 单独走 `_preference_lines` 的“固定习惯”段——别混进通用事实里被

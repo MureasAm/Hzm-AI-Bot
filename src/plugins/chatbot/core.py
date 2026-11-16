@@ -29,7 +29,7 @@ from .retrieval import (
     resolve_associations,
 )
 from .corpus_judge import judge_corpus
-from .chatlog import log_corpus_hits, log_block_hits, log_injection_trace
+from .chatlog import log_corpus_hits, log_block_hits, log_injection_trace, log_leak_guard
 from .config import get_llm_route, get_flag
 from .constants import SPLIT_DELAY_MIN_MS, SPLIT_DELAY_MAX_MS  # noqa: F401 — test_core 校验分段延迟上下限时读它
 from . import context_probe
@@ -46,7 +46,7 @@ from .routing import (
 )
 from .reply_style import (
     clean_reply, is_echo_reply, is_emotion_only_query, uses_time_hook, starts_with_name,
-    uses_hollow_opener, repeated_formula, is_meta_silence,
+    uses_hollow_opener, repeated_formula, is_meta_silence, planning_leak_reason,
     extract_action_tags, Reply,
 )
 from .session_memory import (
@@ -95,6 +95,7 @@ else:
 # ==================== 🛠️ API 客户端（惰性初始化） ====================
 # 挪到了 config.py（基础设施层）。core 从这里 import，routing 也从 config 取，避免循环依赖。
 from .config import log_cache_usage, _get_clients, _get_model_name, extract_chat_content  # noqa: E402
+from .config import _get_reply_clients, _get_reply_model  # noqa: E402  —— 主回复专用链（2026-11-14）
 from .config import aux_clients_or, aux_model  # noqa: E402  —— 辅助链（2026-10-29）
 
 
@@ -919,12 +920,49 @@ def is_fallback_reply(text: str) -> bool:
     return t in (_FALLBACK_REPLY, _FALLBACK_SILENT) or t in _LEGACY_FALLBACKS
 
 
+_PLANNING_REWRITE_PROMPT = (
+    "上一次回复混入了分析、计划或旁白，已经被丢弃。"
+    "现在只输出灰泽满要直接发给对方的那句话：不要复述任何规则、不要列举备选回复、"
+    "不要写「参考腔调」、不要评价自己的回复，也不要写动作或神态。"
+)
+
+
+async def _rewrite_planning_reply(client, messages: list, original: str, reason: str) -> str:
+    """规划式泄露的兜底：带一条强约束重写一次；仍不合格就回兜底文案。
+
+    为什么重写而不是删掉命中的句子：泄露往往**整条都是草稿**，没有可保留的台词。
+    为什么不是直接兜底：偶发故障不该让用户看到"她不在"，先给模型一次机会。
+    """
+    try:
+        retry_messages = list(messages) + [
+            {"role": "system", "content": _PLANNING_REWRITE_PROMPT}]
+        response = await client.chat.completions.create(
+            model=_get_reply_model(),
+            messages=retry_messages,
+            temperature=0.6,
+            frequency_penalty=CHAT_FREQUENCY_PENALTY,
+            max_tokens=CHAT_MAX_TOKENS,
+            **THINKING_DISABLED,
+        )
+        log_cache_usage(response, "主回复重写")
+        rewritten = extract_chat_content(response)
+        if rewritten and not planning_leak_reason(rewritten):
+            log_leak_guard(original, reason, rewritten, "rewritten")
+            return rewritten
+        log_leak_guard(original, reason, rewritten, "still_bad")
+        return _FALLBACK_REPLY
+    except Exception as e:
+        print(f"⚠️ 规划式回复重写失败: {e}")
+        log_leak_guard(original, reason, "", "error")
+        return _FALLBACK_REPLY
+
+
 async def generate_reply(messages: list) -> str:
     """调用 DeepSeek 生成回复；失败时返回兜底文案（调用方负责"别把它记进记忆"）。"""
     try:
-        deepseek_client, _ = _get_clients()
+        deepseek_client, _ = _get_reply_clients()
         response = await deepseek_client.chat.completions.create(
-            model=_get_model_name(),
+            model=_get_reply_model(),
             messages=messages,
             temperature=CHAT_TEMPERATURE,
             frequency_penalty=CHAT_FREQUENCY_PENALTY,
@@ -936,6 +974,10 @@ async def generate_reply(messages: list) -> str:
         #    不打出这一行，"缓存到底命中多少"根本没法归因。
         log_cache_usage(response, "主回复")
         reply = extract_chat_content(response)
+        leak_reason = planning_leak_reason(reply)
+        if leak_reason and get_flag("LEAK_GUARD", "1") != "0":
+            print(f"⚠️ 主回复混入规划/旁白（{leak_reason}），丢弃重写")
+            reply = await _rewrite_planning_reply(deepseek_client, messages, reply, leak_reason)
     except Exception as e:
         # 异常原文不再塞进回复：那是内部信息，会原样发给 QQ 上的每个用户。
         # 打到控制台即可，她这边只回一句人话。
@@ -949,21 +991,27 @@ async def update_memory_v2_shadow_task(
     user_msg: str,
     reply: str,
     session_id: str,
+    reminder_hint: dict | None = None,
 ) -> list[dict]:
     """Extract one private turn into the opt-in V2 shadow store.
 
     This path is deliberately fail-closed and has no influence on the reply.
     Keeping the feature check inside the task also makes direct/offline callers
     safe when the environment flag is absent.
+
+    `reminder_hint`：L3 判出的定时提醒请求。命中且时间明确时**绕过成本闸门**——
+    "18:20 提醒我"通常很短，正常会被 worth_extracting 拦掉，但这条必须落库。
     """
     if not memory_v2.shadow_enabled():
         return []
     msg = (user_msg or "").strip()
     if not msg or is_emoji_msg(msg):
         return []
+    force_extract = bool(reminder_hint and not reminder_hint.get("ambiguous"))
     # 成本闸门（2026-10-27）：短寒暄/表情/纯情绪不值得一次 3k prompt 的提取；
     # 长消息和带事实/事件/偏好线索的一律放行。MEMORY_EXTRACT_GATE=0 可回退。
-    if get_flag("MEMORY_EXTRACT_GATE", "1") != "0" and not memory_v2.worth_extracting(msg):
+    if not force_extract and get_flag("MEMORY_EXTRACT_GATE", "1") != "0" \
+            and not memory_v2.worth_extracting(msg):
         return []
     try:
         deepseek_client, zhipu_client = _get_clients()
@@ -979,6 +1027,7 @@ async def update_memory_v2_shadow_task(
             assistant_text=reply,
             session_id=session_id,
             zhipu_client=zhipu_client,
+            reminder_hint=reminder_hint,
         )
     except Exception:
         return []
@@ -1176,7 +1225,8 @@ async def gather_retrieval(query_text: str, retrieval_query: str, history_text: 
     """
     behaviors = load_persona_rules()
     result = {"fused_items": [],
-              "preference_items": [], "core_stories": [], "same_request": None}
+              "preference_items": [], "core_stories": [], "same_request": None,
+              "reminder": None}
 
     # 纯图片消息（无文字）不做检索：让灰泽满直接评价图片，避免语料/行为劫持图片内容
     # 纯表情消息（emoji/[表情：xx]）也不做语义检索：表情只表达情绪不表达话题，
@@ -1226,6 +1276,8 @@ async def _fill_retrieval(result: dict, query_text: str, retrieval_query: str, h
         if int(sr.get("count") or 1) >= 2:
             result["same_request"] = sr
             print(f"[连续索要] 第 {sr['count']} 轮：{sr.get('what') or '（未说明）'}")
+        if l3.get("reminder"):
+            result["reminder"] = l3["reminder"]
         behavior_item = select_behavior_item(query_text, l3["behavior"], behaviors)
         behavior_items = [behavior_item] if behavior_item else []
     else:
@@ -1256,6 +1308,24 @@ async def _fill_retrieval(result: dict, query_text: str, retrieval_query: str, h
     result["preference_items"] = retrieve_preferences(
         retrieval_query or query_text, extra_ids=extra_preference_ids)
     result["core_stories"] = retrieve_core_stories(retrieval_query or query_text, query_vector)
+
+
+def _reminder_request_note(req: dict | None) -> str:
+    """把 L3 判出的提醒请求渲染成一条给主模型的短提示。
+
+    - 时间明确：让她在回复里**明确确认一次**，这样 memory_v2 才会抽到 commitment；
+    - 时间不明确：让她先反问，**不要**拿一个猜的时间去答应。
+    """
+    if not isinstance(req, dict) or not req.get("what"):
+        return ""
+    what = str(req.get("what") or "").strip()
+    if req.get("ambiguous"):
+        clarify = str(req.get("clarify") or "是几点提醒你？").strip()
+        return (f"【提醒请求】用户想让你提醒他：{what}；时间不明确。"
+                f"先在回复里反问（{clarify}），不要直接答应具体时间。")
+    when = str(req.get("when_hint") or req.get("due_at") or "到点").strip()
+    return (f"【提醒请求】用户想让你在 {when} 提醒他：{what}。"
+            f"回复里明确确认一次（例如“好，{when}提醒你”），不要只回“嗯”。")
 
 
 async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
@@ -1390,6 +1460,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     fused_items = ctx["fused_items"]
     preference_items = ctx["preference_items"]
     core_stories = ctx["core_stories"]
+    reminder_req = ctx.get("reminder")
 
     wiki_context = ""
     if _wiki_task is not None:
@@ -1528,6 +1599,13 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         if parts:
             reminders_context = "【本轮提醒】\n" + "\n".join(parts)
         commitment_context = habit_hint = name_budget = nickname_hint = ""
+
+    # 定时提醒请求（2026-11-17）：L3 判出后必须让她明确确认一次，
+    # memory_v2 才会把这条当成 commitment 落库并带 due_at。
+    reminder_note = _reminder_request_note(reminder_req)
+    if reminder_note:
+        reminders_context = (reminders_context + "\n" + reminder_note).strip() \
+            if reminders_context else "【本轮提醒】\n" + reminder_note
 
     # 动态段：时间/天气/直播/话题/情绪；历史与连续索要稍后并进来。
     state_parts: list = []
@@ -1806,6 +1884,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     if not is_group:  # 群会话不建用户记忆卡
         spawn(update_memory_v2_shadow_task(
             user_id, record_msg, no_tag_reply, memory_scope_id,
+            reminder_hint=reminder_req,
         ))
 
     return Reply(no_tag_reply, actions)

@@ -36,6 +36,7 @@ from nonebot import get_bot, get_driver
 from .bg import spawn
 from .constants import BILI_STATE_FILE
 from .proactive import compose_proactive, broadcast_proactive
+from .schedule_ocr import auto_update_schedule
 from . import _bridge_common
 from .config import get_bili_uid, get_bili_sessdata, get_notify_whitelist, get_bili_interval
 
@@ -871,6 +872,10 @@ class BiliMonitor:
         except Exception as e:
             print(f"⚠️ 周表图下载失败（本轮不推）: {e}")
             return False
+        # 2026-11-17：新周表图先 OCR 写 schedule.json，再生成主动发言——
+        # 这样本轮提示词里已经是最新周表，且运行中的 bot 下一轮就能用（清缓存，免重启）。
+        # 识别失败只记日志，旧表保留，图照常推送。
+        await auto_update_schedule(path)
         said = None
         try:
             said = await compose_proactive("本周周表更新了", "B站",

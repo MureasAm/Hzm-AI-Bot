@@ -8,6 +8,7 @@
 """
 import json
 import re
+import datetime
 from .constants import THINKING_DISABLED, LEGENDARY_FILE
 from .config import log_cache_usage, _get_clients, _get_model_name, extract_chat_content
 from .config import aux_clients_or, aux_model  # 辅助链（2026-10-29）
@@ -143,20 +144,35 @@ BEHAVIOR_CLASSIFY_PROMPT = """你是{role_name}的意图分类器。判断用户
     （隔了几小时、或者跨了天），那**不算"连着"**——只从**同一场对话内**的连续几轮算起。
     上一句在几小时前 → 这轮就是 `count` 1。
   · `what` 写「在要什么」（如「要语音」「要被叫宝宝」「要一个表态」），不要知道就不写。
+★ 再判一件事：**这是不是一个定时提醒请求**（reminder）。
+  · 用户在最近几轮里让你在某个时间提醒 / 叫他 / 到点通知他——包括分几次说清楚的：
+    例：「一会提醒我扔垃圾」→「20的时候」→「18:20的时候」合起来是「18:20 提醒他扔垃圾」。
+  · 时间不是明确钟点时（「20的时候」可能是 20:00，也可能是 20 分钟后）→ ambiguous=true，
+    clarify 写一句要反问的话，**不要自己猜**。
+    ⚠️ **裸数字规则**：「20」「20 的时候」「20 分」这种没有「点/冒号/分」的单独数字，
+    一律 ambiguous=true，反问「是 20:00 还是 20 分钟后？」；
+    只有「20点」「20:00」「18:20」「八点二十」才算明确钟点。
+    （实测 2026-11-15：用户先说「一会提醒我扔垃圾」→「20的时候」→「18:20的时候」，
+      模型把「20的时候」猜成 20:00，实际是 18:20。别重犯。）
+  · 没有提醒请求 → null。
+  · 输出：`"reminder": {{"when_hint": "18:20", "what": "提醒他扔垃圾",
+    "due_at": "2026-11-15T18:20:00+08:00", "ambiguous": false, "clarify": ""}}` 或 null。
+    due_at 用当前时间的时区换算成绝对时间；换算不了就把 due_at 留空并 ambiguous=true。
+当前时间：{now}
 最近对话：
 {history}
 
 用户消息：{user_msg}
 
-只输出 JSON：{{"behavior": "<行为name>" 或 null, "same_request": {{"what": 「在要什么」, "count": 连续轮数}}}}"""
+只输出 JSON：{{"behavior": "<行为name>" 或 null, "same_request": {{"what": 「在要什么」, "count": 连续轮数}}, "reminder": <提醒对象或 null>}}"""
 
 
 
 async def classify_l3(deepseek_client, user_msg: str, history_text: str,
-                      behaviors: list) -> dict:
-    """一次调用判出：行为名（0/1 个）+ 连续索要轮数。
+                      behaviors: list, now: datetime.datetime | None = None) -> dict:
+    """一次调用判出：行为名（0/1 个）+ 连续索要轮数 + 可选定时提醒。
 
-    返回 {"behavior": str, "same_request": {"what": str, "count": int}}；
+    返回 {"behavior": str, "same_request": {...}, "reminder": {...}|None}；
     **失败/拿不准返回空**（不触发任何东西）。返回的名字必须是数据里的真值（防模型编造）。
 
     ⚠️ 判据措辞是本模块最要紧的东西（改词=改行为，实测过判据稍动结果就从 0% 跳到 74%）。
@@ -165,10 +181,13 @@ async def classify_l3(deepseek_client, user_msg: str, history_text: str,
        输出的 `phrases` 字段、`phrase_groups` 参数、`PHRASE_SECTION` 全部拆掉。
        留着死字段只会浪费 token、并给 JSON 输出添乱（踩过：加字段后 40 token 截断过 JSON）。
        现在 `history_text` 由调用方传**带时间标签**的版本（`[昨天 17:11｜28小时前] 用户：…`），
-       same_request 靠它判断"是不是同一场对话内的连续索要"。
+       same_request 靠它判断"是不是同一场对话内的连续索要"；reminder 也靠它把分几次说的
+       「一会提醒我扔垃圾」→「20的时候」→「18:20的时候」拼成一个完整请求。
     """
+    now = now or datetime.datetime.now().astimezone()
+    empty = {"behavior": "", "same_request": {"what": "", "count": 1}, "reminder": None}
     if not user_msg:
-        return {"behavior": "", "same_request": {"what": "", "count": 1}}
+        return empty
 
     defs = []
     for b in behaviors or []:
@@ -186,7 +205,7 @@ async def classify_l3(deepseek_client, user_msg: str, history_text: str,
     prompt = BEHAVIOR_CLASSIFY_PROMPT.format(
         behavior_defs="\n".join(defs) or "（无）",
         history=history_text or "（无）", user_msg=user_msg,
-        role_name="灰泽满",
+        role_name="灰泽满", now=now.isoformat(timespec="minutes"),
     )
     prompt += terms_hint_block(user_msg)
     try:
@@ -194,11 +213,11 @@ async def classify_l3(deepseek_client, user_msg: str, history_text: str,
             model=_get_model_name(),
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
-            # ⚠️ 别调小：加了 same_request 字段后输出变长，40 token 会把 JSON 从中间截断
+            # ⚠️ 别调小：same_request + reminder 字段会让输出变长，40 token 会把 JSON 截断
             # （实测 raw = '…"same_request": {"what": "要她说带颜色的话（造黄桃）' 断在这儿）
             # → json.loads 报 "Expecting ',' delimiter"，而**每轮都调**，影响所有消息。
             # GLM-5.3-Flash 强制思考时再留余量。
-            max_tokens=320,
+            max_tokens=420,
             **THINKING_DISABLED,
         )
         log_cache_usage(resp, "行为分类")
@@ -211,10 +230,11 @@ async def classify_l3(deepseek_client, user_msg: str, history_text: str,
         names = {b.get("name") for b in (behaviors or [])}
         behavior = str(parsed.get("behavior") or "").strip()
         return {"behavior": behavior if behavior in names else "",
-                "same_request": _parse_same_request(parsed.get("same_request"))}
+                "same_request": _parse_same_request(parsed.get("same_request")),
+                "reminder": _parse_reminder(parsed.get("reminder"), now)}
     except Exception as e:
         print(f"⚠️ L3 意图分类失败（降级不触发）: {e}")
-        return {"behavior": "", "same_request": {"what": "", "count": 1}}
+        return empty
 
 
 def _repair_llm_json(text: str) -> str:
@@ -327,6 +347,43 @@ def _parse_same_request(raw) -> dict:
     except (TypeError, ValueError):
         n = 1
     return {"what": what, "count": max(1, min(n, 99))}
+
+
+def _parse_reminder(raw, now: datetime.datetime) -> dict | None:
+    """解析 L3 的 reminder。拿不准/缺内容返回 None；时间不明确则 ambiguous=True。
+
+    due_at 必须是未来 30 天内的绝对时间；模型给的格式不对/超出范围一律降级成
+    ambiguous（让回复先反问），**不拿一个可能错的绝对时间去排提醒**。
+    """
+    if not isinstance(raw, dict):
+        return None
+    what = str(raw.get("what") or "").strip()
+    if not what:
+        return None
+    when_hint = str(raw.get("when_hint") or "").strip()
+    due = None
+    raw_due = str(raw.get("due_at") or "").strip()
+    if raw_due:
+        try:
+            due = datetime.datetime.fromisoformat(raw_due.replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            due = None
+    if due is not None:
+        if due.tzinfo is None:
+            due = due.replace(tzinfo=now.tzinfo)
+        if not (now < due <= now + datetime.timedelta(days=30)):
+            due = None
+    ambiguous = bool(raw.get("ambiguous")) or due is None
+    clarify = str(raw.get("clarify") or "").strip()
+    if ambiguous and not clarify:
+        clarify = "是几点提醒你？"
+    return {
+        "when_hint": when_hint[:40],
+        "what": what[:80],
+        "due_at": "" if ambiguous or due is None else due.isoformat(),
+        "ambiguous": ambiguous,
+        "clarify": clarify[:80],
+    }
 
 
 async def classify_behavior(deepseek_client, user_msg: str, history_text: str, behaviors: list) -> str:

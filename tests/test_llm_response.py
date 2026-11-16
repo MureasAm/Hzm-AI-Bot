@@ -168,11 +168,10 @@ class TestModelFallbackChain:
 
     # ---- 切换的粘性 ----
 
-    async def test_failed_layer_is_skipped_within_the_window(self, monkeypatch):
-        """一次失败就全线切走：窗口内不再去撞那一层（用户 2026-10-14 第一轮的要求）。
+    async def test_failed_layer_stays_until_threshold(self, monkeypatch):
+        """一次失败不再全网切走：连续 3 次失败才打开这一层（2026-11-13 用户定）。
 
-        原来"冷却 60 秒再试"对真实流量等于没做——聊天轮次本来就好几分钟一次，
-        每次调用都还会去撞一次那条死线路、白等两三秒。
+        每次失败本轮仍然降级（保证有回复），但后续调用继续先试这一层。
         """
         monkeypatch.setattr(config, "_CHAIN_RETRY_SEC", 600.0)
         first = []
@@ -183,7 +182,13 @@ class TestModelFallbackChain:
         await chain.create(model="m1", messages=[])
         n = len(first)
         await chain.create(model="m1", messages=[])
-        assert len(first) == n, "窗口内不该再去撞那条死线路"
+        assert len(first) == n + 1, "第二次调用仍该先试原层"
+        assert 0 not in chain._down_until, "两次失败还不够，不该下线"
+        await chain.create(model="m1", messages=[])
+        assert 0 in chain._down_until, "连续第三次失败才打开"
+        n = len(first)
+        await chain.create(model="m1", messages=[])
+        assert len(first) == n, "打开后窗口内不再撞它"
 
     async def test_default_layer_does_not_stick_forever(self, monkeypatch):
         """**但它必须会自己回来**（用户 2026-10-14 第二轮，当天就发现的问题）。
@@ -198,7 +203,8 @@ class TestModelFallbackChain:
             (TestModelFallbackChain._client(None, RuntimeError("500")), "m1", "m1"),
             (TestModelFallbackChain._client("二层的"), "m2", "m2"),
         ])
-        await chain.create(model="m1", messages=[])
+        for _ in range(3):
+            await chain.create(model="m1", messages=[])
         left = chain._down_until[0] - time.monotonic()
         assert left != float("inf"), "不能是「永远不回头」"
         assert 0 < left <= 601, f"该是 10 分钟量级的回头窗口，实际 {left:.0f}s"
@@ -214,9 +220,10 @@ class TestModelFallbackChain:
         monkeypatch.setattr(config, "_CHAIN_FLAKY_SEC", 60.0)
         chain = _ChainCompletions([(TestModelFallbackChain._client(SimpleNamespace(choices=None)), "m1", "m1"),
                                    (TestModelFallbackChain._client("二层的"), "m2", "m2")])
-        await chain.create(model="m1", messages=[])
+        for _ in range(2):
+            await chain.create(model="m1", messages=[])
         left = chain._down_until[0] - time.monotonic()
-        assert 0 < left <= 61, f"软失败该用短窗口，实际 {left:.0f}s"
+        assert 0 < left <= 61, f"坏形状连续 2 次该用短窗口，实际 {left:.0f}s"
 
     async def test_recovering_layer_is_announced(self, capsys):
         """**回升**也要报一句——不然"回到 gemini 了"在日志里看不出来（降级是黑箱）。"""
@@ -276,9 +283,18 @@ class TestModelFallbackChain:
     async def test_all_cooling_single_flight_probe(self):
         """全挂时同一层只放一个探测请求；并发会自然分散到下一层。"""
         one, two, three = [], [], []
-        chain = self._chain(("m1", None, RuntimeError("一"), one),
-                            ("m2", None, RuntimeError("二"), two),
-                            ("m3", None, RuntimeError("三"), three))
+
+        def _slow(name, calls):
+            async def create(**kw):
+                calls.append(kw)
+                await asyncio.sleep(0.02)      # 让三个请求真正同时在途
+                raise RuntimeError(name)
+            return SimpleNamespace(chat=SimpleNamespace(
+                completions=SimpleNamespace(create=create)))
+
+        chain = _ChainCompletions([(_slow("一", one), "m1", "m1"),
+                                   (_slow("二", two), "m2", "m2"),
+                                   (_slow("三", three), "m3", "m3")])
         now = time.monotonic()
         chain._down_until.update({0: now + 10, 1: now + 20, 2: now + 30})
         await asyncio.gather(*[chain.create(model="m1", messages=[]) for _ in range(3)],
@@ -316,9 +332,10 @@ class TestModelFallbackChain:
         monkeypatch.setattr(config, "_CHAIN_FLAKY_SEC", 60.0)
         chain = _ChainCompletions([(TestModelFallbackChain._client(None, self._rate_limited()), "m1", "m1"),
                                    (TestModelFallbackChain._client("二层的"), "m2", "m2")])
-        await chain.create(model="m1", messages=[])
+        for _ in range(3):
+            await chain.create(model="m1", messages=[])
         left = chain._down_until[0] - time.monotonic()
-        assert 0 < left <= 61, f"429 该用短窗口，实际 {left:.0f}s"
+        assert 0 < left <= 61, f"429 连续 3 次该用短窗口，实际 {left:.0f}s"
 
     async def test_rate_limit_is_logged_as_throttling(self, capsys):
         """"限流"和"报错"在日志上要分得开——不然会被当成线路挂了。"""
@@ -435,6 +452,7 @@ class TestChainLayerBuilding:
         monkeypatch.setenv("AUX_CHAIN", "1")
         client = config.get_vision_client()
         assert "traxnode" in str(client.base_url)
+        assert client.max_retries == 2, "视觉不走链，必须靠 SDK 自己重试连接抖动"
 
     def test_unnumbered_fallback_still_works(self):
         """不带编号的 `FALLBACK_*` 仍当第 1 个端点读——**老配置不该因为这次改动失效**。"""
@@ -450,12 +468,13 @@ class TestChainLayerBuilding:
         assert [e[2] for e in eps] == ["第1个", "deepseek-flash"]
 
     def test_layers_carry_their_own_params(self):
-        """每层的参数覆盖按**它自己的模型名**取（gemini-3.8-flash 要 thinking_level=low）。"""
+        """每层的参数覆盖按**它自己的模型名**取（两个 gemini 层都要 thinking_level=low）。"""
         layers = config._chain_layers(self._cfg())
         assert [l[2].split("（")[0] for l in layers] == \
             ["gemini-3.1-flash-lite", "gemini-3.8-flash", "deepseek-flash"]
+        assert layers[0][3] == {"generation_config": {"thinking_level": "low"}}
         assert layers[1][3] == {"generation_config": {"thinking_level": "low"}}
-        assert layers[0][3] is None and layers[2][3] is None
+        assert layers[2][3] is None
 
 
 class TestServedByIsVisible:
@@ -518,9 +537,10 @@ class TestTransientFailures:
         monkeypatch.setattr(config, "_CHAIN_FLAKY_SEC", 60.0)
         chain = _ChainCompletions([(TestModelFallbackChain._client(None, self._conn_err()), "m1", "m1"),
                                    (TestModelFallbackChain._client("二层的"), "m2", "m2")])
-        await chain.create(model="m1", messages=[])
+        for _ in range(3):
+            await chain.create(model="m1", messages=[])
         left = chain._down_until[0] - time.monotonic()
-        assert 0 < left <= 61, f"连不上该用短窗口，实际 {left:.0f}s"
+        assert 0 < left <= 61, f"连不上连续 3 次该用短窗口，实际 {left:.0f}s"
 
     async def test_connection_error_is_logged_as_network(self, capsys):
         """日志要写出"这是网络层"，不然会被当成渠道坏了。"""
@@ -536,10 +556,143 @@ class TestTransientFailures:
         monkeypatch.setattr(config, "_CHAIN_FLAKY_SEC", 60.0)
         chain = _ChainCompletions([(TestModelFallbackChain._client(None, RuntimeError("500")), "m1", "m1"),
                                    (TestModelFallbackChain._client("二层的"), "m2", "m2")])
+        for _ in range(3):
+            await chain.create(model="m1", messages=[])
+        left = chain._down_until[0] - time.monotonic()
+        assert 60 < left <= 181, f"5xx 连续 3 次该用长窗口，实际 {left:.0f}s"
+
+    def test_default_retry_window_is_five_minutes(self):
+        """默认 300 秒（2026-11-14 用户定：主回复链失败后要等更久再探回来）。"""
+        assert config._CHAIN_RETRY_SEC == 300.0
+
+
+    # ---- 2026-11-13：失败阈值 / 永久错误 / 超时 / 半开 ----
+
+    async def test_permanent_error_opens_immediately(self, monkeypatch):
+        import httpx
+        from openai import AuthenticationError
+        monkeypatch.setattr(config, "_CHAIN_PERMANENT_SEC", 600.0)
+        err = AuthenticationError("401", response=httpx.Response(
+            401, request=httpx.Request("POST", "https://example.invalid")), body=None)
+        calls = []
+        chain = _ChainCompletions([
+            (TestModelFallbackChain._client(None, err, calls), "m1", "m1"),
+            (TestModelFallbackChain._client("二层的"), "m2", "m2"),
+        ])
         await chain.create(model="m1", messages=[])
         left = chain._down_until[0] - time.monotonic()
-        assert 60 < left <= 181, f"5xx 该用长窗口，实际 {left:.0f}s"
+        assert 0 < left <= 601, f"401 该立即打开，实际 {left:.0f}s"
 
-    def test_default_retry_window_is_three_minutes(self):
-        """默认 180 秒（原来是 600）——探一次的代价才 ~1s，锁十分钟纯属浪费。"""
-        assert config._CHAIN_RETRY_SEC == 180.0
+    async def test_timeout_opens_after_two(self, monkeypatch):
+        import httpx
+        from openai import APITimeoutError
+        monkeypatch.setattr(config, "_CHAIN_FLAKY_SEC", 60.0)
+        err = APITimeoutError(request=httpx.Request("POST", "https://example.invalid"))
+        calls = []
+        chain = _ChainCompletions([
+            (TestModelFallbackChain._client(None, err, calls), "m1", "m1"),
+            (TestModelFallbackChain._client("二层的"), "m2", "m2"),
+        ])
+        await chain.create(model="m1", messages=[])
+        assert 0 not in chain._down_until, "一次超时先别下线"
+        await chain.create(model="m1", messages=[])
+        left = chain._down_until[0] - time.monotonic()
+        assert 0 < left <= 61, f"连续两次超时才打开，实际 {left:.0f}s"
+
+    async def test_success_resets_consecutive_failures(self, monkeypatch):
+        monkeypatch.setattr(config, "_CHAIN_RETRY_SEC", 600.0)
+        seq = [False, False, True, False]
+        state = {"i": 0}
+
+        async def create(**kw):
+            ok = seq[state["i"]]
+            state["i"] += 1
+            if not ok:
+                raise RuntimeError("500")
+            return _ok("成功")
+
+        client = SimpleNamespace(chat=SimpleNamespace(
+            completions=SimpleNamespace(create=create)))
+        chain = _ChainCompletions([(client, "m1", "m1")])
+        with pytest.raises(RuntimeError):
+            await chain.create(model="m1", messages=[])
+        with pytest.raises(RuntimeError):
+            await chain.create(model="m1", messages=[])
+        assert 0 not in chain._down_until, "两次失败还不够"
+        assert _text(await chain.create(model="m1", messages=[])) == "成功"
+        assert chain._consecutive.get(0, 0) == 0, "成功要清空连续失败"
+        with pytest.raises(RuntimeError):
+            await chain.create(model="m1", messages=[])
+        assert 0 not in chain._down_until, "成功之后重新计数，不该秒开"
+
+    async def test_five_failures_in_window_open_despite_successes(self, monkeypatch):
+        """失败率规则：5 次失败 / 60 秒（尝试 ≥5 次、失败率 ≥50%）也会打开。"""
+        monkeypatch.setattr(config, "_CHAIN_RETRY_SEC", 600.0)
+        seq = [False, True, False, True, False, True, False, True, False]
+        state = {"i": 0}
+
+        async def create(**kw):
+            ok = seq[state["i"]]
+            state["i"] += 1
+            if not ok:
+                raise RuntimeError("500")
+            return _ok("成功")
+
+        client = SimpleNamespace(chat=SimpleNamespace(
+            completions=SimpleNamespace(create=create)))
+        chain = _ChainCompletions([(client, "m1", "m1")])
+        for _ in seq:
+            try:
+                await chain.create(model="m1", messages=[])
+            except RuntimeError:
+                pass
+        assert 0 in chain._down_until, "5 次失败/9 次尝试应触发失败率阈值"
+
+    async def test_half_open_probe_is_single_flight(self):
+        """冷却结束后只放一个探测请求，其他并发请求走下一层。"""
+        first = []
+        second = []
+
+        async def make(name, calls, ok):
+            async def create(**kw):
+                calls.append(kw)
+                await asyncio.sleep(0.02)
+                if ok:
+                    return _ok("二层的")
+                raise RuntimeError(name)
+            return SimpleNamespace(chat=SimpleNamespace(
+                completions=SimpleNamespace(create=create)))
+
+        c0 = await make("一", first, False)
+        c1 = await make("二", second, True)
+        chain = _ChainCompletions([(c0, "m1", "m1"), (c1, "m2", "m2")])
+        chain._open(0, 60)                # 已打开
+        chain._down_until[0] = time.monotonic() - 1   # 冷却已过，等待半开
+        await asyncio.gather(chain.create(model="m1", messages=[]),
+                             chain.create(model="m1", messages=[]),
+                             return_exceptions=True)
+        assert len(first) == 1, "半开探测只能有一个请求撞过去"
+
+
+class TestProxyRefresh:
+    """VPN 本地代理端口会漂移；变了必须重建客户端，否则链永久指向死端口（2026-11-17）。"""
+
+    def test_proxy_change_invalidates_client_caches(self, monkeypatch):
+        import urllib.request
+        from src.plugins.chatbot import config
+
+        monkeypatch.setattr(config, "_proxy_fingerprint_seen", "http=http://127.0.0.1:1")
+        monkeypatch.setattr(config, "_clients_cache", object())
+        monkeypatch.setattr(config, "_aux_clients_cache", object())
+        monkeypatch.setattr(config, "_reply_clients_cache", object())
+        monkeypatch.setattr(config, "_vision_client_cache", object())
+        monkeypatch.setattr(urllib.request, "getproxies",
+                            lambda: {"https": "http://127.0.0.1:2"})
+
+        assert config._invalidate_clients_if_proxy_changed() is True
+        assert config._clients_cache is None
+        assert config._aux_clients_cache is None
+        assert config._reply_clients_cache is None
+        assert config._vision_client_cache is None
+        # 同一个代理指纹不重复重建
+        assert config._invalidate_clients_if_proxy_changed() is False

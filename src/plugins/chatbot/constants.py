@@ -91,9 +91,9 @@ THINKING_DISABLED = {"extra_body": {"thinking": {"type": "disabled"}}, "reasonin
 # **按模型**的参数覆盖：每种模型"调思考"的写法不一样，认错了它就不当回事。
 # 这里是**查表**，链上每一层按自己的 model 名取；没有条目的层不动调用方的参数。
 #
-# - `deepseek-v4.1-flash`（中转）：收到 `thinking=disabled` 照样思考，而且思考**计入
-#   max_tokens**——主回复额度 150 被烧光后正文永远是空串（`finish_reason=length`）。
-#   它认 DeepSeek 那套 `budget_tokens=0`。（已不在链上，留条目便于换回去。）
+# - `deepseek-v4.1-flash`（中转）：2026-11-14 起做主回复专用层。实测
+#   `thinking=disabled` 能真正关掉思考（reasoning_tokens=0）；`budget_tokens=0`
+#   仍会思考（实测 77 token），别再用那一套。
 # - `gemini-3.8-flash`（中转）：**它根本关不掉思考**——Google 官方[1]写死它只支持
 #   low/medium/high，默认 medium，没有 minimal。所以只能压到 `low`，压不掉就只能忍。
 #   官方字段是 `generation_config.thinking_level`（实测中转认这个写法，不认
@@ -101,11 +101,17 @@ THINKING_DISABLED = {"extra_body": {"thinking": {"type": "disabled"}}, "reasonin
 #
 # [1] https://ai.google.dev/gemini-api/docs/thinking（2026-10-14 抓的官方支持表）
 MODEL_EXTRA_PARAMS = {
-    "deepseek-v4.1-flash": {"thinking": {"type": "enabled", "budget_tokens": 0}},
+    "deepseek-v4.1-flash": {"thinking": {"type": "disabled"}},
     "gemini-3.8-flash": {"generation_config": {"thinking_level": "low"}},
+    # 第 3 层备用（u-ai.me）：Gemini 3.1 Flash Lite 同属"关不掉思考"那一套，
+    # 只能压到 low；caller 还会同时发 thinking=disabled，实测组合后 reasoning=0。
+    "gemini-3.1-flash-lite": {"generation_config": {"thinking_level": "low"}},
     # GLM-5.3-Flash 强制思考、不能关闭；主链降级层只有 400 token，必须压到 low，
     # 否则 150 token 实测会被思考吃光、正文为空。
     "glm-5.3-flash": {"reasoning_effort": "low"},
+    # Agnes 3.0 Flash：官方文档的 Thinking 开关是 chat_template_kwargs.enable_thinking，
+    # 只传 thinking=disabled 中转可能不认。显式关掉，避免内心推理漏进正文。
+    "agnes-3.0-flash": {"chat_template_kwargs": {"enable_thinking": False}},
 }
 
 # 单次请求的超时（秒）。**必须显式设**：openai SDK 默认 600s，而上游偶发"只是卡住不返回"
@@ -117,13 +123,17 @@ LLM_TIMEOUT_SEC = 90
 # ==================== 对话参数 ====================
 CHAT_TEMPERATURE = 0.85       # 实验：回高温度（低温度让模型更走 RP 默认括号模板）
 CHAT_FREQUENCY_PENALTY = 0.3  # 实验：penalty 降低（0.5 未压括号还引入整句重复）
-CHAT_MAX_TOKENS = 400
+CHAT_MAX_TOKENS = 4096
 # 2026-11-05 用户定：**删掉长度守卫**（原：超过 40 字带提醒重写短一半）。
 # 理由：长度该由模型根据对方这轮要什么自己决定——守卫会把"写一段评价/认真讲"这类
 # 明确要展开的回答**整段丢弃重写**，真实聊天里表现为"我要说了→说完就没了"的虚空回复
 # （905860780 实测：52 token 的长回答被重写成 15 token 的预告）。
 # 同时把 max_tokens 从 150 放到 400：150 物理上容不下一段完整的回答（约 100~150 汉字）。
 # 默认短回复仍由骨架 §06 "默认短回复" 定基调；这条只负责**不堵死**长回答的物理空间。
+#
+# 2026-11-13 再放到 4096：中转站 agnes 曾把整段"规划草稿"当正文吐出来，400 token
+# 被草稿吃光、正文被截断（905860780 22:41 实测 finish_reason=length）。官方端点
+# 单次最大输出 65536，4096 是给正常长回复留的物理空间，不是鼓励写长——她平时仍是短句。
 MEMORY_EXTRACT_TEMPERATURE = 0.1
 MEMORY_EXTRACT_MAX_TOKENS = 100
 
@@ -218,6 +228,10 @@ VISION_EXTRA_PARAMS = {
     "deepseek-v4.1-flash-1017": {
         "extra_body": {"thinking": {"type": "disabled"}},
         "reasoning_effort": "none",
+    },
+    # Agnes 官方 Thinking 开关；看图不需要内心推理，显式关闭
+    "agnes-3.0-flash": {
+        "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
     },
 }
 # 方向3 B站联动

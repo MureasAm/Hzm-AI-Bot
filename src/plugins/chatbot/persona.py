@@ -51,6 +51,16 @@ def load_schedule():
     return _schedule_cache
 
 
+def invalidate_schedule_cache() -> None:
+    """周表文件被运行时改写后清缓存——下一次 build_message_list 立即用新表，免重启。
+
+    2026-11-17：B 站置顶周表图变化会自动 OCR 写 schedule.json；不在这里清缓存，
+    运行中的 bot 会一直用旧周表，直到重启。
+    """
+    global _schedule_cache
+    _schedule_cache = None
+
+
 def _persona_items(data, key: str) -> list:
     """兼容两种文件形状：裸 list，或 {"_readme": …, "<key>": [...]}。
 

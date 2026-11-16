@@ -360,6 +360,12 @@ class TestCleanReply:
     def test_strip_leading_prefix(self):
         assert reply_style.clean_reply("（咽口水）你这又是来投毒的吧……") == "你这又是来投毒的吧……"
 
+    def test_strip_reply_format_label(self):
+        """模型偶尔把 `【回复】：` 这种格式标签也吐出来（2026-11-13 群聊实测）。"""
+        assert reply_style.clean_reply("【回复】：哈哈，洗澡这事儿灰泽满也偶尔会拖") == \
+            "哈哈，洗澡这事儿灰泽满也偶尔会拖"
+        assert reply_style.clean_reply("[回答] 好") == "好"
+
     def test_strip_multiple_leading(self):
         assert reply_style.clean_reply("（心虚）（小声）灰泽满最近很忙……") == "灰泽满最近很忙……"
 

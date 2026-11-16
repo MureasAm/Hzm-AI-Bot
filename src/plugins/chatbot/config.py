@@ -9,9 +9,13 @@ import contextvars
 import json
 import os
 import time
+import urllib.request
 
 from nonebot import get_driver
-from openai import AsyncOpenAI, RateLimitError, APIConnectionError
+from openai import (
+    AsyncOpenAI, RateLimitError, APIConnectionError, APITimeoutError,
+    AuthenticationError, PermissionDeniedError, NotFoundError, BadRequestError,
+)
 
 from .constants import (
     VISION_MODEL, PUSH_INTERVAL, BILI_INTERVAL, WEATHER_BASE_URL,
@@ -47,6 +51,41 @@ def get_flag(name: str, default: str = "0") -> str:
 # 保证模块可被独立导入（便于测试），不依赖 NoneBot 已初始化。
 _clients_cache = None
 
+# ==================== 系统代理变化自动重建（2026-11-17） ====================
+# 踩坑：VPN（智能模式）每次重连都会换本地代理端口（实测 60644→56828→62442），
+# 而 OpenAI/httpx 客户端在**创建时**记住代理。端口一变，所有已建客户端永久指向死端口，
+# 中转/v4.1/u-ai 全部连不上，链只能落到直连可达的 DeepSeek 官方——表现就是
+# “一开 VPN 日志就波动、u-ai 永远不被调用”，且只有重启 bot 才能恢复。
+# 这里在每次取客户端前看一眼系统代理指纹；变了就丢弃所有客户端缓存，下次按新端口重建。
+_proxy_fingerprint_seen = None
+
+
+def _current_proxy_fingerprint() -> str:
+    try:
+        proxies = urllib.request.getproxies()
+    except Exception:
+        return ""
+    return "|".join(f"{k}={proxies[k]}" for k in sorted(proxies))
+
+
+def _invalidate_clients_if_proxy_changed() -> bool:
+    """系统代理变了就清空客户端缓存；返回是否重建。"""
+    global _proxy_fingerprint_seen, _clients_cache, _aux_clients_cache
+    global _reply_clients_cache, _vision_client_cache
+    fp = _current_proxy_fingerprint()
+    if _proxy_fingerprint_seen is None:
+        _proxy_fingerprint_seen = fp
+        return False
+    if fp == _proxy_fingerprint_seen:
+        return False
+    _proxy_fingerprint_seen = fp
+    _clients_cache = None
+    _aux_clients_cache = None
+    _reply_clients_cache = None
+    _vision_client_cache = None
+    print(f"[代理] 系统代理已变化，重建 LLM 客户端（{fp or '直连'}）")
+    return True
+
 # 降级链：某一层失败之后，**隔多久才再回头试它**（秒）。两档，因为两种失败的代价差几十倍：
 #
 # - **线路挂了**（服务端 5xx / 超时）→ `LLM_CHAIN_RETRY_SEC`（默认 180 = 3 分钟）回头**探一次**。
@@ -58,10 +97,28 @@ _clients_cache = None
 #   但这一层**多半是好的**（实测 6 次里 1 次卡死、其余毫秒级正常），
 #   所以别让它因为抖一下就离场十分钟。
 #
-# ⚠️ 两档都**不是**"每次调用都去撞"（用户 2026-10-14 否掉的方案）：
-# 同一层在窗口内只会被试一次。设成 0 = 本次进程内**永不回头**。
-_CHAIN_RETRY_SEC = float(os.environ.get("LLM_CHAIN_RETRY_SEC", "180") or 180)
-_CHAIN_FLAKY_SEC = float(os.environ.get("LLM_CHAIN_FLAKY_SEC", "60") or 60)
+# ⚠️ 两档是**打开后的冷却时长**，不是“一次失败就打开”：
+# 失败阈值见下面的 `_CHAIN_FAIL_*`。设成 0 = 打开后本次进程内不回头。
+#
+# 2026-11-14 用户定：主回复链切层要更保守——**长时间**再尝试回到前面层数。
+# 硬失败（5xx/400 等）300 秒、软失败（429/超时/连接/空正文）180 秒。
+# 单次失败仍然只在本轮落到下一层（第 1 层失败先拿官方 DeepSeek 兜这一次），不改层级状态。
+_CHAIN_RETRY_SEC = float(os.environ.get("LLM_CHAIN_RETRY_SEC", "300") or 300)
+_CHAIN_FLAKY_SEC = float(os.environ.get("LLM_CHAIN_FLAKY_SEC", "180") or 180)
+
+# 线路健康阈值（2026-11-13 用户定）：**一次失败不再直接下线**。
+# 本轮调用仍然立刻降级（否则这轮没回复），但这一层是否"挂"由滑动窗口决定：
+#   · 连续 3 次失败，或 60 秒内 ≥5 次失败且尝试 ≥5 次（失败率 ≥50%）→ 打开；
+#   · 401/403/404、model_not_found、supported API model 这类永久错误 → 立即打开；
+#   · 超时/200 空正文 → 2 次就打开（每次代价高，别撞 5 次）；
+#   · 成功一次清空连续失败计数；冷却结束只放一个探测请求（半开）。
+_CHAIN_FAIL_CONSECUTIVE = int(os.environ.get("LLM_CHAIN_FAIL_CONSECUTIVE", "3") or 3)
+_CHAIN_FAIL_WINDOW_SEC = float(os.environ.get("LLM_CHAIN_FAIL_WINDOW_SEC", "60") or 60)
+_CHAIN_FAIL_COUNT = int(os.environ.get("LLM_CHAIN_FAIL_COUNT", "5") or 5)
+_CHAIN_FAIL_MIN_ATTEMPTS = int(os.environ.get("LLM_CHAIN_FAIL_MIN_ATTEMPTS", "5") or 5)
+_CHAIN_PERMANENT_SEC = float(os.environ.get("LLM_CHAIN_PERMANENT_SEC", "600") or 600)
+_CHAIN_TIMEOUT_FAILS = int(os.environ.get("LLM_CHAIN_TIMEOUT_FAILS", "2") or 2)
+_CHAIN_SHAPE_FAILS = int(os.environ.get("LLM_CHAIN_SHAPE_FAILS", "2") or 2)
 
 
 def _bad_shape_reason(resp) -> str:
@@ -87,18 +144,20 @@ def _bad_shape_reason(resp) -> str:
     return ""
 
 
-def _mk_client(api_key, base_url):
+def _mk_client(api_key, base_url, max_retries=0):
     """建一个对话客户端——**参数全仓只有这一处**，因为有两个反直觉的默认值要改：
 
     - `max_retries=0`：SDK 默认自己重试 2 次。**我们的链就是重试机制**，
       这两层内部重试纯属白等：实测同一条死线路 3.7s →（retries=1）2.0s →（retries=0）**1.1s**。
       也正是这两秒多，当初逼出了"粘性不回头"这个更糟的方案。
+      **例外**：视觉客户端传 `max_retries=2`——它不走链，furry.vg 这类中转偶发
+      连接重置（实测 1/10），单次失败就丢整张图的描述，值得让 SDK 自己重试。
     - `timeout=90`：SDK 默认 600s。上游偶发**只是卡住不返回**（实测 luna 6 次里 1 次挂到 60s+），
       不设超时的话，这一轮会**干等十分钟**才轮到降级——用户只看到"她不回话"。
       （90s 是给正常长回复留的余量：真实主回复实测都在 30s 内。）
     """
     return AsyncOpenAI(api_key=api_key, base_url=base_url,
-                       max_retries=0, timeout=LLM_TIMEOUT_SEC)
+                       max_retries=max_retries, timeout=LLM_TIMEOUT_SEC)
 
 
 # **这一轮到底是哪一层答的**（整条标签，形如 `gemini-3.1-flash-lite（linkapi.ai）`）。
@@ -122,11 +181,12 @@ class _ChainCompletions:
     `reasoning_effort=none` 实测都吃），只是换 model/端点。
     全链都挂了 → 照原样把最后一个异常抛出去（调用方照旧兜底成一句人话）。
 
-    ⚠️ **一次失败就"全线切走"，但会自己回来**（用户 2026-10-14 两轮定稿）：
-    某一层挂掉后，后续调用先绕开它（否则按真实流量的轮次间隔，几乎每次都要白等）；
-    绕开多久见 `_CHAIN_RETRY_SEC` / `_CHAIN_FLAKY_SEC` 两档——**硬失败 3 分钟、
-    网络/限流 1 分钟**回头探一次，探通了就用回来。中间那个"永远不回头"的版本只活了一轮：
-    用户当天就发现"滑到 deepseek 之后就一直在 deepseek"，而**最贵的恰恰是那一层**。
+    ⚠️ **单次失败只让本轮降级，不立刻下线**（2026-11-13 用户定）：
+    一次瞬时抖动不该把整层切走。本轮仍然试下一层保证有回复，但这一层是否“挂了”
+    由滑动窗口决定——连续 3 次失败，或 60 秒内 5 次失败（尝试 ≥5、失败率 ≥50%）才打开；
+    401/403/404、model_not_found 这类永久错误立即打开；超时/200 空正文 2 次就打开。
+    打开后冷却 60s（网络/限流）或 180s（其它），冷却结束只放**一个**半开探测请求；
+    探测成功彻底恢复，失败重新打开。
     """
 
     def __init__(self, layers, cooldown=None):
@@ -134,33 +194,103 @@ class _ChainCompletions:
         # 三元组也收（`extra_params` 补 None）——测试和"没有特殊参数"的层都这么写。
         self._layers = [tuple(l) + (None,) * (4 - len(l)) if len(l) < 4 else tuple(l)
                         for l in layers]
-        # cooldown = **硬失败**（抛异常）后隔多久再回头试这一层；0 = 本次进程内不回头。
-        # 软失败（形状坏）走 `_CHAIN_FLAKY_SEC`，与这里无关——两档的理由见文件头那段。
+        # cooldown = **硬失败**达到阈值后隔多久再回头试这一层；0 = 本次进程内不回头。
         self._cooldown = cooldown if cooldown is not None else _CHAIN_RETRY_SEC
         self._down_until: dict[int, float] = {}
-        self._probing: set[int] = set()   # 正在探测（全挂时同一层只放一个请求过去）
+        self._probing: set[int] = set()        # 正在探测（半开/全挂时同一层只放一个请求）
+        self._probe_pending: set[int] = set()  # 已打开、等冷却结束后做一次半开探测
+        self._outcomes: dict[int, list[tuple[float, bool]]] = {}  # (时间, 成功?)
+        self._consecutive: dict[int, int] = {}
         self._last_i = 0             # 上次实际用的是第几层（用来打"降级 / 回到"那行日志）
 
-    def _mark_down(self, i: int, soft: bool = False) -> None:
-        """把第 i 层标成"暂时别用"，到点了自动再试。
+    def _open(self, i: int, seconds: float) -> None:
+        """把第 i 层打开一段时间；冷却结束后只允许一个请求做半开探测。"""
+        self._down_until[i] = float("inf") if seconds <= 0 else time.monotonic() + seconds
+        self._probe_pending.add(i)
 
-        `soft=True` = 它只是**抖了一下**（200 但响应不能用），用短窗口；否则按"线路挂了"算。
-        （两档的取值与理由见文件头 `_CHAIN_RETRY_SEC` 那段。）
-        """
-        sec = _CHAIN_FLAKY_SEC if soft else self._cooldown
-        self._down_until[i] = float("inf") if sec <= 0 else time.monotonic() + sec
+    @staticmethod
+    def _error_kind(e, *, shape: bool = False) -> str:
+        """失败分类：permanent / timeout / shape / soft / hard。"""
+        if shape:
+            return "shape"
+        if e is None:
+            return "hard"
+        if isinstance(e, APITimeoutError):
+            return "timeout"           # 必须先于 APIConnectionError：它是子类
+        if isinstance(e, (AuthenticationError, PermissionDeniedError, NotFoundError)):
+            return "permanent"
+        msg = str(e).lower()
+        if any(x in msg for x in ("model_not_found", "no available channel",
+                                  "supported api model")):
+            return "permanent"
+        if isinstance(e, BadRequestError):
+            # 400 里只有"模型名/端点不支持"是永久错误；普通请求 400 不该让整层下线
+            if "model" in msg and any(x in msg for x in ("not", "support", "available")):
+                return "permanent"
+            return "hard"
+        if isinstance(e, (RateLimitError, APIConnectionError)):
+            return "soft"
+        return "hard"
+
+    def _record_failure(self, i: int, e=None, *, soft: bool = False,
+                        shape: bool = False) -> bool:
+        """记一次失败；达到阈值才打开这一层。返回是否已打开。"""
+        now = time.monotonic()
+        self._consecutive[i] = self._consecutive.get(i, 0) + 1
+        dq = self._outcomes.setdefault(i, [])
+        dq.append((now, False))
+        cutoff = now - _CHAIN_FAIL_WINDOW_SEC
+        dq[:] = [x for x in dq if x[0] >= cutoff]
+
+        kind = self._error_kind(e, shape=shape)
+        if kind == "permanent":
+            self._open(i, _CHAIN_PERMANENT_SEC)
+            return True
+        if kind in ("timeout", "shape"):
+            limit = _CHAIN_TIMEOUT_FAILS if kind == "timeout" else _CHAIN_SHAPE_FAILS
+            if self._consecutive[i] >= limit:
+                self._open(i, _CHAIN_FLAKY_SEC)
+                return True
+            return False
+
+        fails = sum(1 for _, ok in dq if not ok)
+        total = len(dq)
+        rate = (fails / total) if total else 0.0
+        if self._consecutive[i] >= _CHAIN_FAIL_CONSECUTIVE or (
+                fails >= _CHAIN_FAIL_COUNT and total >= _CHAIN_FAIL_MIN_ATTEMPTS
+                and rate >= 0.5):
+            self._open(i, _CHAIN_FLAKY_SEC if (soft or kind == "soft") else self._cooldown)
+            return True
+        return False
+
+    def _record_success(self, i: int) -> None:
+        """成功一次：清冷却、清连续失败；半开探测成功时彻底清空窗口。"""
+        self._down_until.pop(i, None)
+        self._consecutive[i] = 0
+        if i in self._probe_pending:
+            self._probe_pending.discard(i)
+            self._outcomes[i] = []
+            return
+        now = time.monotonic()
+        dq = self._outcomes.setdefault(i, [])
+        dq.append((now, True))
+        cutoff = now - _CHAIN_FAIL_WINDOW_SEC
+        dq[:] = [x for x in dq if x[0] >= cutoff]
 
     def _pick(self):
-        """挑这次要试的层：跳过已标记"挂了"的；全挂了也别只盯着最后一层。
+        """挑这次要试的层：跳过已打开的；冷却结束的层只放一个半开探测。
 
-        全挂时的旧做法是只试最后一层（假设官方端点最稳）。实测（2026-11-09）这会
-        锁死：三层一起被网络抖动标 down 后，中间层恢复了也不会被试，所有请求持续
-        打最后一层，把它的抖动放大成"没有下一层了"。
-        现在按**冷却最早到期**的顺序挑一层去探，并且同一层同一时刻只放一个请求
-        （`_probing`）——群聊一轮十几路并发，不该同时撞同一个刚恢复的层。
+        全挂时按**冷却最早到期**排，同一层同一时刻只放一个请求（`_probing`）——
+        群聊一轮十几路并发，不该同时撞同一个刚恢复的层。
         """
         now = time.monotonic()
-        alive = [(i, l) for i, l in enumerate(self._layers) if now >= self._down_until.get(i, 0.0)]
+        alive = []
+        for i, l in enumerate(self._layers):
+            if now < self._down_until.get(i, 0.0):
+                continue
+            if i in self._probe_pending and i in self._probing:
+                continue          # 半开探测已被别的并发请求占用
+            alive.append((i, l))
         if alive:
             return alive
         order = sorted(range(len(self._layers)),
@@ -176,8 +306,9 @@ class _ChainCompletions:
         t0 = time.monotonic()
         picked = self._pick()
         for pos, (i, (client, model, label, extra)) in enumerate(picked):
-            # 这一层正在冷却、却仍被挑出来探：登记为"探测中"，防止并发请求同时撞它
-            probing = time.monotonic() < self._down_until.get(i, 0.0) or i in self._probing
+            # 这一层已打开/等待半开探测：登记为"探测中"，防止并发请求同时撞它
+            probing = (i in self._probe_pending
+                       or time.monotonic() < self._down_until.get(i, 0.0))
             if probing:
                 self._probing.add(i)
             try:
@@ -194,22 +325,19 @@ class _ChainCompletions:
                     resp = await client.chat.completions.create(**payload)
                 except Exception as e:
                     last_err = e
-                    # **"抖一下"和"真挂了"要分开**——两类都不该用 10 分钟的长窗口：
-                    #   · 429 = "你问太快了"（实测中转站 luna 连发 5 次后桶就空，之后全 0.2s 被拒）；
-                    #   · **APIConnectionError = 网络层连不上**，请求**可能根本没到站**
-                    #     （2026-10-15 用户发现："我这其中转站没收到失败日志，但代码报了
-                    #     APIConnectionError"——**两边对得上**，因为那是本地/链路的问题）。
-                    #     这种错**一点也不能说明那条渠道坏了**，锁它十分钟等于白花钱走贵的那层。
-                    soft = isinstance(e, (RateLimitError, APIConnectionError))
-                    self._mark_down(i, soft=soft)
+                    # 失败只记一次；达到阈值才真正打开这一层（一次抖动不再下线一分钟）。
+                    # 本轮仍然立刻试下一层——否则这一轮就没回复了。
+                    opened = self._record_failure(i, e)
                     has_next = pos < len(picked) - 1
                     if has_next:
-                        nxt = "全线切到下一层"
+                        nxt = "本轮切到下一层" + ("（该层已下线）" if opened else "（该层暂不下线）")
                     elif len(self._layers) > 1:
                         nxt = "本轮没有可再试的层（其余在冷却）"
                     else:
                         nxt = "没有下一层了"
-                    if isinstance(e, RateLimitError):
+                    if isinstance(e, APITimeoutError):
+                        kind = "超时（等太久）"
+                    elif isinstance(e, RateLimitError):
                         kind = "限流（慢一点，不是坏了）"
                     elif isinstance(e, APIConnectionError):
                         kind = "连不上（网络层，不是它坏了）"
@@ -222,18 +350,21 @@ class _ChainCompletions:
                 # 于是下游 `extract_chat_content` 才发现形状不对——**那时已经在链外了，不会再降级**，
                 # 整轮就掉进 "小满现在不在哦~"。现在形状不对也当这一层失败，继续往下试。
                 reason = _bad_shape_reason(resp)
-                if reason and pos < len(picked) - 1:
-                    self._mark_down(i, soft=True)      # 抖了一下 ≠ 挂了，一分钟后就再来试
-                    print(f"⚠️ 模型 {label} 返回异常（{reason}）→ 全线切到下一层")
-                    continue
-                self._down_until.pop(i, None)          # 它活着，清掉冷却
+                if reason:
+                    opened = self._record_failure(i, None, shape=True)
+                    if pos < len(picked) - 1:
+                        print(f"⚠️ 模型 {label} 返回异常（{reason}）→ "
+                              f"本轮切到下一层{'（该层已下线）' if opened else '（该层暂不下线）'}")
+                        continue
+                    # 最后一层形状不对也照原样返回，让调用方报一句能看懂的错
+                else:
+                    self._record_success(i)
                 _SERVED_BY.set(label)                  # 记下"这轮是谁答的"（日志/账本都要用）
                 _LATENCY.set((id(resp), round((time.monotonic() - t0) * 1000)))
                 if i != self._last_i:
                     # 降级和**回升**都报一句——不然"回到 gemini 了"在日志里看不出来
                     print(f"[模型] {'降级到' if i > self._last_i else '回到'}第 {i + 1} 层：{label}")
                     self._last_i = i
-                # 最后一层就算形状不对也**照原样返回**——让调用方照旧报一句能看懂的错
                 return resp
             finally:
                 if probing:
@@ -330,6 +461,7 @@ def _get_clients():
     （见 `_ChainCompletions`）。没配 `LLM_FALLBACK_MODELS`/`FALLBACK_*` 时行为与原来完全一样。
     """
     global _clients_cache
+    _invalidate_clients_if_proxy_changed()
     if _clients_cache is not None:
         return _clients_cache
 
@@ -380,6 +512,7 @@ def aux_enabled() -> bool:
 def _get_aux_clients():
     """辅助链的 (对话客户端, zhipu_client)。没配 `AUX_*` 时**直接返回主链**。"""
     global _aux_clients_cache
+    _invalidate_clients_if_proxy_changed()
     if _aux_clients_cache is not None:
         return _aux_clients_cache
     if not aux_enabled():
@@ -419,6 +552,50 @@ def aux_model(main_model: str) -> str:
     except Exception:
         pass
     return main_model
+
+
+# ==================== 主回复专用链（2026-11-14） ====================
+# 为什么要第三条链：主回复和内部短调用的模型需求不同。
+#   · 主回复：用户直接看到，最看重"别把规则/旁白写进正文"和人设稳定；
+#   · 内部调用（行为分类/记忆提取/表情包/事件判定）：要的是稳定 JSON，agnes 够用且便宜。
+# 只改 `OPENAI_*` 会把这两类一起换掉，所以单独给主回复一条链；没配 `REPLY_API_KEY`
+# 时**直接回退主链**，行为和以前完全一样。
+_reply_clients_cache = None
+
+
+def reply_enabled() -> bool:
+    try:
+        return bool(getattr(get_driver().config, "reply_api_key", None))
+    except Exception:
+        return False
+
+
+def _get_reply_clients():
+    """主回复专用 (对话客户端, zhipu_client)；没配 `REPLY_*` 时回退主链。"""
+    global _reply_clients_cache
+    _invalidate_clients_if_proxy_changed()
+    if _reply_clients_cache is not None:
+        return _reply_clients_cache
+    if not reply_enabled():
+        _reply_clients_cache = _get_clients()
+        return _reply_clients_cache
+    _global_config = get_driver().config
+    zhipu_api_key = getattr(_global_config, "zhipu_api_key", None)
+    _reply_clients_cache = (
+        _ClientProxy(_mk_client(getattr(_global_config, "reply_api_key", None),
+                                getattr(_global_config, "reply_api_base", DEEPSEEK_BASE_URL)),
+                     _chain_layers(_global_config, prefix="reply_")),
+        _mk_client(zhipu_api_key, ZHIPU_BASE_URL) if zhipu_api_key else None,
+    )
+    return _reply_clients_cache
+
+
+def _get_reply_model() -> str:
+    """主回复该用的模型名；没配 `REPLY_MODEL` 时沿用主模型名。"""
+    try:
+        return getattr(get_driver().config, "reply_model", None) or _get_model_name()
+    except Exception:
+        return _get_model_name()
 
 
 def parse_json_block(content: str):
@@ -626,6 +803,7 @@ def get_vision_client():
     以后换主站也不会把视觉一起带走；VISION_API_KEY / VISION_API_BASE 可单独覆盖。
     """
     global _vision_client_cache
+    _invalidate_clients_if_proxy_changed()
     if _vision_client_cache is not None:
         return _vision_client_cache
     model = get_vision_model()
@@ -644,7 +822,7 @@ def get_vision_client():
                 base = base or get_config("openai_api_base", DEEPSEEK_BASE_URL)
     if not key:
         raise ValueError("❌ 未检测到视觉模型 API key（VISION_API_KEY / OPENAI_API_KEY）")
-    _vision_client_cache = _mk_client(key, base)
+    _vision_client_cache = _mk_client(key, base, max_retries=2)
     return _vision_client_cache
 
 

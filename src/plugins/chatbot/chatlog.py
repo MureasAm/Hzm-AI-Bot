@@ -226,3 +226,20 @@ def log_turn(target_id: str, is_group: bool, user_text: str, reply: str,
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     except Exception as e:
         print(f"⚠️ 聊天记录写入失败（忽略）: {e}")
+
+
+def log_leak_guard(original: str, reason: str, rewritten: str = "", outcome: str = "") -> None:
+    """记一次"规划式泄露"兜底：原文、命中特征、重写结果。
+
+    单独文件 `data/leak_guard.jsonl`，方便事后统计命中率、判断是不是该改提示词/
+    行为块。写失败静默——兜底本身不能因为日志挂了而影响聊天。
+    """
+    try:
+        path = LOG_DIR.parent / "leak_guard.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        rec = {"t": time.time(), "reason": reason, "original": (original or "")[:4000],
+               "rewritten": (rewritten or "")[:4000], "outcome": outcome}
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:
+        pass

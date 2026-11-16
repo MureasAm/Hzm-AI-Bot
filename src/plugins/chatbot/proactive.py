@@ -37,7 +37,9 @@ from .config import (
     log_cache_usage, _get_clients, _get_model_name, extract_chat_content,
     parse_json_block, set_llm_route, get_vision_client,
     aux_clients_or, aux_model,   # 辅助链（2026-10-29）
+    _get_reply_clients, _get_reply_model, reply_enabled,   # 主回复专用链（2026-11-14）
 )
+from .reply_style import planning_leak_reason
 from .core import gather_retrieval, build_message_list
 from .memory import append_bot_message
 from ._bridge_common import to_memory_line
@@ -56,6 +58,28 @@ _EMOJI_PAT = re.compile(
     "[\U0001F000-\U0001FAFF☀-➿]"                  # 基础 emoji（1F000+ 表情 / 2600-27BF 杂项符）
     "(?:[️‍][\U0001F000-\U0001FAFF☀-➿]?)*"   # 跟在后面的变体选择符/零宽连接（如 🌡️）
 )
+
+
+def _generation_clients():
+    """主动发言生成用哪套客户端：配了 `REPLY_*` 走主回复专用链，否则回退主链。
+
+    这样单测里只打桩 `_get_clients` 也能跑（测试环境没有 REPLY_API_KEY）。
+    """
+    try:
+        if reply_enabled():
+            return _get_reply_clients()
+    except Exception:
+        pass
+    return _get_clients()
+
+
+def _generation_model() -> str:
+    try:
+        if reply_enabled():
+            return _get_reply_model()
+    except Exception:
+        pass
+    return _get_model_name()
 
 
 def ensure_trailing_emoji(reply: str, source: str) -> str:
@@ -472,8 +496,11 @@ async def compose_proactive(content: str, source: str = "B站",
             core_stories=ctx["core_stories"],
         )
 
-        resp = await aux_client.chat.completions.create(
-            model=aux_model(_get_model_name()),
+        # 生成也用主回复专用链（2026-11-14 用户定）：主动发言同样是用户可见的
+        # 角色扮演输出，和主回复共用同一套模型/降级，不走辅助链的 agnes。
+        reply_client, _ = _generation_clients()
+        resp = await reply_client.chat.completions.create(
+            model=_generation_model(),
             messages=messages,
             temperature=0.9,
             max_tokens=240,
@@ -483,6 +510,10 @@ async def compose_proactive(content: str, source: str = "B站",
         out = extract_chat_content(resp).strip().strip('"').strip("“”")
         if not out or out.upper().startswith("NULL"):
             print("[主动发言] 判定不适合主动说")
+            return None
+        # 主动发言没有主回复那条重写兜底；命中规划/旁白就直接不发（原文通知照旧）。
+        if planning_leak_reason(out):
+            print("[主动发言] 检测到规划/旁白，丢弃这一句")
             return None
         # 只取第一行：模型偶尔会多写一句
         out = out.split("\n")[0].strip()
