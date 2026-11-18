@@ -19,7 +19,9 @@ from .persona import (
     load_persona_rules, load_schedule, load_terms,
 )
 from .memory import (
-    get_user_history, get_user_history_timed, append_user_history,
+    get_user_history, get_user_history_timed, get_user_history_entries,
+    _strip_timed, _timed_prefix,
+    append_user_history,
     get_last_turn_gap_seconds, humanize_gap, is_bot_line, bot_line_text,
 )
 from .rag import embed_query
@@ -62,6 +64,16 @@ _MEMORY_V2_STORE = memory_v2.ShadowMemoryStore()
 def injection_v3_enabled() -> bool:
     """注入 v3（registry/frame + 稳定卡/事件检索）。默认 0：旧链路逐字不变，便于回退。"""
     return get_flag("INJECTION_V3", "0").strip().lower() not in ("0", "false", "no", "off")
+
+
+def history_as_assistant_enabled() -> bool:
+    """私聊历史改成原生 user/assistant turns（2026-11-19 默认开）。
+
+    只去掉「历史逐条转述」；引用改写、跨天日期本地化、群聊转述都还保留。
+    回退：`.env.prod` 设 `HISTORY_AS_ASSISTANT=0`。
+    """
+    return get_flag("HISTORY_AS_ASSISTANT", "1").strip().lower() not in (
+        "0", "false", "no", "off")
 
 
 def wiki_lookup_enabled() -> bool:
@@ -472,6 +484,7 @@ def build_message_list(user_msg: str, fused_items: list,
                        reminders_context: str = "",
                        state_stable: str = "", state_dynamic: str = "",
                        event_context: str = "",
+                       history_turns: list | None = None,
                        show_actions: bool = False) -> list:
     """按优先级组装发送给模型的消息列表。
 
@@ -511,6 +524,10 @@ def build_message_list(user_msg: str, fused_items: list,
 
     habit_hint：这个用户当前时段/话题相关的`habit_*`记忆提示（`build_habit_hint`）。
     只对拥有该习惯的用户有值；放在用户消息前，让短问候也能接住个人习惯。
+
+    history_turns：私聊原生历史轮次（`build_native_history_turns`）。提供时**跳过**
+    `user_history` 的 system 块，改为在最后一条 user 前插入 header + native turns +
+    【别自相矛盾】；群聊不传，仍走原来的转述 system 块。
     """
     # 场景（第 00 块）：**只有群聊注入**。
     # 私聊场景已移回骨架（2026-10-21 用户定：骨架保持原句
@@ -719,7 +736,10 @@ def build_message_list(user_msg: str, fused_items: list,
     # 2026-10-14 曾把她自己的话从注入里过滤掉（去自反馈：实测"灰泽满"起手黏性
     # 51.7% vs 17.4%）；用户 2026-10-18 明确要求恢复完整上下文——她需要看到
     # 自己上一轮说了什么，才能接得住、不前后打架。记忆里两边本来就都记着。
-    if user_history:
+    if history_turns:
+        # 原生历史在最后一条 user 前插入（见下方 final_user 之前），这里不再注 system 的历史块。
+        pass
+    elif user_history:
         if isinstance(user_history, list):
             context = "\n".join(ln for ln in user_history if ln)
             if context:
@@ -893,6 +913,16 @@ def build_message_list(user_msg: str, fused_items: list,
     if log_hits and get_llm_route() in ("私", "群"):
         log_block_hits(hit_blocks)
 
+    # 原生历史（私聊，2026-11-19）：真实 user/assistant turns 放在最后一条 user 前。
+    # 时间只标在用户消息上；她说的话保持正文，避免她学会在回复里写时间前缀。
+    if history_turns:
+        messages.append({"role": "system", "content": inj.T("history", "turns_head")})
+        messages.extend(history_turns)
+        messages.append({"role": "system",
+                         "content": inj.T("history", "contradiction").strip()})
+        hit_blocks.append("history")
+        _mark("history")
+
     messages.append({"role": "user", "content": final_user})
     return messages
 
@@ -918,6 +948,46 @@ def is_fallback_reply(text: str) -> bool:
     """
     t = (text or "").strip()
     return t in (_FALLBACK_REPLY, _FALLBACK_SILENT) or t in _LEGACY_FALLBACKS
+
+
+def build_native_history_turns(user_id: str, *, limit: int = 10) -> list[dict]:
+    """把私聊短期记忆渲染成原生 user/assistant turns（2026-11-19）。
+
+    为什么不再逐条转述：真实历史本来就是「用户说一句、她说一句」，
+    assistant 才是它原本的通道；实测 29 对样本里，B 的追问自述重合 0.23 vs 转述 0.13，
+    复读和「刚说了」都没有增加。
+    仍然保留的两件小事：
+      - 用户消息前带发送时间；她说的话不带前缀（避免她学会在正文里写时间）。
+      - 跨天的「今天/明天」落成绝对日期（确定性替换，不调模型）。
+    兜底文案不放进历史——那是生成失败的占位，不是她说过的话。
+    """
+    turns: list[dict] = []
+    for entry in get_user_history_entries(user_id)[-limit:]:
+        text = str(entry.get("text") or "").strip()
+        t = entry.get("t")
+        lead = _timed_prefix(t) if t is not None else ""
+        if is_bot_line(text):
+            body = bot_line_text(text).strip()
+            if not body or is_fallback_reply(body):
+                continue
+            body = self_speech._localize_day_words(body, lead)
+            role = "assistant"
+        else:
+            plain = _strip_timed(text)
+            if not plain.startswith("用户："):
+                continue
+            body = plain[len("用户："):].strip()
+            if not body:
+                continue
+            body = self_speech._localize_day_words(body, lead)
+            if lead:
+                body = f"{lead}{body}"
+            role = "user"
+        if turns and turns[-1]["role"] == role:
+            turns[-1]["content"] = turns[-1]["content"] + "\n" + body
+        else:
+            turns.append({"role": role, "content": body})
+    return turns
 
 
 _PLANNING_REWRITE_PROMPT = (
@@ -1530,6 +1600,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     # 避免同一件事在提示词里出现两遍。
     state_stable = ""
     state_dynamic = ""
+    card_text = ""
     event_context = ""
     profile_context = commitment_context = daily_context = ""
     request_context = ""
@@ -1539,6 +1610,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         if v3:
             card = _MEMORY_V2_STORE.build_state_card(user_id)
             if card:
+                card_text = card
                 state_stable = inj.T("state", "stable", lines=card)
         else:
             profile_context = _MEMORY_V2_STORE.build_preference_context(
@@ -1570,7 +1642,13 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         except Exception:
             _events = []
         if _events:
-            event_context = inj.T("events", "main", context=event_memory.render_context(_events))
+            if v3 and card_text:
+                # 同一件事既在稳定卡、又被事件检索捞到时：把时间并进卡里，事件不再重复注。
+                card_text, _events = memory_v2.merge_events_into_card(card_text, _events)
+                if card_text:
+                    state_stable = inj.T("state", "stable", lines=card_text)
+            if _events:
+                event_context = inj.T("events", "main", context=event_memory.render_context(_events))
     # 称呼提示：用户这轮叫了 her_nickname 才注入；不做长期自称偏好。
     nickname_hint = ""
     if not is_group and memory_v2.injection_enabled():
@@ -1580,12 +1658,17 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     name_budget = "" if is_group else name_budget_note(user_id)
     # 个人固定习惯：只对私聊、且这个用户确实有相关 habit_* 记忆时出现。
     habit_hint = ""
+    ritual_hint = ""
     if not is_group and memory_v2.injection_enabled():
         recent_bot_text = "\n".join(
             bot_line_text(ln) for ln in get_user_history(user_id) if is_bot_line(ln)
         )
         habit_hint = _MEMORY_V2_STORE.build_habit_hint(
             user_id, query_text, recent_bot_text=recent_bot_text)
+        if v3:
+            # 仪式内容在稳定卡的「仪式」行；这里只在他这轮说到场景词时加一句“照做、别漏”。
+            # 旧链路的【他的固定期待】带完整内容，但它没有迁到 v3（2026-11-18 补）。
+            ritual_hint = _MEMORY_V2_STORE.build_ritual_hint(user_id, query_text)
     if not is_group and not v3:
         emotion_context = mood_note(user_id)
 
@@ -1595,10 +1678,11 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         if request_context:
             profile_context = (profile_context + "\n\n" + request_context).strip()
             request_context = ""
-        parts = [x for x in (commitment_context, habit_hint, name_budget, nickname_hint) if x]
+        parts = [x for x in (commitment_context, ritual_hint, habit_hint,
+                             name_budget, nickname_hint) if x]
         if parts:
             reminders_context = "【本轮提醒】\n" + "\n".join(parts)
-        commitment_context = habit_hint = name_budget = nickname_hint = ""
+        commitment_context = ritual_hint = habit_hint = name_budget = nickname_hint = ""
 
     # 定时提醒请求（2026-11-17）：L3 判出后必须让她明确确认一次，
     # memory_v2 才会把这条当成 commitment 落库并带 due_at。
@@ -1683,11 +1767,17 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     injection_trace: dict = {}
     if pragmatic_hint:
         injection_trace.setdefault("values", {})["pragmatic"] = pragmatic_hint[:200]
-    # 自述转述（2026-10-21）：历史里她的原句 + 本轮对她自己话的引用，注入前改写成大意。
-    # 实测原句 20/20 会复读同一句式，加提醒仍 16–20/20，改成大意 0/20。
-    # 只改注入，不改检索、不改落盘记录。
+    # 历史注入（2026-11-19）：私聊默认走 assistant 原生轮次，不再逐条转述。
+    # 只去掉「历史转述」；用户当前消息里引用她的话仍由 annotate_quotes 改写。
+    # 群聊保持原样（多发言人 + 转述），回退设 HISTORY_AS_ASSISTANT=0。
+    use_native_history = (not is_group) and history_as_assistant_enabled()
+    history_turns = build_native_history_turns(user_id) if use_native_history else None
     hist_for_injection, gen_user_msg = user_history_timed, user_msg
-    if self_speech.enabled():
+    if use_native_history:
+        if self_speech.enabled():
+            gen_user_msg = await self_speech.annotate_quotes(user_msg, deepseek_client)
+        hist_for_injection = []
+    elif self_speech.enabled():
         hist_for_injection, gen_user_msg = await self_speech.annotate_turn(
             user_history_timed, user_msg, deepseek_client)
     if is_group:
@@ -1715,6 +1805,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
             state_dynamic = inj.T("state", "dynamic", parts="\n".join(state_parts))
     messages = build_message_list(
         gen_user_msg, fused_items, history_arg,
+        history_turns=history_turns,
         vision_desc=vision_desc, weather_city=weather_city, batch_summary=batch_summary,
         preference_items=preference_items,
         core_stories=core_stories,
@@ -1877,7 +1968,8 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     append_user_history(user_id, record_msg, cleaned_reply,
                         user_label=_user_label, reply_label=_reply_label)
     # 预转述她这句：下一轮注入直接命中缓存，把转述开销挪出关键路径。
-    if self_speech.enabled():
+    # 私聊已切 assistant 原生轮次，不再需要；群聊仍走转述，保留预转述。
+    if self_speech.enabled() and (is_group or not history_as_assistant_enabled()):
         spawn(self_speech.prewarm(cleaned_reply))
 
     # --- 📝 异步更新长期记忆（V2；会话级记忆已在对话前 probe_session 同步更新） ---

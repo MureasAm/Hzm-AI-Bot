@@ -174,6 +174,21 @@ def get_user_history(user_id: str) -> list:
     return [_entry_text(it) for it in raw]
 
 
+def get_user_history_entries(user_id: str) -> list[dict]:
+    """原始历史条目（带 t / text / modality 的副本），供 native turns 渲染。
+
+    和 `get_user_history_timed` 的区别：这里**不预先拼成字符串行**，
+    调用方要自己决定「谁说的、带不带时间前缀、要不要转述」。
+    """
+    out = []
+    for it in _load_raw_history(user_id):
+        if isinstance(it, dict):
+            out.append(dict(it))
+        else:
+            out.append({"t": None, "text": str(it)})
+    return out
+
+
 def _day_label(t: float) -> str:
     """历史行前的日期定性：今天/昨天/前天/MM-DD（更早）。"""
     try:
@@ -445,6 +460,7 @@ __all__ = [
     "load_short_memory",
     "get_user_history",
     "get_user_history_timed",
+    "get_user_history_entries",
     "get_last_turn_gap_seconds",
     "append_user_history",
     "append_bot_message",

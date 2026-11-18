@@ -33,58 +33,121 @@ OUT_DIR = ROOT / "outputs" / "reflection"
 MAX_DAY_CHARS = 7000
 MAX_MSG_CHARS = 160
 
-DAY_PROMPT = """下面是一个用户和“灰泽满”在某一天的聊天记录。请只做**记录**，不下长期结论。
-找出当天**反复出现或明确的要求/仪式/习惯/情绪触发点**，以及可能影响以后回应的用户事实。
+DAY_PROMPT = """下面是一个用户和“灰泽满”在某一天的聊天记录。请只做**当天记录**，不下长期结论。
+按下面几类记录当天真实出现的内容；没有就留空，不要脑补：
+A. 重要他人：家人/室友/朋友/宠物/喜欢的人，以及他们之间发生了什么。
+B. 生活节奏：上课/工作/吃饭/睡觉/运动/周末安排（有频率就写频率）。
+C. 喜恶：明确说喜欢或讨厌的食物、作品、话题、称呼。
+D. 雷区与边界：什么让他不舒服、不能开的玩笑、不能叫的称呼。
+E. 压力与愿望：考试/求职/家庭矛盾/想做的事。
+F. 共同经历与梗：和灰泽满之间发生的事、反复出现的内部梗、约定。
+G. 稳定事实：身份/地点/年龄/学校/工作等。
+H. 反复出现的仪式/习惯/互动模式。
 规则：
-- 只写当天真实出现的内容，标注出现次数或原话；一次性闲聊不要写。
-- 不要评价、不要脑补；不要记录角色扮演/玩梗里的设定。
+- 只写当天真实出现的内容，标次数或原话；一次性闲聊不要写。
+- 不要评价、不要脑补；角色扮演/玩梗里的设定不要当事实。
 - 同一活动有**多个频率**时分开写（“每天早上跑操”和“每周三次 3 公里”不是一件事）。
-- habit 类额外给结构化字段：`habit` = {"type":"routine|interaction", "cadence":"daily|weekly|monthly|regular|once|unknown", "period":"morning|noon|afternoon|evening|night|any|unknown", "cues":["他实际会说的2-8个触发词"]}。
+- habit 类额外给结构化字段：`habit` = {{"type":"routine|interaction", "cadence":"daily|weekly|monthly|regular|once|unknown", "period":"morning|noon|afternoon|evening|night|any|unknown", "cues":["他实际会说的2-8个触发词"]}}。
   routine=作息/日程；interaction=表情包/情话/摸摸这类互动；cues 不要写“每天/早上”这种时间词。
 - 特别留意：反复要求同一件事（固定说法、固定流程）、固定时段的行为、称呼要求、
   雷区、明确的喜好/厌恶。
 只输出 JSON：
-{{"items":[{{"kind":"ritual|habit|preference|fact|boundary","value":"一句话","evidence":"原话/次数","habit":{{"type":"routine|interaction","cadence":"daily|weekly|monthly|regular|once|unknown","period":"morning|noon|afternoon|evening|night|any|unknown","cues":["..."]}}}}]}}
+{{"items":[{{"kind":"ritual|habit|preference|fact|boundary","category":"identity|location|family|friend|pet|work|study|health|interest|dislike|boundary|concern|shared|relationship|habit|other","value":"一句话","evidence":"原话/次数","once":false,"habit":{{"type":"routine|interaction","cadence":"daily|weekly|monthly|regular|once|unknown","period":"morning|noon|afternoon|evening|night|any|unknown","cues":["..."]}}}}]}}
 
 聊天记录：
 {chat}
 """
 
-REFLECT_PROMPT = """下面是同一个用户连续多天与“灰泽满”的聊天要点（按天）。请做**跨天反思**，
-找出值得进入长期记忆的**重复模式**，而不是一次性事件。
+REFLECT_PROMPT = """下面是同一个用户连续多天与“灰泽满”的聊天要点（按天），以及他**已有的长期记忆**。
+请做**跨天反思**，输出两类东西：
+
+1) **patterns**：至少跨 2 天、或同一模式出现 3 次以上，会改变灰泽满以后怎么回应
+   （固定仪式、固定说法、固定时段习惯、称呼、雷区、长期偏好）。
+2) **profile**：只出现一次、但会**长期影响回应**的稳定事实——
+   家人/室友/朋友/宠物、工作/学校/身份、住地、健康、重要愿望/压力源、共同经历/内部梗。
+   一次性情绪、当天琐事不算。
 
 判据：
-- 至少跨 2 天、或同一模式出现 3 次以上；
-- 要能改变灰泽满以后怎么回应（固定仪式、固定说法、固定时段习惯、称呼、雷区、长期偏好）；
-- 一次性的经历/情绪不算长期记忆（除非明确改变了相处方式）；
-- 角色扮演/玩梗里的设定不要当事实；
+- 不要把【已有记忆】原样再写一遍；同一件事已有 key 的，不要重复输出。
 - **habit 必须写清频率 + 原因**（每天/每周几次、为什么），不能只写“有…习惯”；
-  同一活动多个频率要分开列（例如“每天早上跑操”和“每周三次 3 公里”是两条）；
-  并给结构化字段 `habit`：type=routine（作息）/interaction（表情包/情话/摸摸），
+  同一活动多个频率要分开列；并给结构化字段 `habit`：
+  type=routine（作息）/interaction（表情包/情话/摸摸），
   cadence=daily/weekly/monthly/regular/once，period=morning/noon/afternoon/evening/night/any，
   cues=他实际会说的 2-8 个触发词（不要写“每天/早上”这类时间词）。
   一次性计划（今晚熬夜看比赛）用 cadence=once，不要当成固定习惯。
+- **边界/雷区**写成“他不能接受什么”，不要写成灰泽满的性格。
+  他担心你熬夜、关心你健康，不是他的边界，归 `concern`。
+- 普通礼貌性的“晚安/早安/互道晚安”不算仪式/习惯；只有他明确要求固定内容或固定流程才算。
+- **共同经历/梗**要写成一句自足的话，标注大概时间；不要写成“他很开心”。
 - 合并前检查：两条只差频率/原因时，它们很可能是两个事实，不要合成一条。
+- value 要具体：能写“周五下午放学回出租屋，周天中午回校”就不要写“有回家习惯”。
 
 输出 JSON：
 {{"memories":[
   {{"kind":"ritual|habit|preference|fact|boundary",
+    "category":"identity|location|family|friend|pet|work|study|health|interest|dislike|boundary|concern|shared|relationship|habit|other",
     "key":"小写英文键，具体到事",
     "value":"简洁中文；ritual 必须写成「场景：内容」",
-    "days":出现天数,"count":出现次数,
+    "days":出现天数,"count":出现次数,"once":false,
+    "scope":"stable|recent|past",
     "habit":{{"type":"routine|interaction","cadence":"daily|weekly|monthly|regular|once|unknown","period":"morning|noon|afternoon|evening|night|any|unknown","cues":["..."]}},
-    "evidence":"跨天证据，引用不同天的说法"}}
+    "evidence":"跨天证据，引用不同天的说法",
+    "confidence":0.0}}
 ]}}
 只输出 JSON，不要 markdown。
 
 按天要点：
 {digests}
+
+【已有记忆（不要重复）】
+{existing}
 """
 
 
 def _slug(value: str) -> str:
     s = re.sub(r"[^a-z0-9_]+", "_", str(value or "").strip().lower()).strip("_")
     return s or "item"
+
+
+# 反思候选的 category → 记忆 key 前缀。2026-11-18 加：全量扫描不只找“每天重复”，
+# 还要把家人/工作/喜恶/雷区/愿望这些只出现一次但会改变回应的稳定事实捞出来。
+_CATEGORY_PREFIX = {
+    "family": "family",
+    "friend": "friend",
+    "pet": "pet",
+    "work": "work",
+    "study": "study",
+    "health": "health",
+    "interest": "interest",
+    "dislike": "dislike",
+    "boundary": "boundary",
+    "concern": "concern",
+    "shared": "shared",
+    "relationship": "relationship",
+}
+# 这些类别本身就是“只有一个值”的键，不要再加一层前缀。
+_CATEGORY_SINGLE = {
+    "identity": "identity",
+    "location": "location",
+    "occupation": "occupation",
+    "real_name": "real_name",
+    "online_name": "online_name",
+    "address_terms": "address_terms",
+    "preferred_name": "preferred_name",
+}
+
+
+def _category_key(category: str, key: str) -> str:
+    cat = str(category or "").strip().lower()
+    key = re.sub(r"^(?:pref|user)_", "", str(key or "")) or "item"
+    if cat in _CATEGORY_SINGLE:
+        return _CATEGORY_SINGLE[cat]
+    prefix = _CATEGORY_PREFIX.get(cat)
+    if not prefix:
+        return key
+    if key.startswith(prefix + "_") or key == prefix:
+        return key
+    return f"{prefix}_{key}"
 
 
 def _parse_json(text: str) -> dict:
@@ -144,6 +207,7 @@ def candidate_to_item(cand: dict) -> tuple[dict | None, str]:
     from src.plugins.chatbot import memory_v2 as mv
 
     kind = str(cand.get("kind") or "").strip()
+    category = str(cand.get("category") or "").strip().lower()
     key = _slug(cand.get("key"))
     value = str(cand.get("value") or "").strip()
     if not value:
@@ -155,12 +219,30 @@ def candidate_to_item(cand: dict) -> tuple[dict | None, str]:
     }
 
     def _as_habit(habit_key: str) -> tuple[dict, str]:
+        try:
+            days = int(cand.get("days") or 0)
+            count = int(cand.get("count") or 0)
+        except (TypeError, ValueError):
+            days = count = 0
+        meta = cand.get("habit") if isinstance(cand.get("habit"), dict) else {}
+        if (str(meta.get("type") or "") == "interaction"
+                and (days or count) and count < 3 and days < 3):
+            # 只出现两次的“互道晚安”是普通礼貌，不是这个人的固定互动习惯。
+            return None, "weak_interaction_habit"
         item = {**base, "kind": "fact", "key": habit_key,
                 "temporal_scope": "timeless"}
         # 模型给的字段优先；没给就从 value 推导（旧候选也能直接应用）。
         item["habit"] = mv.normalize_habit_metadata(
             cand.get("habit"), key=habit_key, value=value)
         return item, ""
+
+    def _scope_fields() -> dict:
+        scope = str(cand.get("scope") or "").strip().lower()
+        if scope == "past":
+            return {"temporal_scope": "past", "valid_for": "none"}
+        if scope == "recent":
+            return {"temporal_scope": "current", "valid_for": "14d"}
+        return {"temporal_scope": "timeless", "valid_for": "none"}
 
     if kind == "ritual":
         if "：" not in value and ":" not in value:
@@ -175,6 +257,12 @@ def candidate_to_item(cand: dict) -> tuple[dict | None, str]:
         key = key if key.startswith("habit") else f"habit_{key}"
         return _as_habit(key)
     if kind == "preference":
+        if category == "habit" or category == "routine":
+            habit_key = key if key.startswith("habit_") else f"habit_{key}"
+            return _as_habit(habit_key)
+        if category in _CATEGORY_PREFIX or category in _CATEGORY_SINGLE:
+            fact_key = _category_key(category, key)
+            return {**base, **_scope_fields(), "kind": "fact", "key": fact_key}, ""
         # 名字类候选在反思里常被写成 preference；抽取引号里的裸名字，
         # 交给 store 的名字闸门校验（source 里有“叫我”才过）。
         if (key in ("preferred_name", "user_nickname", "nickname")
@@ -196,17 +284,105 @@ def candidate_to_item(cand: dict) -> tuple[dict | None, str]:
         return {**base, "kind": "interaction_preference", "key": key,
                 "temporal_scope": "timeless"}, ""
     if kind in ("fact", "boundary"):
-        if key.startswith("habit_"):
-            return _as_habit(key)
-        return {**base, "kind": "fact", "key": key,
-                "temporal_scope": "timeless"}, ""
+        if category == "habit" or key.startswith("habit_"):
+            habit_key = key if key.startswith("habit_") else f"habit_{key}"
+            return _as_habit(habit_key)
+        if kind == "boundary":
+            # boundary 是“他不能接受什么”，类别只用来写具体事，不能把它变成 concern_*。
+            if category and category not in {"boundary", "concern"}:
+                key = _category_key(category, key)
+            if category and not key.startswith(("boundary_", "reject_")):
+                key = f"boundary_{key}"
+        elif category:
+            key = _category_key(category, key)
+        return {**base, **_scope_fields(), "kind": "fact", "key": key}, ""
     return None, "unsupported_kind"
+
+
+def _bigrams(text: str) -> set[str]:
+    s = re.sub(r"[^一-龥A-Za-z0-9]", "", str(text or ""))
+    return {s[i:i + 2] for i in range(max(0, len(s) - 1))}
+
+
+def _similar(a: str, b: str, threshold: float = 0.8) -> bool:
+    A, B = _bigrams(a), _bigrams(b)
+    if not A or not B:
+        return str(a).strip() == str(b).strip()
+    return len(A & B) / min(len(A), len(B)) >= threshold
+
+
+def _existing_lines(store, user: str, limit: int = 80) -> list[str]:
+    active = store._active_memories(user)
+    out = []
+    for m in active[:limit]:
+        value = str(m.get("value") or "").strip()
+        if value:
+            out.append(f"- {m.get('kind')}/{m.get('key')}={value}")
+    return out
+
+
+def _is_duplicate(item: dict, active: list[dict]) -> str:
+    """新条目是不是已有记忆的重复/缩水版。返回原因，空串表示不重复。"""
+    value = str(item.get("value") or "")
+    key = str(item.get("key") or "")
+    kind = str(item.get("kind") or "")
+    for m in active:
+        if str(m.get("kind")) != kind:
+            continue
+        old_key = str(m.get("key") or "")
+        old_value = str(m.get("value") or "")
+        if old_key == key and _similar(value, old_value, 0.75):
+            if len(value) + 4 < len(old_value) and _similar(old_value, value, 0.95):
+                return "would_shrink_existing"
+            # 新值只是把旧值写得更全（旧值被新值包含）→ 是补充，不是重复。
+            if len(value) > len(old_value) + 4 and _similar(old_value, value, 0.85):
+                return ""
+            return "duplicate_existing"
+        if _similar(value, old_value, 0.9):
+            return "duplicate_existing_value"
+    return ""
+
+
+_PROFILE_GROUPS = (
+    ("基本", ("real_name", "online_name", "address_terms", "preferred_name",
+            "nickname", "identity", "location", "occupation")),
+    ("关系", ("relationship_", "family_", "friend_", "pet_")),
+    ("生活", ("work_", "study_", "habit_", "health_")),
+    ("喜好", ("interest_", "favorite_", "dislike_")),
+    ("边界", ("boundary_", "reject_")),
+    ("愿望", ("concern_", "request_")),
+    ("共同经历", ("shared_", "past_event_")),
+    ("仪式", ("ritual_",)),
+    ("相处", ("interaction_preference",)),
+)
+
+
+def _profile_groups(mapped: list[dict]) -> dict:
+    groups: dict[str, list[dict]] = {}
+    for m in mapped:
+        item = m.get("item") or {}
+        key = str(item.get("key") or "")
+        kind = str(item.get("kind") or "")
+        label = "其他"
+        for name, prefixes in _PROFILE_GROUPS:
+            if any(key.startswith(p) or kind == p for p in prefixes):
+                label = name
+                break
+        groups.setdefault(label, []).append({
+            "key": key,
+            "value": item.get("value"),
+            "evidence": (m.get("candidate") or {}).get("evidence", ""),
+        })
+    return groups
 
 
 async def reflect_user(user: str, days: int, *,
                        apply: bool = False, refresh: bool = False,
                        out_dir: Path = OUT_DIR) -> dict:
     from src.plugins.chatbot.config import _get_clients
+    from src.plugins.chatbot.memory_v2 import ShadowMemoryStore
+
+    store = ShadowMemoryStore()
 
     path = ROOT / "data" / "chat_log" / f"{re.sub(r'[^0-9]', '', user)}.jsonl"
     if not path.exists():
@@ -230,24 +406,32 @@ async def reflect_user(user: str, days: int, *,
         digests.append({"day": day, "items": data.get("items") or []})
         print(f"[digest] {day}: {len(digests[-1]['items'])} 条")
 
+    active = store._active_memories(user)
+    existing_text = "\n".join(_existing_lines(store, user))[:2500] or "（暂无）"
     result = _parse_json(await _call(
-        client, REFLECT_PROMPT.format(digests=json.dumps(digests, ensure_ascii=False)),
-        max_tokens=2000))
+        client, REFLECT_PROMPT.format(
+            digests=json.dumps(digests, ensure_ascii=False), existing=existing_text),
+        max_tokens=2600))
     cands = result.get("memories") or []
     mapped, rejected = [], []
     for c in cands:
         item, why = candidate_to_item(c)
-        if item:
-            mapped.append({"candidate": c, "item": item})
-        else:
+        if not item:
             rejected.append({"candidate": c, "reason": why})
+            continue
+        dup = _is_duplicate(item, active)
+        if dup:
+            rejected.append({"candidate": c, "reason": dup})
+            continue
+        # 同一轮反思里自己重复的也去掉。
+        if any(_is_duplicate(item, [m["item"]]) for m in mapped):
+            rejected.append({"candidate": c, "reason": "duplicate_in_batch"})
+            continue
+        mapped.append({"candidate": c, "item": item})
 
     applied = []
     backup = ""
     if apply and mapped:
-        from src.plugins.chatbot.memory_v2 import ShadowMemoryStore
-
-        store = ShadowMemoryStore()
         if store.state_file.exists():
             backup = str(store.state_file.with_name(
                 store.state_file.name + f".bak-reflect-{datetime.now():%Y%m%d-%H%M%S}"))
@@ -269,14 +453,17 @@ async def reflect_user(user: str, days: int, *,
                 applied.append({"key": m["item"].get("key"), "error": repr(e)})
 
     out_dir.mkdir(parents=True, exist_ok=True)
+    profile = _profile_groups(mapped)
     out = out_dir / f"{user}.json"
     out.write_text(json.dumps({
         "user": user, "days": len(by_day),
         "candidates": cands, "mapped": mapped,
+        "profile": profile,
         "rejected": rejected, "applied": applied, "backup": backup,
     }, ensure_ascii=False, indent=1), encoding="utf-8")
     return {"user": user, "days": len(by_day), "candidates": len(cands),
             "mapped": len(mapped), "rejected": len(rejected),
+            "profile": {k: len(v) for k, v in profile.items()},
             "applied": applied, "backup": backup, "out": str(out)}
 
 
@@ -300,9 +487,17 @@ def apply_mapped(user: str, path: str) -> dict:
         print(f"[reflect] 写库前已备份：{backup}")
     applied = []
     observed = datetime.now().isoformat()
+    try:
+        active = store._active_memories(user)
+    except AttributeError:          # 测试里的假 store 没有这个方法
+        active = []
     for m in mapped:
         item = m.get("item") or {}
         cand = m.get("candidate") or {}
+        dup = _is_duplicate(item, active)
+        if dup:
+            applied.append({"key": item.get("key"), "skipped": dup})
+            continue
         src = {
             "session_id": f"reflect-{user}-review",
             "observed_at": observed,
@@ -312,6 +507,8 @@ def apply_mapped(user: str, path: str) -> dict:
         try:
             accepted = store.ingest(user, [item], source=src)
             applied.append({"key": item.get("key"), "accepted": bool(accepted)})
+            if accepted:
+                active.extend(accepted)
         except Exception as e:
             applied.append({"key": item.get("key"), "error": repr(e)})
     return {"user": user, "from_file": str(path), "mapped": len(mapped),

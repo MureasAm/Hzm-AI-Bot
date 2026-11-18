@@ -744,6 +744,48 @@ def _run_memory_dedupe(args):
     memory_v2_tool.run_dedupe_single_valued(args)
 
 
+# ==================== 子命令：memory-hygiene ====================
+
+def _add_memory_hygiene(sub):
+    p = sub.add_parser("memory-hygiene",
+                       help="记忆库卫生：同 key 去重、裸 habit 补 key、修一次性状态占习惯槽")
+    p.add_argument("--write", action="store_true", help="落盘（默认只看）")
+    p.add_argument("--state", default=None, help="指定状态文件（默认真实库）")
+    p.set_defaults(func=_run_memory_hygiene)
+
+
+def _run_memory_hygiene(args):
+    import memory_hygiene
+    argv = ["--write"] if args.write else []
+    if args.state:
+        argv += ["--state", args.state]
+    sys.exit(memory_hygiene.main(argv))
+
+
+# ==================== 子命令：history-channel-ab ====================
+
+def _add_history_channel_ab(sub):
+    p = sub.add_parser("history-channel-ab",
+                       help="历史注入 A/B：assistant 原句 vs 转述 system vs 混合")
+    p.add_argument("--users", default="2151983431,905860780")
+    p.add_argument("--turns", type=int, default=10)
+    p.add_argument("--samples", type=int, default=1)
+    p.add_argument("--arms", default="ABC", help="要跑哪几组，如 ABC / AB / B")
+    p.add_argument("--concurrency", type=int, default=3)
+    p.add_argument("--dry", action="store_true")
+    p.set_defaults(func=_run_history_channel_ab)
+
+
+def _run_history_channel_ab(args):
+    import history_channel_ab
+    argv = ["--users", args.users, "--turns", str(args.turns),
+            "--samples", str(args.samples), "--arms", args.arms,
+            "--concurrency", str(args.concurrency)]
+    if args.dry:
+        argv.append("--dry")
+    sys.exit(history_channel_ab.main(argv))
+
+
 def _add_weekly_review(sub):
     p = sub.add_parser("weekly-review",
                        help="只读周报：最近 N 天聊天 + 注入轨迹 → 确定性指标 + 问题轮次 + 候选")
@@ -832,6 +874,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_skeleton_ab(sub)
     _add_sticker_stats(sub)
     _add_memory_dedupe(sub)
+    _add_memory_hygiene(sub)
+    _add_history_channel_ab(sub)
     _add_llm_cost(sub)
     _add_proactive_ab(sub)
     _add_model_ab(sub)

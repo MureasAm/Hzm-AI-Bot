@@ -354,6 +354,10 @@ async def annotate_turn(history_lines: list[str], user_msg: str, client=None):
         else:
             new_hist.append(ln)
 
+    return new_hist, _sub_quotes(user_msg, gists)
+
+
+def _sub_quotes(user_msg: str, gists: dict[str, str]) -> str:
     def _quote_sub(m):
         text = m.group("text").strip()
         note, core = _split_image_note(text)
@@ -363,4 +367,27 @@ async def annotate_turn(history_lines: list[str], user_msg: str, client=None):
         new_text = f"{note} {g}" if note else g
         return f"[对方引用了你之前说过的话，大意是：{new_text}{m.group('tail')}]"
 
-    return new_hist, _SELF_QUOTE_RE.sub(_quote_sub, user_msg or "")
+    return _SELF_QUOTE_RE.sub(_quote_sub, user_msg or "")
+
+
+async def annotate_quotes(user_msg: str, client=None) -> str:
+    """只改写「用户当前消息里引用她的话」，**不碰历史**。
+
+    历史已经改成 assistant 原生轮次（2026-11-19），不再需要逐条转述；
+    但引用块仍会把她的原句塞进 user 消息，实测会驱动复读，所以这一小段保留。
+    """
+    if not enabled():
+        return user_msg
+    quote_texts = []
+    for m in _SELF_QUOTE_RE.finditer(user_msg or ""):
+        _, core = _split_image_note(m.group("text"))
+        if core:
+            quote_texts.append(core)
+    if not quote_texts:
+        return user_msg
+    try:
+        gists = await gist_texts(quote_texts, client)
+    except Exception as e:
+        print(f"⚠️ 自述转述（引用）异常（原样注入）: {type(e).__name__}")
+        return user_msg
+    return _sub_quotes(user_msg, gists or {})

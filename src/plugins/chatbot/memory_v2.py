@@ -1196,6 +1196,94 @@ def _ritual_matches(memory: dict, query: str) -> bool:
     return any(c in q for c in cues)
 
 
+# ---- 用户档案分类（2026-11-18） ----
+# 目的：把「稳定档案」和「今天/今晚的一次性状态」分开。前者每轮都在场是合理的；
+# 后者每轮都在场会让她把几天前的晚饭当成现在，必须只进「近况」或直接不注。
+_EPHEMERAL_KEY_RE = re.compile(
+    r"(^|_)(today|tonight|tomorrow|yesterday|this_week|this_month|recent|status"
+    r"|current_situation)(_|$)|_(?:20\d{2})_\d{2}_\d{2}($|_)")
+_EPHEMERAL_VALUE_RE = re.compile(
+    r"(今天|今晚|昨天|前天|明天|这周|本周|最近|刚才|刚刚|现在).{0,24}(了|要|得|去|在|没|有)")
+_PAST_VALUE_RE = re.compile(r"(小时候|高中|高三|高考|以前|过去|曾经|那年|当时|上次)")
+
+
+def _fact_section(memory: dict) -> str:
+    """一条 fact 属于档案的哪一栏；返回「近况/过去」时仍会再判断一次时效。"""
+    key = str(memory.get("key") or "")
+    value = str(memory.get("value") or "")
+    scope = str(memory.get("temporal_scope") or "")
+    if key.startswith("relationship_"):
+        return "关系"
+    if key.startswith(("family_", "pet_")):
+        return "家人"
+    if key.startswith("health_"):
+        if scope == "past" or "已经好了" in value or "好了" in value:
+            return "过去"
+        if _EPHEMERAL_KEY_RE.search(key) or _EPHEMERAL_VALUE_RE.search(value):
+            return "近况"
+        return "健康"
+    if key.startswith(("interest_", "favorite_")):
+        return "兴趣"
+    if key.startswith(("dislike_", "boundary_", "reject_", "taboo_")):
+        return "雷区"
+    if key.startswith("concern_"):
+        return "愿望"
+    if key.startswith("shared_"):
+        return "共同经历"
+    if key.startswith("habit_"):
+        return "习惯"
+    if _EPHEMERAL_KEY_RE.search(key) or (scope == "current" and _EPHEMERAL_VALUE_RE.search(value)):
+        return "近况"
+    if scope == "past" or key.startswith("past_event") or _PAST_VALUE_RE.search(value):
+        return "过去"
+    if key.startswith(("work", "study", "class", "course", "school", "student")) \
+            or key in {"roommate_relationship", "dining_alone", "personality_fast_thinking",
+                       "evening_study_hall", "emotional_state_calmed"}:
+        return "生活"
+    return "生活"
+
+
+def _value_dup(a: str, b: str, threshold: float = 0.8) -> bool:
+    ga, gb = _ngrams(a), _ngrams(b)
+    if not ga or not gb:
+        return a.strip() == b.strip()
+    return len(ga & gb) / min(len(ga), len(gb)) >= threshold
+
+
+_EVENT_STATUS_ZH = {"ongoing": "进行中", "ended": "已结束", "planned": "计划中"}
+
+
+def merge_events_into_card(card: str, events: list[dict],
+                           budget: int = 900) -> tuple[str, list[dict]]:
+    """事件和稳定卡说的是同一件事时，把事件的时间并进卡里，事件本身不再重复注入。
+
+    典型：905 的「表白」既在卡的关系行、又在事件块【你们之间发生过的事】。
+    删掉事件会丢时间；两处都留又重复。这里把它并成卡里的一行：
+        …用户向灰泽满表白…（2026-11-14，进行中）
+    """
+    lines = (card or "").split("\n")
+    kept: list[dict] = []
+    for event in events or []:
+        what = str(event.get("what") or "").strip()
+        if not what:
+            kept.append(event)
+            continue
+        hit = next((i for i, line in enumerate(lines)
+                    if line and _value_dup(what, line, 0.8)), None)
+        if hit is None:
+            kept.append(event)
+            continue
+        date = str(event.get("date") or "").strip()
+        status = _EVENT_STATUS_ZH.get(str(event.get("status") or ""), "")
+        tag = "，".join(x for x in (date, status) if x)
+        if tag and f"（{tag}）" not in lines[hit]:
+            candidate = lines[hit] + f"（{tag}）"
+            trial = "\n".join(lines[:hit] + [candidate] + lines[hit + 1:])
+            if len(trial) <= budget:
+                lines[hit] = candidate
+    return "\n".join(lines), kept
+
+
 def _name_fact_rejection(key: str, value: str, source: dict) -> str:
     """名字类事实的代码闸门：必须由用户明确要求称呼，且 value 本身像名字。"""
     if key not in _NAME_KEYS:
@@ -1852,6 +1940,7 @@ class ShadowMemoryStore:
     def build_state_card(self, user_id: str, *, now: datetime | None = None) -> str:
         """稳定用户卡：私聊每轮注入。没有可用内容返回空串。"""
         active = self._active_memories(user_id, now=now)
+        now_dt = now or datetime.now()
         lines: list[str] = []
 
         def _latest(kind: str, keys: set[str]) -> list[dict]:
@@ -1890,6 +1979,10 @@ class ShadowMemoryStore:
         if address_terms:
             lines.append(inj.T("state", "line", label="称呼",
                                value="、".join(address_terms)[:60]))
+        her_nicks = _join([m for m in active if m.get("kind") == "fact"
+                           and m.get("key") == "her_nickname"], limit=1, width=20)
+        if her_nicks:
+            lines.append(inj.T("state", "line", label="他叫你", value=her_nicks))
         identity = [m for m in active if m.get("kind") == "fact"
                     and m.get("key") in self._CARD_IDENTITY_KEYS]
         identity_text = _join(identity, limit=3, width=50)
@@ -1905,6 +1998,56 @@ class ShadowMemoryStore:
         relation_text = _join(relation, limit=2, width=80)
         if relation_text:
             lines.append(inj.T("state", "line", label="关系", value=relation_text))
+
+        # 稳定档案的其余栏目（2026-11-18）：家人/健康/生活/习惯/雷区/过去/近况。
+        # 以前这些只在非 v3 的【相关用户事实】里按相关度取 1–4 条；v3 下它们没有出口，
+        # 抽取了也等于没记。这里按栏目注进去，并做**同值去重**（同一句话不在两栏出现）。
+        handled_keys = (
+            self._CARD_REAL_NAME_KEYS | self._CARD_ONLINE_NAME_KEYS
+            | self._CARD_IDENTITY_KEYS | self._CARD_LOCATION_KEYS
+            | self._CARD_ATTITUDE_KEYS
+            | {"preferred_name", "address_terms", "nickname", "nickname_called",
+               "name", "her_nickname"}
+        )
+
+        def _rest_facts(*sections: str) -> list[dict]:
+            out = []
+            for m in active:
+                if m.get("kind") != "fact":
+                    continue
+                key = str(m.get("key") or "")
+                if key in handled_keys:
+                    continue
+                if key.startswith(("relationship_", "ritual_", "interest_", "favorite_")):
+                    continue
+                section = _fact_section(m)
+                if section not in sections:
+                    continue
+                if section == "近况":
+                    # 「今天/今晚」类状态只保留最近 7 天；更早的留在库里，但不再每轮翻出来。
+                    seen = _iso(m.get("last_observed_at")) or _iso(m.get("created_at"))
+                    if seen and (now_dt - seen).days > 7:
+                        continue
+                out.append(m)
+            return out
+
+        def _section(label: str, items: list[dict], limit: int = 3, width: int = 70) -> None:
+            vals: list[str] = []
+            for m in items:
+                value = str(m.get("value") or "").strip().rstrip("。；;")
+                if not value or any(_value_dup(value, old) for old in vals):
+                    continue
+                vals.append(value[:width])
+                if len(vals) >= limit:
+                    break
+            if vals:
+                lines.append(inj.T("state", "line", label=label, value="；".join(vals)))
+
+        _section("家人", _rest_facts("家人"), limit=3, width=60)
+        _section("健康", _rest_facts("健康"), limit=2, width=60)
+        _section("生活", _rest_facts("生活"), limit=4, width=80)
+        _section("愿望", _rest_facts("愿望"), limit=3, width=70)
+        _section("共同经历", _rest_facts("共同经历"), limit=2, width=80)
 
         attitude: list[str] = []
         for m in _latest("interaction_preference", self._CARD_ATTITUDE_KEYS):
@@ -1924,6 +2067,20 @@ class ShadowMemoryStore:
         if rituals:
             lines.append(inj.T("state", "line", label="仪式",
                                value=_join(rituals, limit=2, width=60)))
+
+        # 固定习惯：放在档案里让她“知道有这回事”；具体这轮要不要问，
+        # 由 build_habit_hint 按线索另给一句动作提示。
+        habit_vals: list[str] = []
+        for m in active:
+            if m.get("kind") != "fact" or not str(m.get("key") or "").startswith("habit_"):
+                continue
+            value = _habit_display_value(m.get("value"))
+            if value and not any(_value_dup(value, old) for old in habit_vals):
+                habit_vals.append(value[:60])
+        if habit_vals:
+            lines.append(inj.T("state", "line", label="习惯",
+                               value="；".join(habit_vals[:4])[:130]))
+
         interests = [m for m in active if m.get("kind") == "fact"
                      and (str(m.get("key") or "").startswith("interest_")
                           or str(m.get("key") or "").startswith("favorite_"))]
@@ -1931,9 +2088,13 @@ class ShadowMemoryStore:
         if interest_text:
             lines.append(inj.T("state", "line", label="兴趣", value=interest_text))
 
+        _section("雷区", _rest_facts("雷区"), limit=3, width=60)
+        _section("过去", _rest_facts("过去"), limit=2, width=80)
+        _section("近况", _rest_facts("近况"), limit=3, width=80)
+
         out, used = [], 0
         for line in lines:
-            if used + len(line) + 1 > 380:
+            if used + len(line) + 1 > 900:
                 break
             out.append(line)
             used += len(line) + 1
@@ -1958,6 +2119,24 @@ class ShadowMemoryStore:
         return self._fit(self._preference_lines(active, query or "", used_out=used_ids,
                                                 now=now, include_facts=include_facts),
                          PREFERENCE_BUDGET_CHARS)
+
+    def build_ritual_hint(self, user_id: str, query: str, *,
+                          now: datetime | None = None) -> str:
+        """他这轮说到仪式场景时，给一句**动作提示**（内容在稳定卡的「仪式」行里）。
+
+        为什么不把仪式内容再抄一遍：卡里已经有完整内容，这里只提醒“这轮照做、别漏”。
+        这样既不会每天固定触发（只有命中场景词才出现），也不会和卡重复。
+        """
+        for memory in self._active_memories(user_id, now=now):
+            if memory.get("kind") != "interaction_preference":
+                continue
+            key = str(memory.get("key") or "")
+            if not _is_ritual_key(key) or not _ritual_matches(memory, query):
+                continue
+            head = re.split(r"[：:]", str(memory.get("value") or ""), maxsplit=1)[0]
+            scene = next((t for t in re.split(r"[+＋、,，/|\s]+", head) if t), "仪式")
+            return inj.T("profile", "ritual_action", scene=scene)
+        return ""
 
     def build_habit_hint(self, user_id: str, query: str,
                          *, now: datetime | None = None,

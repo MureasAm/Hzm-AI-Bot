@@ -100,6 +100,58 @@ def test_unsupported_kind_and_empty_value():
     assert item is None and why == "empty_value"
 
 
+def test_category_maps_to_profile_prefixes():
+    item, why = mr.candidate_to_item({
+        "kind": "fact", "category": "family", "key": "sister",
+        "value": "用户有个妹妹，在读高中"})
+    assert why == "" and item["key"] == "family_sister"
+    item, _ = mr.candidate_to_item({
+        "kind": "fact", "category": "interest", "key": "books",
+        "value": "喜欢东野圭吾"})
+    assert item["key"] == "interest_books"
+    item, _ = mr.candidate_to_item({
+        "kind": "boundary", "category": "boundary", "key": "intimate_titles",
+        "value": "不能叫她老婆"})
+    assert item["key"] == "boundary_intimate_titles"
+    item, _ = mr.candidate_to_item({
+        "kind": "boundary", "category": "concern", "key": "late_night_work",
+        "value": "他会担心灰泽满熬夜"})
+    assert item["key"] == "boundary_late_night_work"
+
+
+def test_weak_interaction_habit_is_rejected():
+    item, why = mr.candidate_to_item({
+        "kind": "habit", "category": "interaction", "key": "goodnight",
+        "value": "每天睡前都会互道晚安", "days": 2, "count": 2,
+        "habit": {"type": "interaction", "cadence": "daily",
+                  "period": "night", "cues": ["晚安"]}})
+    assert item is None and why == "weak_interaction_habit"
+
+
+def test_existing_memory_dedupes_reflection_candidate():
+    item, _ = mr.candidate_to_item({
+        "kind": "fact", "category": "family", "key": "sister",
+        "value": "用户有个妹妹，在读高中"})
+    active = [{"kind": "fact", "key": "family_sister",
+               "value": "他有个妹妹，在读高中"}]
+    assert mr._is_duplicate(item, active) == "duplicate_existing"
+    richer = dict(item)
+    richer["value"] = "用户有个妹妹，在读高中，住校，周末才回家"
+    assert mr._is_duplicate(richer, active) == ""
+
+
+def test_profile_groups_mapped_items():
+    mapped = [
+        {"item": {"kind": "fact", "key": "family_sister", "value": "有个妹妹"},
+         "candidate": {"evidence": "原话"}},
+        {"item": {"kind": "interaction_preference", "key": "ritual_goodnight",
+                  "value": "晚安：晚安+mua"}, "candidate": {}},
+    ]
+    groups = mr._profile_groups(mapped)
+    assert groups["关系"][0]["key"] == "family_sister"
+    assert groups["仪式"][0]["key"] == "ritual_goodnight"
+
+
 def test_apply_mapped_writes_only_mapped(tmp_path, monkeypatch):
     """--from-file：只写 review 过的 mapped，不碰 candidates/rejected。"""
     import json

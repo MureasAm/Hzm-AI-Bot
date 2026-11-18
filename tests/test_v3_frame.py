@@ -103,3 +103,54 @@ def test_profile_context_can_exclude_facts(tmp_path):
 
     with_facts = store.build_preference_context("u", "今天好累", include_facts=True)
     assert "小温" in with_facts
+
+def test_state_card_includes_family_habits_and_recent(tmp_path):
+    state = {"users": {"u": {"memories": [
+        {"id": "1", "kind": "fact", "key": "family_sister", "value": "有个妹妹在读高中",
+         "status": "confirmed", "temporal_scope": "timeless", "explicit": True,
+         "last_observed_at": "2026-11-10T10:00:00"},
+        {"id": "2", "kind": "fact", "key": "habit_morning_run",
+         "value": "每天早上起床后都要跑操（学校要求）", "status": "confirmed",
+         "temporal_scope": "timeless", "explicit": True,
+         "habit": {"type": "routine", "cadence": "daily", "period": "morning",
+                   "cues": ["跑操", "跑步"]},
+         "last_observed_at": "2026-11-10T10:00:00"},
+        {"id": "3", "kind": "fact", "key": "work", "value": "今天买的新游戏开服了",
+         "status": "confirmed", "temporal_scope": "current", "explicit": True,
+         "last_observed_at": "2026-11-17T10:00:00"},
+        {"id": "4", "kind": "fact", "key": "work_old", "value": "今天去打扫卫生了",
+         "status": "confirmed", "temporal_scope": "current", "explicit": True,
+         "last_observed_at": "2026-10-01T10:00:00"},
+    ]}}}
+    p = tmp_path / "state.json"
+    p.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    store = memory_v2.ShadowMemoryStore(state_file=p)
+    card = store.build_state_card("u")
+    assert "家人：有个妹妹在读高中" in card
+    assert "习惯：他每天早上" in card
+    assert "近况：今天买的新游戏开服了" in card
+    assert "打扫卫生" not in card
+
+
+def test_ritual_hint_only_on_cue(tmp_path):
+    state = {"users": {"u": {"memories": [
+        {"id": "r", "kind": "interaction_preference", "key": "ritual_goodnight",
+         "value": "晚安/睡前/要睡：晚安+喜欢绿冻+爱绿冻+mua",
+         "status": "confirmed", "temporal_scope": "timeless", "explicit": True,
+         "last_observed_at": "2026-11-10T10:00:00"},
+    ]}}}
+    p = tmp_path / "state.json"
+    p.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    store = memory_v2.ShadowMemoryStore(state_file=p)
+    hint = store.build_ritual_hint("u", "我要睡了")
+    assert "固定期待" in hint and "晚安" in hint
+    assert store.build_ritual_hint("u", "早上好") == ""
+
+
+def test_duplicate_event_merged_into_card():
+    card = "关系：用户向灰泽满表白，称她是自己所爱的独一无二的人"
+    events = [{"what": "用户向灰泽满表白，称她是自己所爱的独一无二的人",
+               "date": "2026-11-14", "status": "ongoing"}]
+    new_card, kept = memory_v2.merge_events_into_card(card, events)
+    assert kept == []
+    assert "2026-11-14" in new_card and "进行中" in new_card
