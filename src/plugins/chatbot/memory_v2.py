@@ -51,8 +51,6 @@ _VALID_FOR_DAYS = {"3d": 3, "14d": 14, "90d": 90}
 COMMITMENT_TTL_DAYS = 14
 COMMITMENT_ONE_TIME_TTL_HOURS = 48
 COMMITMENT_STANDING_TTL_DAYS = 90
-# 称呼提示的冷却：同一用户 10 分钟内最多提示一次，避免用户连叫外号时她每句都用。
-NICKNAME_HINT_COOLDOWN_SECONDS = 600
 _ONE_TIME_COMMITMENT_RE = re.compile(r"今天|今晚|一会儿|待会|等下|明天")
 _STANDING_COMMITMENT_RE = re.compile(r"以后|天天|每天|每次|一直|长期")
 # 这些 key 的事实**不管聊没聊到都带上**——名字/地点/时区/身份是"不矛盾的底线"。
@@ -61,17 +59,14 @@ _STANDING_COMMITMENT_RE = re.compile(r"以后|天天|每天|每次|一直|长期
 _ALWAYS_ON_FACT_KEYS = {
     "preferred_name", "name", "nickname", "nickname_called", "address_terms",
     "real_name", "online_name", "online_id", "location", "city",
-    "timezone", "identity", "occupation", "background", "her_nickname",
+    "timezone", "identity", "occupation", "background",
 }
 # 上面那批里**天然只有一个值**的（名字/地点/时区/职业）——同一 key 的新值必须顶掉旧的。
 # ⚠️ 不能直接用 `_ALWAYS_ON_FACT_KEYS` 当顶替名单：`identity` / `background` 会有多条
 #    （"是学生" + "在澳洲留学"），顶替会真丢信息（踩过）。
-# ⚠️ 也不能只靠 `temporal_scope == "current"` 判顶替：模型常把 `preferred_name` 标成
-#    **timeless**，而 timeless 走"累积" → 同一个名字存 3 份、每轮注入 3 次（实测
-#    1750961968 正是如此，还叠上"她每句都叫名字"的正反馈）。
+# 不能只靠 temporal_scope：模型可能把称呼标成 timeless，仍须按单值键去重。
 _SINGLE_VALUED_FACT_KEYS = {
     "preferred_name", "name", "nickname", "location", "city", "timezone", "occupation",
-    "her_nickname",
 }
 # 名字类事实的代码闸门（2026-10-19）：模型会把"云子"（网络用语，嫌她不懂/很云）、
 # "我是绿冻"（粉丝身份）、"用户希望被称呼为X"（整句）都当成 preferred_name。
@@ -84,9 +79,26 @@ _NAME_REQUEST_RE = re.compile(
 _NAME_VALUE_OK_RE = re.compile(r"^[一-鿿A-Za-z0-9_\-·、]{1,12}$")
 _NAME_VALUE_BAD_WORDS = ("用户", "希望", "称呼", "自称", "或者", "不叫")
 # 她自己的名字/常见变体：**绝不能**被当成"用户的称呼/本名/网名"。
-# 2026-11-10 实测：990772382 常把"灰泽满"叫成"区泽满"，提取模型把「区泽满」
-# 存成了 address_terms，之后她反过来叫用户"区泽满"。名字类事实必须先过这一关。
+# 别人对机器人的误称不构成用户自己的名字。
 _HER_NAME_TOKENS = ("灰泽满", "灰泽", "泽满", "小满", "满姐", "满神", "灰宝", "hazel")
+_COMMON_HER_ADDRESSES = ("姐姐", "妈妈", *_HER_NAME_TOKENS)
+_NICKNAME_TOKEN = re.compile(r"[\w.·-]{1,24}")
+_NICKNAME_NAMING = r"(?:(?:叫|喊|称呼)(?:过)?你(?:为)?|管你叫)"
+_NICKNAME_LIST_QUERY = re.compile(
+    rf"(?:以前|之前|上次|平时|曾经|记得|叫过|喊过|常叫).*?(?:{_NICKNAME_NAMING}|叫过|喊过).*?(?:什么|啥|哪些)"
+    rf"|(?:我|还记得).*?{_NICKNAME_NAMING}(?:什么|啥|哪些)"
+)
+_NICKNAME_FOLLOWUP = re.compile(r"^(?:那|所以)?你?(?:上次|之前|以前|刚才)?(?:有)?(?:答应|同意|拒绝)(?:了吗|过吗|了没|吗|了没有|了么)?[？?。！!]*$")
+_NICKNAME_DECISION_QUERY = re.compile(r"(?:之前|以前|上次|刚才|你).*(?:答应|同意|拒绝|允许|接受|认可|承认)")
+_NICKNAME_DECLINE = re.compile(r"(?:别|不许|不要|不准|不可以|不能|不同意|不答应|不让你)[^。！？；，、]{0,8}(?:叫|喊|称呼)")
+_NICKNAME_ALLOW = re.compile(
+    r"(?<![不没别])(?:可以|同意|答应|允许|准许|让你|准你)[^。！？；，、]{0,8}(?:叫|喊|称呼)"
+    r"|(?:叫|喊)[^。！？；，、]{0,8}(?<![不没])可以"
+)
+_NICKNAME_QUOTED_SPEECH = re.compile(r"\[引用[^\n]*?说的：「.*?」[^\]]*\]|(?:说|问|写|原话是)[“「『].*?[”」』]", re.S)
+_NICKNAME_TIME_LIMIT = re.compile(r"一次|一声|这次|这一次|这一回|这轮|今天|今晚|这回|暂时|现在")
+_NICKNAME_CORRECTION = re.compile(r"别记|不要记|忘掉|忘记|删除|撤回|从没|从未|没叫过|记错|叫错")
+_MAX_NICKNAME_QUOTE = 90
 
 _KINDS = {"fact", "interaction_preference", "commitment", "request"}
 _ACTIONS = {"upsert", "retract"}
@@ -108,8 +120,7 @@ _PREFERENCE_VALUES = {
     "reply_length": {"short", "medium", "long"},
     "topic_preference": {"engage", "avoid"},
 }
-# 自由文本的相处方式键：值不是枚举，而是一句「场景：内容」（2026-10-23 加 ritual——
-# 固定仪式没法塞进上面那张枚举表；用户 905860780 每晚的“仪式感晚安”就是这么漏掉的）。
+# 固定互动仪式的值不是枚举，而是自由文本「场景：内容」。
 # key 用 `ritual` 或 `ritual_<场景>`（如 ritual_goodnight）：每个场景一个槽，
 # 同一场景的新值顶掉旧值，不同场景互不影响。
 def _is_ritual_key(key: str) -> bool:
@@ -187,30 +198,9 @@ MEMORY_V2_EXTRACT_PROMPT = """你是灰泽满私聊机器人的记忆候选提�
         名字 `real_name` ／ 网名 `online_name` ／ 称呼 `address_terms`
         住地 `location` ／ 身份 `identity` ／ 健康 `health` ／ 家人 `family` ／ 工作学习 `work`
         关系 `relationship` ／ 喜好 `interest` ／ 习惯 `habit` ／ 过往事件 `past_event`
-   · **习惯类（`habit_*`）要把「频率 + 原因」一起写进去**：不是"早上要跑步"，
-     而是"每天早上要去跑早操（学校要求）"。（2026-10-17 实测：只记了前者的半截，
-     她连着几天都在问"你起这么早干嘛去"——用户已经说过好几遍是学校要求的。）
-   · ⚠️ **同一活动有多个频率时必须分开记**：不要把它们合成一条。
-     实测踩坑（2026-10-21，用户 2151983431）：原话是"早上跑的是早操，这个是一周三次的"，
-     模型写成"早上跑早操是一周三次的"——把**每天早上的跑操**和**每周三次的 3 公里跑**
-     合并了，之后早起对话全接不上。正确写法是两条：
-     `habit_morning_run=每天早上起床后都要跑操（学校要求）`、
-     `habit_run_3km=每周还有三次 3 公里跑`。
-   · **习惯类还要填一个 `habit` 对象**（只填在 habit_* 上，其它 fact 不要填）：
-     `type`：`routine`＝作息/日程（起床、上课、跑步）；`interaction`＝他和你的互动习惯
-       （表情包撒娇、情话、念诗、睡前摸摸）。**不要把所有习惯都叫 routine。**
-     `cadence`：`daily`（每天）/`weekly`（每周）/`monthly`（每月）/`regular`（经常、平时）/
-       `once`（今晚、明天、这次——**一次性计划不是固定习惯**）/`unknown`。
-     `period`：`morning`/`noon`/`afternoon`/`evening`/`night`/`any`/`unknown`。
-       只有**作息类且每天**的习惯才会按这个时段触发；不确定就写 `any`。
-     `cues`：他实际会说的 2–8 个触发短语（如"跑操""早八""摸摸""表情包"）。
-       **不要把"每天/早上/晚上"这类时间词写进 cues**——时段由 period 管。
-     例子：
-       `habit_morning_run`：`habit={{"type":"routine","cadence":"daily","period":"morning","cues":["跑操","跑步","早操"]}}`
-       `habit_expression_sticker`：`habit={{"type":"interaction","cadence":"daily","period":"any","cues":["表情包","撒娇","语音"]}}`
-       `habit_send_poetry`：`habit={{"type":"interaction","cadence":"regular","period":"any","cues":["念诗","诗歌","歌词"]}}`
-     ⚠️ "今晚要熬夜看比赛"只是一次性计划：要么不记，要么 `cadence":"once"`；
-       不要让它每天早上/晚上都被当成固定习惯翻出来。
+   · **习惯类（habit_*）合写频率和原因**：如「每周三次做护眼操，因为工作经常看屏幕」。
+   · **不同习惯及频率分开记**：如「每天做拉伸」和「每周三次快走」不要合并。
+   · **习惯类（habit_*）合写频率和原因**：如「每周三次做护眼操，因为工作经常看屏幕」。
    · 判据：同一个人、同一个类别下面，两件不同的事必须能用名字分开。
      后半截写不出具体的东西，就说明这条本来就不该记。
    · ⛔ **不许用 `moment` / `info` / `situation` / `experience` / `thing` 这类空壳名**：
@@ -221,22 +211,27 @@ MEMORY_V2_EXTRACT_PROMPT = """你是灰泽满私聊机器人的记忆候选提�
      - `online_name`：**网名/ID/曾用名**（“网名是千纸鸢”“ID是X”）。
      - `address_terms`：**他希望灰泽满怎么称呼他**（“叫我学长”“外号是学长、机长”）；多个用「、」写进同一条，一次记全；他改口时用新 value 覆盖。
      - `preferred_name`：**只记当前首选称呼**（他明确说“以后就叫我X”“首选叫X”）；本名/网名不要塞进这里。
-     - `her_nickname`：**用户给灰泽满起的称呼**（“叫你灰宝”）。
+     - `her_nickname`：**用户对灰泽满使用或明确提出的称呼**（如“姐姐”“灰宝”）。
      - ⚠️ **方向别搞反**：用户直接叫灰泽满某个词（如“区泽满”“满姐”）是**他对她的称呼**，
-       不是 `address_terms`，更不是他的名字；反复这样叫可以记 `her_nickname`。
+       对应 `her_nickname`。
        她的名字和变体（灰泽满、小满、满姐、灰宝、Hazel，以及“区泽满”这类谐音）**绝不能**
        写进 `address_terms` / `preferred_name` / `real_name` / `online_name`。
-   · `preferred_name` / `address_terms` 的 value **只写名字本身**（如“草草子哥”“学长、机长”），
+   · `preferred_name` / `address_terms` 的 value **只写名字本身**（如“星屿哥”“学长、机长”），
      **不要写成“用户希望被称呼为X”这种整句**——那个句子会被当成名字注入，又长又怪。
      ⚠️ 只有用户**明确要求灰泽满这样称呼他**才记；"我是绿冻/暖冻"是粉丝身份，不是名字；
      "云子""云玩家"是网络用语（说他不懂/很云），不是名字；
      玩梗称呼（"爸爸"）和整句（"用户希望被称呼为X"）都不要记。
-   · **用户给灰泽满起的称呼**：key=`her_nickname`，value 只写称呼本身（如"灰宝"）。
-     用户明确说"叫你X""就喊你X""可以叫你X吗"时记；**用户反复用某个词直接称呼她**
-     （哪怕是在玩谐音/口误，如"区泽满"）也算，记 `her_nickname`。
-     这是对她的昵称，不是她的身份设定。
-     ⚠️ 只记这个称呼事实，**不要**借此改变她的自称——她默认仍自称"灰泽满"；
-     用户后来说"还是叫灰泽满吧/别叫X了"，对 `her_nickname` 输出 action=retract。
+   · **用户对灰泽满的称呼**：每个称呼单独输出一条 `fact/her_nickname`，value 只写称呼本身，
+     temporal_scope=`timeless`。直接喊「姐姐，早」是实际用了「姐姐」；「以后我叫你姐姐」可记为命名约定的提出。
+     「可以叫你姐姐吗」只是询问，只有她在回复里明确许可或拒绝才记录该提议及她的答复。
+     引用里的称呼、谈论第三人（如「我姐姐下班了」）都不算对她的称呼。称呼不改变她的身份或平常的自称。
+     用户换着叫「姐姐」「灰宝」时，各自 upsert；只有明确纠正某个称呼的记忆或要求忘记它才 retract，
+     value 必须写清要撤回的那个称呼。
+     若她在本轮就同一个称呼明确许可或拒绝，可在该条加 `nickname_response`：
+     stance=`accepted` 或 `declined`；scope=`limited`（只限这次、私聊等明确范围）、`standing`（明确长期）、
+     `unspecified`（明确表达态度，没说范围）；quote 抄她本轮能证明态度与范围的原句片段，不改写。
+     例如「这次可以叫我姐姐」是 `accepted/limited`；「以后别叫我姐姐」是 `declined/standing`。
+     「嗯」「随你」「谁是你姐姐」之类含糊或嘴硬的接话不构成明确许可或拒绝，省略 `nickname_response`。
    · temporal_scope：**经历**用 past（可叠加，不倒旧的）；**地域/时区/身份**这类长期成立用 timeless；
      **当前状态**（在准备考试 / 在搬家）用 current（**同一 key 的新值会顶掉旧的**）。
    · valid_for：**只有"时效性近况"**（在准备考试 / 这周军训 / 最近感冒）才填其大概期限，
@@ -257,19 +252,19 @@ MEMORY_V2_EXTRACT_PROMPT = """你是灰泽满私聊机器人的记忆候选提�
    · **ritual（固定仪式）**：用户在某个固定场景规定灰泽满以后都这样说/做——晚安、早安、
      出门、上线。key 用 `ritual_<场景>`（如 `ritual_goodnight`，每个场景一个槽，
      不同场景互不顶替），value 写成「场景：要说的内容」，如
-     `ritual_goodnight` = 「晚安/睡前/要睡：晚安+喜欢你+爱绿冻+mua」。
+     `ritual_goodnight` = 「晚安/睡前/要睡：晚安+明早见」。
      场景词写用户实际会用到的说法（用 / 分隔），不然他说“要睡了”时不会触发。
      判据：用户是在**规定以后都这样**（"要有仪式感的晚安""睡前必做""以后都…"），
      不是这一晚的玩笑。哪怕单轮看起来像寒暄，只要是在立这个规矩就记。
      **更新时**：清单里已有同一场景的 ritual，这轮只提到一半内容 → 沿用旧值、
      不要缩水（新 value 必须包含旧值里的具体内容）；只是催一句、没提内容 → 不更新。
-     实测漏记（2026-10-15，用户 905860780）：连着十几天每晚要"仪式感的晚安"，
-     单轮提取把它当寒暄跳过，她从没主动想起过这件事。
    用户明确说喜欢/不喜欢时 explicit=true；仅从互动表现推断时 explicit=false。
    ⚠️ **用户嫌她"阴阳怪气／挤兑人／说话冲／不好好讲话"，要她改语气 → `banter_tolerance=low`。**
-      （2026-10-17 实测漏了：用户 3498594329 明说"以后能保证好好讲话、不要冲人、不要阴阳怪气"，
+      （2026-10-17 实测漏了：用户 某用户 明说"以后能保证好好讲话、不要冲人、不要阴阳怪气"，
        记忆里却只有 `address_style` 一条。这类是用户对相处方式的**明确要求**，必须记。）
 3. commitment：灰泽满本轮明确答应用户、需要以后兑现的事。承诺只从灰泽满回复中提取，
+   reply_quote 逐字复制她实际回复中明确答应或撤回的那句话，保留原标点。玩笑、复述、
+   未说完的前缀、回顾先前的承诺、用户的提醒请求本身都既不是新承诺也不是撤回。
    用户自己的计划不是灰泽满的承诺；actor 必须是 assistant，explicit 必须为 true。
    · **定时提醒**：如果本轮有【提醒请求】数据（见底部 reminder_block），且灰泽满在回复里
      明确答应，输出一条 commitment；value 写**提醒内容本身**（如「扔垃圾」），
@@ -366,6 +361,8 @@ temporal_scope 必须是 past/current/future/timeless：用户过去经历用 pa
       "target": "address|affection|initiative|tone|general（仅 request）",
       "scope": "standing|session（仅 request）",
       "due_at": "ISO8601（仅定时提醒的 commitment；其它条目省略或空串）",
+      "reply_quote": "回复里的原话（仅 commitment）",
+      "nickname_response": {{"stance": "accepted|declined", "scope": "limited|standing|unspecified", "quote": "灰泽满本轮回复原句片段（仅在对应 her_nickname 的态度明确时填写此对象）"}},
       "habit": {{"type": "routine|interaction", "cadence": "daily|weekly|monthly|regular|once|unknown", "period": "morning|noon|afternoon|evening|night|any|unknown", "cues": ["2-8个短触发词"]}}
     }}
   ],
@@ -441,7 +438,7 @@ _GREETING_RE = re.compile(
     r"好|嗯|哦|行|ok|？|\?|。|\.|\.\.\.|…)$", re.I)
 _RITUAL_RE = re.compile(r"(每天|以后|都要|每次|固定|仪式|说好|答应|记得|叫我|称呼|睡前|起床)")
 _EXTRACT_MARKERS = re.compile(
-    r"(我叫|我是|叫我|称呼|名字|喜欢|讨厌|希望|不要|别|以后|每天|每次|固定|仪式|说好|答应|记得|"
+    r"(我叫|我是|叫我|叫你|喊你|管你叫|称呼|名字|喜欢|讨厌|希望|不要|别|以后|每天|每次|固定|仪式|说好|答应|记得|"
     r"摸摸|亲亲|抱抱|陪|哄|温柔|亲昵|害怕|不舒服|感冒|生病|病|疼|累|失眠|睡不着|"
     r"分手|在一起|恋爱|结婚|离婚|吵架|和好|喜欢的人|讨厌的人|"
     r"失业|辞职|换工作|offer|工资|贷款|买房|租房|出差|旅游|回国|回家|"
@@ -539,7 +536,7 @@ def build_extraction_prompt(
         what = _bounded_text(reminder_hint.get("what"), 200)
         due = _bounded_text(reminder_hint.get("due_at"), 60)
         reminder_block = (
-            f"【提醒请求】已确认：due_at={due}，内容={what}。"
+            f"【提醒请求】已解析时间和内容：due_at={due}，内容={what}。"
             "如果灰泽满在回复里明确答应，输出一条 commitment（value 写提醒内容本身，"
             f"不要带时间；另带 \"due_at\": \"{due}\"）；"
             "没有明确答应就不要输出。"
@@ -592,10 +589,26 @@ async def extract_and_ingest(
     observed_at: datetime | None = None,
     zhipu_client: Any = None,
     reminder_hint: dict | None = None,
+    source_turn_id: str = "",
+    delivery_verified: bool = False,
 ) -> list[dict]:
     """Run one strict shadow extraction; failures never escape to chat flow."""
     observed_at = observed_at or datetime.now()
-    from . import event_memory
+    source = {
+        "session_id": session_id,
+        "observed_at": observed_at.isoformat(),
+        "user_text": user_text,
+        "assistant_text": assistant_text,
+        "turn_id": source_turn_id,
+        "delivery_verified": delivery_verified,
+    }
+    observed_nicknames = store.nickname_observations(
+        user_id, user_text, assistant_text, now=observed_at)
+    if client is None:
+        if not observed_nicknames:
+            return []
+        return store.ingest(user_id, observed_nicknames, source=source, now=observed_at)
+    from . import event_memory, memory_recall
     prompt = build_extraction_prompt(
         user_text=user_text,
         assistant_text=assistant_text,
@@ -615,7 +628,9 @@ async def extract_and_ingest(
             **THINKING_DISABLED,
         )
     except Exception:
-        return []
+        if not observed_nicknames:
+            return []
+        return store.ingest(user_id, observed_nicknames, source=source, now=observed_at)
     # 提取是**第二大 token 消费者**（全量重建约 4000 次调用），也不该是隐形的。
     from .config import log_cache_usage
 
@@ -628,29 +643,28 @@ async def extract_and_ingest(
     if payload.get("events"):
         event_memory.add_events(
             user_id, payload["events"],
-            source={
-                "session_id": session_id,
-                "observed_at": observed_at.isoformat(),
-                "user_text": user_text,
-                "assistant_text": assistant_text,
-            },
+            source=source,
             now=observed_at,
         )
         try:
             await event_memory.refresh_vectors(user_id, zhipu_client)
         except Exception:
             pass
-    return store.ingest(
-        user_id,
-        payload["items"],
-        source={
-            "session_id": session_id,
-            "observed_at": observed_at.isoformat(),
-            "user_text": user_text,
-            "assistant_text": assistant_text,
-        },
-        now=observed_at,
-    )
+    # 有明确答复的本地记录先写；其它直接用法可由模型补充答复，
+    # 再把遗漏的用法写进去。同轮同称呼由常规的证据去重合并。
+    with_response = [item for item in observed_nicknames if item.get("nickname_response")]
+    uses_only = [item for item in observed_nicknames if not item.get("nickname_response")]
+    extracted, nickname_retractions = [], []
+    recalling_reminder = memory_recall.is_commitment_question(user_text)
+    for item in payload["items"]:
+        if recalling_reminder and isinstance(item, dict) and item.get("kind") == "commitment":
+            continue
+        if isinstance(item, dict) and item.get("key") == "her_nickname" and item.get("action") == "retract":
+            nickname_retractions.append(item)
+        else:
+            extracted.append(item)
+    return store.ingest(user_id, [*with_response, *extracted, *uses_only, *nickname_retractions],
+                        source=source, now=observed_at)
 
 
 def _iso(value: Any) -> datetime | None:
@@ -677,6 +691,80 @@ def _redact_sensitive_excerpt(value: str) -> str:
     for pattern in _SENSITIVE_VALUE_PATTERNS:
         redacted = pattern.sub("[redacted]", redacted)
     return _SECRET_ASSIGNMENT_RE.sub("[redacted]", redacted)
+
+
+def _direct_nickname_use(text: str, nickname: str) -> bool:
+    if not nickname:
+        return False
+    # 命中一个词还不足以说明发言方向，例如「我姐姐睡了」。
+    token = re.escape(nickname)
+    tail = r"(?=$|[\s，,、。！？!?～~：:]|在吗|睡了吗|睡了没|早安|晚安|你好|你|我|帮我)"
+    return any(
+        re.match(rf"^(?:谢谢|早安|晚安|你好)?\s*{token}{tail}", line.strip(), re.I)
+        for line in _NICKNAME_QUOTED_SPEECH.sub("", text).splitlines()
+    )
+
+
+def _nickname_named(text: str, nickname: str) -> bool:
+    tail = r"(?=$|[\s，,、。！？!?」』”\"']|了|吗|吧|呀|呢|啊|这|可以)"
+    return bool(re.search(
+        rf"{_NICKNAME_NAMING}\s*[「『“\"']?{re.escape(nickname)}{tail}",
+        _NICKNAME_QUOTED_SPEECH.sub("", text), re.I))
+
+
+def _nickname_requested(text: str, nickname: str) -> bool:
+    return bool(re.fullmatch(
+        rf"(?:以后|这次|今天)?我?(?:以后|这次|今天)?(?:可不可以|可以|能不能|能){_NICKNAME_NAMING}"
+        rf"[「『“\"']?{re.escape(nickname)}[」』”\"']?(?:吗|么|嘛)?[？?。！!]*",
+        _NICKNAME_QUOTED_SPEECH.sub("", text).strip(), re.I,
+    ))
+
+
+def _nickname_quote_context(reply: str, quote: str) -> str:
+    """补全原句，不能把「不可以这样叫」截成「可以这样叫」。"""
+    if not quote or quote not in reply:
+        return ""
+    before, _, after = reply.partition(quote)
+    prefix = re.split(r"[，,。！？!?；;\n]", before)[-1]
+    suffix = re.match(r"[^，,。！？!?；;\n]*[？?]?", after)
+    return (prefix + quote + (suffix[0] if suffix else "")).strip()
+
+
+def _nickname_response(quote: str, nickname: str, *, named: bool = False) -> dict:
+    """只把明确谈称呼的许可或拒绝写成态度，范围由同一句话决定。"""
+    if not quote or len(quote) > _MAX_NICKNAME_QUOTE or _NICKNAME_QUOTED_SPEECH.search(quote):
+        return {}
+    alias = re.escape(nickname)
+    reference = re.compile(
+        rf"(?:这么|这样|那样)(?:叫|喊|称呼)|(?:叫|喊|称呼)(?:我)?"
+        rf"(?:一次|一声)?[「『“\"']?{alias}(?=$|[」』”\"'了吧啊呀哦的])"
+        r"|(?:叫|喊)(?:一次|一声)(?=$|[了吧啊呀哦]|就行|可以)", re.I)
+    decisions = []
+    for raw in re.split(r"(?<=[。！？!?；;，,\n])", quote):
+        clause = raw.strip().rstrip("。！!；;，,")
+        if re.search(r"[？?]|不是不|没有不|并非不"
+                     r"|(?:谁|什么时候|哪有|哪次|哪里).{0,8}(?:让你|同意|答应|允许|准许)", clause):
+            continue
+        if reference.search(clause):
+            declined = bool(_NICKNAME_DECLINE.search(clause))
+            allowed = bool(_NICKNAME_ALLOW.search(clause))
+            if allowed != declined:
+                decisions.append(("declined" if declined else "accepted", clause))
+    if len(decisions) == 1:
+        stance, clause = decisions[0]
+    elif not decisions and named and (answer := re.fullmatch(r"(不?可以|不?同意|我不?答应)[啊呀哦。！!]*", quote)):
+        stance, clause = ("declined" if "不" in answer[1] else "accepted"), quote
+    else:
+        return {}
+    if _NICKNAME_TIME_LIMIT.search(clause) or re.search(r"仅限|只限|只在|只能在|私聊|我们俩之间", clause):
+        scope = "limited"
+    elif re.search(r"(?:仅限|只限|只在|只能在)(?:私聊|群聊|我们俩之间|今天|今晚|这次)", quote):
+        scope = "limited"
+    elif re.search(r"以后|之后都|一直|今后|从今|每次|随时", clause):
+        scope = "standing"
+    else:
+        scope = "unspecified"
+    return {"stance": stance, "scope": scope, "quote": quote}
 
 
 def _is_bot_self_fact(key: str, value: str) -> bool:
@@ -782,13 +870,27 @@ _FUNC_CHARS = set("的了呢吧吗啊嗯哈是不没都我你他她它们这个�
 
 
 # 扩写句里常见的**泛词**：它们跟任何一条“用户/自己/今天…”的事实都能蹭上一个二字组，
-# 把真正相关的挤到第 5 名、被「每轮只取 4 条」截掉（2026-10-20 实测用户 2151983431：
-# 「用户说自己去跑步了」让时差、高考各拿 0.125，跑步那条也是 0.125 → 排第 5 被丢）。
+# 泛词会让无关事实虚高，把真正匹配的条目挤出预算。
 # 只在 fact 相关度里剔除，不动 commitment 的严格匹配。
 _GENERIC_QUERY_TERMS = (
     "用户", "自己", "对方", "灰泽满", "hzm", "今天", "现在", "什么",
     "这个", "那个", "事情", "之前", "说过",
 )
+_HISTORY_FACT_TERMS = {
+    "name": ("名字", "姓名"),
+    "real_name": ("本名", "真名", "实名", "真实姓名", "名字"),
+    "online_name": ("网名",),
+    "online_id": ("账号名", "用户名", "游戏ID"),
+    "preferred_name": ("叫我", "称呼我", "喊我", "怎么称呼", "想被叫"),
+    "address_terms": ("叫我", "称呼我", "喊我", "怎么称呼", "外号"),
+    "nickname": ("昵称", "外号", "小名"),
+    "nickname_called": ("叫我", "称呼我", "喊我"),
+    "her_nickname": ("叫你", "称呼你", "喊你"),
+    "location": ("住哪", "住在哪里", "住在哪", "居住地", "城市", "地点", "搬家"),
+    "city": ("城市", "住哪", "住在哪", "居住地"),
+    "timezone": ("时区", "时差"),
+    "occupation": ("职业", "工作", "做哪行"),
+}
 
 
 def _strip_generic_terms(text: str) -> str:
@@ -801,10 +903,7 @@ def _strip_generic_terms(text: str) -> str:
 def _fact_relevance(query: str, record: dict) -> float:
     """fact 的相关度——在 `_relevance` 上补一档**单字兜底**。
 
-    为什么必须补（2026-10-17，用户报的）：查 `_relevance` 只看二字组重合，而**招呼/表情
-    这类短消息几乎没有二字组能对上任何事实**——实测用户 2151983431 的事实里明明有
-    `morning_running：早上要跑步`，但他发「早安」时 query 的二字组是 {早安}，跟
-    {早上, 上要, 要跑, 跑步} 交集为空 → **0 分 → 这条事实根本不会被注入**。
+    短问候可能没有二字组能匹配，但仍能与某些事实共享一个字。
 
     2026-10-20 又发现了两种失效：
       · 扩写句里的“用户/自己”让无关事实各蹭到 0.125，和真正相关的并列 → 被 4 条上限截掉；
@@ -1185,7 +1284,7 @@ def _habit_mentioned_recently(memory: dict, meta: dict, recent_text: str) -> boo
 def _ritual_matches(memory: dict, query: str) -> bool:
     """固定仪式只在**触发场景**出现时注入。
 
-    value 约定写成「场景：内容」（如「晚安：晚安+喜欢你+爱绿冻+mua」），
+    value 约定写成「场景：内容」（如「晚安：晚安+明早见」），
     场景那半截按 +、/、逗号等切开；用户消息里出现任一个场景词才注入。
     这样“晚安仪式”不会在白天每条消息里都冒出来。
     """
@@ -1268,6 +1367,22 @@ def merge_events_into_card(card: str, events: list[dict],
         if not what:
             kept.append(event)
             continue
+        if event.get("_retrieval_disputed"):
+            # 仅调整本轮展示：争议旧事不能通过判重重新变成稳定的当前事实。
+            remaining_lines = []
+            for line in lines:
+                label, separator, body = line.partition("：")
+                values = re.split(r"[；;]", body if separator else line)
+                remaining = [value for value in values
+                             if not (value and _value_dup(what, value, 0.8))]
+                if len(remaining) == len(values):
+                    remaining_lines.append(line)
+                elif any(value.strip() for value in remaining):
+                    content = "；".join(remaining)
+                    remaining_lines.append(f"{label}{separator}{content}" if separator else content)
+            lines = remaining_lines
+            kept.append(event)
+            continue
         hit = next((i for i, line in enumerate(lines)
                     if line and _value_dup(what, line, 0.8)), None)
         if hit is None:
@@ -1281,6 +1396,8 @@ def merge_events_into_card(card: str, events: list[dict],
             trial = "\n".join(lines[:hit] + [candidate] + lines[hit + 1:])
             if len(trial) <= budget:
                 lines[hit] = candidate
+            else:
+                kept.append(event)
     return "\n".join(lines), kept
 
 
@@ -1316,7 +1433,6 @@ class ShadowMemoryStore:
         self.state_file = Path(state_file)
         self.audit_file = Path(audit_file)
         self.context_budget_chars = max(100, int(context_budget_chars))
-        self._nickname_hint_last: dict[str, float] = {}
         self._lock = threading.Lock()
 
     def _empty_state(self) -> dict:
@@ -1355,12 +1471,18 @@ class ShadowMemoryStore:
         excerpt = _redact_sensitive_excerpt(_bounded_text(raw, MAX_SOURCE_CHARS))
         if not excerpt:
             return None
-        return {
+        normalized = {
             "role": role,
             "excerpt": excerpt,
             "session_id": session_id,
             "observed_at": observed.isoformat(),
         }
+        turn_id = source.get("turn_id")
+        if isinstance(turn_id, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,120}", turn_id):
+            normalized["turn_id"] = turn_id
+        if role == "assistant" and (source.get("delivery_verified") or normalized.get("turn_id")):
+            normalized["delivery_verified"] = True
+        return normalized
 
     def _normalize_item(self, item: dict, source: dict, now: datetime) -> tuple[dict | None, str]:
         if not isinstance(item, dict):
@@ -1441,6 +1563,20 @@ class ShadowMemoryStore:
             reason = _name_fact_rejection(key, value, normalized_source)
             if reason:
                 return None, reason
+        if kind == "fact" and key == "her_nickname" and action == "retract":
+            excerpt = _NICKNAME_QUOTED_SPEECH.sub("", normalized_source["excerpt"])
+            if not _NICKNAME_TOKEN.fullmatch(value) or value not in excerpt or not _NICKNAME_CORRECTION.search(excerpt):
+                return None, "nickname_retract_needs_correction"
+        if kind == "fact" and key == "her_nickname" and action == "upsert":
+            user_excerpt = normalized_source["excerpt"]
+            called = _direct_nickname_use(user_excerpt, value)
+            if not _NICKNAME_TOKEN.fullmatch(value) or not (
+                called or _nickname_named(user_excerpt, value)
+            ):
+                return None, "nickname_needs_user_evidence"
+            # 曾经用过的称呼是历史依据，同一个人换另一个称呼也能并存。
+            temporal_scope = "past"
+            valid_for = "none"
         if kind == "interaction_preference":
             if key not in _PREFERENCE_VALUES and not _is_ritual_key(key):
                 return None, "invalid_preference_dimension"
@@ -1452,6 +1588,10 @@ class ShadowMemoryStore:
         if kind == "commitment":
             if item.get("actor") != "assistant" or not explicit:
                 return None, "assistant_commitment_required"
+            if normalized_source.get("delivery_verified"):
+                quote = str(item.get("reply_quote") or "").strip()
+                if not quote or quote not in (source.get("assistant_text") or ""):
+                    return None, "commitment_needs_delivered_quote"
 
         due_at = ""
         if kind == "commitment":
@@ -1472,6 +1612,19 @@ class ShadowMemoryStore:
             "valid_for": valid_for,
             "source": normalized_source,
         }
+        if kind == "fact" and key == "her_nickname" and action == "upsert":
+            normalized["nickname_used"] = called
+            candidate = item.get("nickname_response")
+            if isinstance(candidate, dict):
+                quote = str(candidate.get("quote") or "").strip()
+                assistant_source = self._normalize_source(source, "assistant", now) or {}
+                reply = assistant_source.get("excerpt", "")
+                response = _nickname_response(
+                    _nickname_quote_context(reply, quote), value,
+                    named=_nickname_requested(user_excerpt, value),
+                )
+                if response and response["stance"] == candidate.get("stance"):
+                    normalized["nickname_response"] = response
         if due_at:
             normalized["due_at"] = due_at
         if kind == "request":
@@ -1494,9 +1647,10 @@ class ShadowMemoryStore:
 
     @staticmethod
     def _evidence_id(source: dict) -> str:
-        raw = "\0".join(str(source.get(key) or "") for key in (
+        keys = ("role", "turn_id") if source.get("turn_id") else (
             "role", "excerpt", "session_id", "observed_at",
-        )).encode("utf-8")
+        )
+        raw = "\0".join(str(source.get(key) or "") for key in keys).encode("utf-8")
         return hashlib.sha256(raw).hexdigest()[:20]
 
     def ingest(self, user_id: str, items: list, *, source: dict, now: datetime | None = None) -> list[dict]:
@@ -1601,6 +1755,9 @@ class ShadowMemoryStore:
                     existing["session_ids"] = session_ids[-20:]
                     existing["session_count"] = len(existing["session_ids"])
                     existing["last_observed_at"] = now.isoformat()
+                    if item["key"] == "her_nickname" and "nickname_used" not in existing:
+                        existing["nickname_used"] = _direct_nickname_use(
+                            (existing.get("source") or {}).get("excerpt", ""), existing["value"])
                     existing["source"] = item["source"]
                     existing["confidence"] = max(float(existing.get("confidence", 0)), item["confidence"])
                     existing["temporal_scope"] = item["temporal_scope"]
@@ -1612,6 +1769,10 @@ class ShadowMemoryStore:
                         existing["target"] = item.get("target")
                         existing["scope"] = item.get("scope")
                     if item.get("due_at"):
+                        if item["due_at"] != existing.get("due_at"):
+                            for field in ("reminded_at", "reminder_delivery_state",
+                                          "reminder_turn_id", "reminder_missed_at"):
+                                existing.pop(field, None)
                         existing["due_at"] = item["due_at"]
                     expires_at = (_fact_expires_at(item, now)
                                   or _commitment_expires_at(item, now)
@@ -1625,6 +1786,22 @@ class ShadowMemoryStore:
                           and existing["evidence_count"] >= 3
                           and existing["session_count"] >= 2):
                         existing["status"] = "confirmed"
+
+                if "nickname_used" in item:
+                    existing["nickname_used"] = item["nickname_used"] or existing.get("nickname_used", False)
+                    if response := item.get("nickname_response"):
+                        response["observed_at"] = item["source"]["observed_at"]
+                        if turn_id := item["source"].get("turn_id"):
+                            response["turn_id"] = turn_id
+                        responses = {
+                            (prior["stance"], prior["scope"]): prior
+                            for prior in existing.get("nickname_responses", [])
+                        }
+                        response_key = (response["stance"], response["scope"])
+                        previous = responses.get(response_key, {})
+                        if response["observed_at"] >= previous.get("observed_at", ""):
+                            responses[response_key] = response
+                            existing["nickname_responses"] = list(responses.values())
 
                 # 只有"单值槽"才顶替：偏好（每维度一个值）、temporal_scope=current 的 fact（近况），
                 # 以及 `_SINGLE_VALUED_FACT_KEYS` 里那些**天然单值**的键（名字/地点/时区/职业）。
@@ -1687,28 +1864,99 @@ class ShadowMemoryStore:
         """
         now = now or datetime.now()
         memories = self.snapshot(user_id).get("memories", [])
-        active = []
-        for memory in memories:
-            if memory.get("status") not in {"confirmed", "active"}:
+        return [memory for memory in memories if self._memory_is_active(memory, now)]
+
+    @staticmethod
+    def _memory_is_active(memory: dict, now: datetime) -> bool:
+        if memory.get("status") not in {"confirmed", "active"}:
+            return False
+        expires = _iso(memory.get("expires_at"))
+        if expires is None and memory.get("kind") == "commitment":
+            # 旧数据按 created_at + TTL 兜底。
+            created = _iso(memory.get("created_at"))
+            if created is not None:
+                expires = created + timedelta(
+                    hours=_commitment_ttl_hours(str(memory.get("value") or "")))
+        return expires is None or expires > now
+
+    def commitment_history(self, user_id: str, topic: str, *,
+                           now: datetime | None = None, limit: int = 2) -> list[dict]:
+        """查询历史承诺及其当前状态，空主题才按时间回看。"""
+        now = now or datetime.now()
+        records = [
+            (_relevance(topic, memory), memory)
+            for memory in self.snapshot(user_id).get("memories", [])
+            if memory.get("kind") == "commitment"
+        ]
+        records.sort(key=lambda item: (item[0], item[1].get("updated_at") or ""), reverse=True)
+        result = []
+        for score, memory in records:
+            if len(result) >= limit or (topic and not score):
+                break
+            status = memory.get("status")
+            if status in {"active", "confirmed"} and not self._memory_is_active(memory, now):
+                status = "expired"
+            elif status == "done" and memory.get("reminder_delivery_state") != "sent":
+                status = "legacy_done"
+            result.append({**memory, "status": status})
+        return result
+
+    def history_references(self, user_id: str, topic: str, *,
+                           now: datetime | None = None, limit: int = 3) -> list[dict]:
+        """找与主题有关的用户侧记忆来源，保留已替换和过期的旧值。"""
+        topic = _strip_generic_terms(topic)
+        if not _ngrams(topic) or limit <= 0:
+            return []
+        now = now or datetime.now()
+        ranked = []
+        for memory in self.snapshot(user_id).get("memories") or []:
+            if not isinstance(memory, dict):
                 continue
-            expires = _iso(memory.get("expires_at"))
-            if expires is None and memory.get("kind") == "commitment":
-                # 旧数据没有 expires_at（2026-10-18 前写入）→ 按 created_at + TTL 兜底，
-                # 不让历史里的"明天…"永久 active。
-                created = _iso(memory.get("created_at"))
-                if created is not None:
-                    expires = created + timedelta(
-                        hours=_commitment_ttl_hours(str(memory.get("value") or "")))
-            if expires is not None and expires <= now:
+            kind = memory.get("kind")
+            status = memory.get("status")
+            source = memory.get("source")
+            if (kind not in {"fact", "interaction_preference", "request"}
+                    or status not in {"confirmed", "active", "superseded", "expired"}
+                    or not isinstance(source, dict)
+                    or source.get("role") != "user"):
                 continue
-            active.append(memory)
-        return active
+            excerpt = _redact_sensitive_excerpt(_bounded_text(source.get("excerpt"), MAX_SOURCE_CHARS))
+            value = _redact_sensitive_excerpt(_bounded_text(memory.get("value"), MAX_VALUE_CHARS))
+            if not value:
+                continue
+            key = memory.get("key", "")
+            label = inj.behavior_sentence(key, value) if kind == "interaction_preference" else ""
+            field_hit = kind == "fact" and any(term in topic for term in _HISTORY_FACT_TERMS.get(key, ()))
+            score = max(_relevance(topic, {"key": key, "value": value}),
+                        0.8 * _relevance(topic, {"value": excerpt}),
+                        0.8 * _relevance(topic, {"value": label}),
+                        0.65 if field_hit else 0)
+            if not score:
+                continue
+            if status in {"confirmed", "active"}:
+                if not self._memory_is_active(memory, now):
+                    status = "expired"
+                else:
+                    status = "past" if memory.get("temporal_scope") == "past" else "current"
+            observed_at = _bounded_text(source.get("observed_at") or memory.get("last_observed_at"), 64)
+            result = {
+                "turn_id": _bounded_text(source.get("turn_id"), 120),
+                "text": value,
+                "role": "user",
+                "excerpt": excerpt,
+                "status": status,
+                "kind": kind,
+                "observed_at": observed_at,
+                "explicit": bool(memory.get("explicit")),
+            }
+            ranked.append((score, observed_at, result))
+        ranked.sort(key=lambda candidate: (candidate[0], candidate[1]), reverse=True)
+        return [result for _, _, result in ranked[:limit]]
 
     def due_commitments(self, now: datetime | None = None) -> list[dict]:
         """到点、还没投递过的 commitment（定时提醒的唯一读入口）。
 
-        提醒不另存一份文本：调度器读的就是 commitment；发送后
-        `mark_reminder_delivered` 把它标成 done，注入层就不会再当"未完成约定"。
+        调度器从 commitment 取提醒内容。收到回执后标为 done，超过补发期限标为 missed。
         """
         now = now or datetime.now()
         if now.tzinfo is not None:
@@ -1739,7 +1987,15 @@ class ShadowMemoryStore:
         return out
 
     def mark_reminder_delivered(self, user_id: str, memory_id: str,
-                                now: datetime | None = None) -> bool:
+                                now: datetime | None = None, *, turn_id: str = "") -> bool:
+        return self._finish_reminder(user_id, memory_id, now, status="done", turn_id=turn_id)
+
+    def mark_reminder_missed(self, user_id: str, memory_id: str,
+                             now: datetime | None = None) -> bool:
+        return self._finish_reminder(user_id, memory_id, now, status="missed")
+
+    def _finish_reminder(self, user_id: str, memory_id: str, now: datetime | None, *,
+                         status: str, turn_id: str = "") -> bool:
         now = now or datetime.now()
         if now.tzinfo is not None:
             now = now.astimezone().replace(tzinfo=None)
@@ -1749,10 +2005,16 @@ class ShadowMemoryStore:
             if not user:
                 return False
             for memory in (user.get("memories") or []):
-                if memory.get("id") != memory_id:
+                if memory.get("id") != memory_id or memory.get("kind") != "commitment":
                     continue
-                memory["reminded_at"] = now.isoformat()
-                memory["status"] = "done"
+                memory["status"] = status
+                if status == "done":
+                    memory["reminded_at"] = now.isoformat()
+                    memory["reminder_delivery_state"] = "sent"
+                    if turn_id:
+                        memory["reminder_turn_id"] = turn_id
+                else:
+                    memory["reminder_missed_at"] = now.isoformat()
                 user["updated_at"] = now.isoformat()
                 self._save(state)
                 return True
@@ -1762,7 +2024,8 @@ class ShadowMemoryStore:
         # `habit_*` 单独走 `_preference_lines` 的“固定习惯”段——别混进通用事实里被
         # 名字/地点挤掉，也别让“早上跑操”这种**个人习惯**看起来像全局设定。
         facts = [m for m in active
-                 if m.get("kind") == "fact" and not str(m.get("key", "")).startswith("habit_")]
+                 if m.get("kind") == "fact" and m.get("key") != "her_nickname"
+                 and not str(m.get("key", "")).startswith("habit_")]
         facts.sort(key=lambda m: (m.get("key") not in _ALWAYS_ON_FACT_KEYS,
                                   -_fact_relevance(query, m)))
         return [
@@ -1934,14 +2197,34 @@ class ShadowMemoryStore:
     _CARD_ONLINE_NAME_KEYS = {"online_name", "online_id"}
     _CARD_IDENTITY_KEYS = {"identity", "occupation", "background", "student_status"}
     _CARD_LOCATION_KEYS = {"location", "city", "timezone", "hometown", "school_location"}
-    _CARD_ATTITUDE_KEYS = {"support_style", "banter_tolerance", "directness",
-                           "reply_length", "address_style"}
+    # 与准入共用维度表，新增合法偏好时不会出现“能存、卡片不认识”的缺口。
+    _CARD_ATTITUDE_KEYS = set(_PREFERENCE_VALUES)
 
-    def build_state_card(self, user_id: str, *, now: datetime | None = None) -> str:
-        """稳定用户卡：私聊每轮注入。没有可用内容返回空串。"""
+    def build_state_card(self, user_id: str, *, now: datetime | None = None,
+                         query: str = "") -> str:
+        """稳定用户卡：身份保底，其余内容优先放本轮相关项，最多 900 字。"""
         active = self._active_memories(user_id, now=now)
         now_dt = now or datetime.now()
-        lines: list[str] = []
+        lines: list[tuple[str, bool, float]] = []
+
+        def _score(memory: dict) -> float:
+            if not query.strip():
+                return 0.0
+            if memory.get("kind") == "fact":
+                return _fact_relevance(query, memory)
+            if memory.get("key") in self._CARD_ATTITUDE_KEYS:
+                # 枚举值本身（如 proactive）不携带中文语义；按实际注入的行为句匹配。
+                memory = {**memory, "value": inj.behavior_sentence(
+                    str(memory.get("key") or ""), str(memory.get("value") or ""))}
+            return _relevance(_strip_generic_terms(query), memory)
+
+        def _ranked(items: list[dict]) -> list[dict]:
+            # Python 稳定排序保留无查询/同分时原有的栏目内顺序。
+            return sorted(items, key=_score, reverse=True) if query.strip() else items
+
+        def _line(label: str, value: str, items: list[dict], *, identity: bool = False) -> None:
+            lines.append((inj.T("state", "line", label=label, value=value), identity,
+                          max((_score(m) for m in items), default=0.0)))
 
         def _latest(kind: str, keys: set[str]) -> list[dict]:
             found = [m for m in active if m.get("kind") == kind and m.get("key") in keys]
@@ -1950,7 +2233,7 @@ class ShadowMemoryStore:
 
         def _join(items: list[dict], limit: int = 3, width: int = 70) -> str:
             out = []
-            for m in items[:limit]:
+            for m in _ranked(items)[:limit]:
                 value = str(m.get("value") or "").strip().rstrip("。；;")
                 if value and value not in out:
                     out.append(value[:width])
@@ -1959,11 +2242,11 @@ class ShadowMemoryStore:
         real = _join([m for m in active if m.get("kind") == "fact"
                       and m.get("key") in self._CARD_REAL_NAME_KEYS], limit=2, width=24)
         if real:
-            lines.append(inj.T("state", "line", label="本名", value=real))
+            _line("本名", real, [], identity=True)
         online = _join([m for m in active if m.get("kind") == "fact"
                         and m.get("key") in self._CARD_ONLINE_NAME_KEYS], limit=2, width=32)
         if online:
-            lines.append(inj.T("state", "line", label="网名", value=online))
+            _line("网名", online, [], identity=True)
 
         # 称呼允许多个（本名/网名之外的外号）：按 preferred_name → address_terms →
         # nickname → nickname_called 的顺序收集、拆分「、，/」并去重，不再只取最近一条。
@@ -1977,27 +2260,22 @@ class ShadowMemoryStore:
                     if part and part not in address_terms:
                         address_terms.append(part)
         if address_terms:
-            lines.append(inj.T("state", "line", label="称呼",
-                               value="、".join(address_terms)[:60]))
-        her_nicks = _join([m for m in active if m.get("kind") == "fact"
-                           and m.get("key") == "her_nickname"], limit=1, width=20)
-        if her_nicks:
-            lines.append(inj.T("state", "line", label="他叫你", value=her_nicks))
+            _line("称呼", "、".join(address_terms)[:60], [], identity=True)
         identity = [m for m in active if m.get("kind") == "fact"
                     and m.get("key") in self._CARD_IDENTITY_KEYS]
         identity_text = _join(identity, limit=3, width=50)
         if identity_text:
-            lines.append(inj.T("state", "line", label="身份", value=identity_text))
+            _line("身份", identity_text, identity, identity=True)
         location = [m for m in active if m.get("kind") == "fact"
                     and m.get("key") in self._CARD_LOCATION_KEYS]
         location_text = _join(location, limit=2, width=50)
         if location_text:
-            lines.append(inj.T("state", "line", label="地点", value=location_text))
+            _line("地点", location_text, location, identity=True)
         relation = [m for m in active if m.get("kind") == "fact"
                     and str(m.get("key") or "").startswith("relationship_")]
         relation_text = _join(relation, limit=2, width=80)
         if relation_text:
-            lines.append(inj.T("state", "line", label="关系", value=relation_text))
+            _line("关系", relation_text, relation)
 
         # 稳定档案的其余栏目（2026-11-18）：家人/健康/生活/习惯/雷区/过去/近况。
         # 以前这些只在非 v3 的【相关用户事实】里按相关度取 1–4 条；v3 下它们没有出口，
@@ -2033,7 +2311,7 @@ class ShadowMemoryStore:
 
         def _section(label: str, items: list[dict], limit: int = 3, width: int = 70) -> None:
             vals: list[str] = []
-            for m in items:
+            for m in _ranked(items):
                 value = str(m.get("value") or "").strip().rstrip("。；;")
                 if not value or any(_value_dup(value, old) for old in vals):
                     continue
@@ -2041,7 +2319,7 @@ class ShadowMemoryStore:
                 if len(vals) >= limit:
                     break
             if vals:
-                lines.append(inj.T("state", "line", label=label, value="；".join(vals)))
+                _line(label, "；".join(vals), items)
 
         _section("家人", _rest_facts("家人"), limit=3, width=60)
         _section("健康", _rest_facts("健康"), limit=2, width=60)
@@ -2049,55 +2327,60 @@ class ShadowMemoryStore:
         _section("愿望", _rest_facts("愿望"), limit=3, width=70)
         _section("共同经历", _rest_facts("共同经历"), limit=2, width=80)
 
+        attitude_items = (_latest("interaction_preference", self._CARD_ATTITUDE_KEYS)
+                          + [m for m in active if m.get("kind") == "request"])
         attitude: list[str] = []
-        for m in _latest("interaction_preference", self._CARD_ATTITUDE_KEYS):
-            sentence = inj.behavior_sentence(str(m.get("key") or ""), str(m.get("value") or ""))
-            if sentence:
-                attitude.append(sentence.rstrip("。；;"))
-        for m in [x for x in active if x.get("kind") == "request"]:
-            value = str(m.get("value") or "").strip().rstrip("。；;")
-            if value:
-                attitude.append(value if value.startswith(("他", "希望")) else f"他希望：{value}")
+        for m in _ranked(attitude_items):
+            if m.get("kind") == "interaction_preference":
+                sentence = inj.behavior_sentence(str(m.get("key") or ""), str(m.get("value") or ""))
+                if sentence:
+                    attitude.append(sentence.rstrip("。；;"))
+            else:
+                value = str(m.get("value") or "").strip().rstrip("。；;")
+                if value:
+                    attitude.append(value if value.startswith(("他", "希望")) else f"他希望：{value}")
         if attitude:
-            lines.append(inj.T("state", "line", label="相处", value="；".join(attitude)[:150]))
+            _line("相处", "；".join(attitude)[:150], attitude_items)
 
         rituals = [m for m in active
                    if m.get("kind") == "interaction_preference"
-                   and str(m.get("key") or "").startswith("ritual_")]
+                   and _is_ritual_key(str(m.get("key") or ""))]
         if rituals:
-            lines.append(inj.T("state", "line", label="仪式",
-                               value=_join(rituals, limit=2, width=60)))
+            _line("仪式", _join(rituals, limit=2, width=60), rituals)
 
         # 固定习惯：放在档案里让她“知道有这回事”；具体这轮要不要问，
         # 由 build_habit_hint 按线索另给一句动作提示。
+        habits = [m for m in active if m.get("kind") == "fact"
+                  and str(m.get("key") or "").startswith("habit_")]
         habit_vals: list[str] = []
-        for m in active:
-            if m.get("kind") != "fact" or not str(m.get("key") or "").startswith("habit_"):
-                continue
+        for m in _ranked(habits):
             value = _habit_display_value(m.get("value"))
             if value and not any(_value_dup(value, old) for old in habit_vals):
                 habit_vals.append(value[:60])
         if habit_vals:
-            lines.append(inj.T("state", "line", label="习惯",
-                               value="；".join(habit_vals[:4])[:130]))
+            _line("习惯", "；".join(habit_vals[:4])[:130], habits)
 
         interests = [m for m in active if m.get("kind") == "fact"
                      and (str(m.get("key") or "").startswith("interest_")
                           or str(m.get("key") or "").startswith("favorite_"))]
         interest_text = _join(interests, limit=3, width=40)
         if interest_text:
-            lines.append(inj.T("state", "line", label="兴趣", value=interest_text))
+            _line("兴趣", interest_text, interests)
 
         _section("雷区", _rest_facts("雷区"), limit=3, width=60)
         _section("过去", _rest_facts("过去"), limit=2, width=80)
         _section("近况", _rest_facts("近况"), limit=3, width=80)
 
+        # 身份行保持最前；其余行相关度优先，同分仍沿用默认栏目顺序。
+        lines.sort(key=lambda row: (not row[1], -row[2] if not row[1] else 0))
         out, used = [], 0
-        for line in lines:
-            if used + len(line) + 1 > 900:
-                break
+        for line, _, _ in lines:
+            size = len(line) + (1 if out else 0)
+            if used + size > 900:
+                # 一行过长不代表后面较短的栏目也放不下，继续装其它完整行。
+                continue
             out.append(line)
-            used += len(line) + 1
+            used += size
         return "\n".join(out)
 
     def build_preference_context(
@@ -2173,29 +2456,97 @@ class ShadowMemoryStore:
             key = "habit_hint"
         return inj.T("profile", key, rendered=rendered)
 
-    def her_nickname(self, user_id: str, *, now: datetime | None = None) -> str:
-        """用户给她起的外号（没有返回空串）。只用于识别/情境提示，不改变默认自称。"""
-        for memory in self._active_memories(user_id, now=now):
-            if memory.get("kind") == "fact" and memory.get("key") == "her_nickname":
-                return str(memory.get("value") or "").strip()
-        return ""
+    def _nickname_records(self, user_id: str, now: datetime | None = None) -> list[dict]:
+        records = [
+            m for m in self._active_memories(user_id, now=now)
+            if m.get("kind") == "fact" and m.get("key") == "her_nickname"
+            and _NICKNAME_TOKEN.fullmatch(str(m.get("value") or ""))
+        ]
+        return sorted(records, key=lambda m: m.get("last_observed_at") or "", reverse=True)
+
+    def nickname_observations(self, user_id: str, user_msg: str, reply: str,
+                              *, now: datetime | None = None) -> list[dict]:
+        """短句可以直接记录明确的称呼用法，无需额外模型调用。"""
+        known = [m["value"] for m in self._nickname_records(user_id, now)]
+        candidates = list(dict.fromkeys([*known, *_COMMON_HER_ADDRESSES]))
+        addressed = [term for term in candidates if _direct_nickname_use(user_msg, term)]
+        named = [term for term in candidates if _nickname_named(user_msg, term)]
+        terms = list(dict.fromkeys([*addressed, *named]))
+        # 只有一个称呼时才把明确答复与它绑定，保留她实际说过的范围。
+        response = {}
+        if len(terms) == 1:
+            response = _nickname_response(
+                reply.strip(), terms[0], named=_nickname_requested(user_msg, terms[0]))
+        observations = []
+        for term in terms:
+            if term not in addressed and not response:
+                continue
+            item = {"kind": "fact", "key": "her_nickname", "value": term,
+                    "temporal_scope": "past", "explicit": True, "confidence": 1.0}
+            if response:
+                item["nickname_response"] = response
+            observations.append(item)
+        return observations
 
     def nickname_hint(self, user_id: str, user_msg: str, *,
-                      now: datetime | None = None) -> str:
-        """用户**这一轮**叫了她的外号时，返回一条一次性自称提示；否则空串。
+                      history: list[str] | None = None, now: datetime | None = None,
+                      matched_terms: list[str] | None = None,
+                      source_turn_ids: list[str] | None = None) -> str:
+        """召回本轮相关的称呼证据，可用历史补全明确的答应/拒绝追问。"""
+        from .memory import _strip_timed
 
-        2026-10-19 用户定：默认永远自称"灰泽满"，只有用户这轮主动叫外号
-        （"灰宝在吗"）时，才允许这一轮偶尔用外号自称一次。不做长期偏好、不猜情绪。
-        """
-        now = now or datetime.now()
-        last = self._nickname_hint_last.get(user_id, 0.0)
-        if now.timestamp() - last < NICKNAME_HINT_COOLDOWN_SECONDS:
-            return ""
-        nickname = self.her_nickname(user_id, now=now)
-        if nickname and nickname in (user_msg or ""):
-            self._nickname_hint_last[user_id] = now.timestamp()
-            return inj.T("profile", "nickname_hint", nickname=nickname)
-        return ""
+        records = self._nickname_records(user_id, now)
+        msg = (user_msg or "").strip()
+        list_query = _NICKNAME_LIST_QUERY.search(msg)
+        followup = _NICKNAME_FOLLOWUP.fullmatch(msg)
+        decision_query = followup or _NICKNAME_DECISION_QUERY.search(msg)
+        relevant = [
+            m for m in records
+            if _direct_nickname_use(msg, m["value"]) or _nickname_named(msg, m["value"])
+            or (decision_query and re.search(rf"[「『“\"']{re.escape(m['value'])}[」』”\"']", msg))
+        ]
+        if not relevant and followup:
+            latest_user = next((
+                line.removeprefix("用户：").strip() for raw in reversed(history or [])
+                if (line := _strip_timed(raw)).startswith("用户：")
+            ), "")
+            relevant = [m for m in records if _nickname_named(latest_user, m["value"])
+                        or _direct_nickname_use(latest_user, m["value"])]
+
+        lines = []
+        recalled = records if list_query and not relevant else relevant
+        for m in recalled:
+            nickname = m["value"]
+            used = m.get("nickname_used")
+            if used is None:
+                used = _direct_nickname_use((m.get("source") or {}).get("excerpt", ""), nickname)
+            if list_query and not relevant and not used:
+                continue
+            if matched_terms is not None:
+                matched_terms.append(nickname)
+            lines.append(f"用户曾用「{nickname}」称呼你。" if used
+                         else f"用户曾提过用「{nickname}」称呼你。")
+            # 普通的称呼列表只回答叫过什么，具体称呼或追问才附上她的答复。
+            if not list_query or relevant:
+                responses = sorted(m.get("nickname_responses", []),
+                                   key=lambda r: r["observed_at"], reverse=True)[:3]
+                for response in responses:
+                    turn_id = response.get("turn_id")
+                    if turn_id and source_turn_ids is not None:
+                        source_turn_ids.append(turn_id)
+                    stance = "同意" if response["stance"] == "accepted" else "拒绝"
+                    scope = {"limited": "有限定范围", "standing": "涉及以后",
+                             "unspecified": "未说明范围"}[response["scope"]]
+                    if response["scope"] == "limited" and _NICKNAME_TIME_LIMIT.search(response["quote"]):
+                        scope = "仅当时"
+                    origin = "当时的回复" if turn_id else "旧会话记录中的回复"
+                    lines[-1] += (f"{response['observed_at'][:10]} {origin}表示{stance}（{scope}），"
+                                  f"记录为「{response['quote']}」。")
+                if decision_query and not responses:
+                    lines[-1] += "这条记忆里没有明确答复的记录。"
+            if len(lines) == 5:
+                break
+        return inj.T("profile", "nickname_hint", evidence="\n".join(lines)) if lines else ""
 
     def build_commitment_context(
         self,

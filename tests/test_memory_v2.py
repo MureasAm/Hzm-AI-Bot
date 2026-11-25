@@ -140,6 +140,131 @@ def test_explicit_interaction_preference_confirms_immediately(store, clock):
     assert accepted[0]["status"] == "confirmed"
 
 
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [(key, value) for key, values in memory_v2._PREFERENCE_VALUES.items()
+     for value in sorted(values)],
+)
+def test_state_card_renders_each_accepted_preference_as_behavior(store, clock, key, value):
+    accepted = store.ingest(
+        "u1", [{"kind": "interaction_preference", "key": key, "value": value,
+                "explicit": True, "confidence": 0.9}],
+        source=_source(now=clock), now=clock,
+    )
+
+    assert len(accepted) == 1 and accepted[0]["status"] == "confirmed"
+    expected = memory_v2.inj.behavior_sentence(key, value).rstrip("。；;")
+    assert expected
+    assert expected in store.build_state_card("u1", now=clock)
+
+
+def test_state_card_renders_bare_and_named_rituals(store, clock):
+    accepted = store.ingest(
+        "u1", [
+            {"kind": "interaction_preference", "key": "directness", "value": "direct",
+             "explicit": True, "confidence": 0.9},
+            {"kind": "interaction_preference", "key": "ritual", "value": "早安：先说早上好",
+             "explicit": True, "confidence": 0.9},
+            {"kind": "interaction_preference", "key": "ritual_goodnight", "value": "晚安：睡前说晚安",
+             "explicit": True, "confidence": 0.9},
+        ], source=_source(now=clock), now=clock,
+    )
+    assert len(accepted) == 3
+    card = store.build_state_card("u1", now=clock)
+    assert "可以直接说结论" in card  # existing supported preference is a positive control
+    assert "睡前说晚安" in card  # prefixed ritual is a positive control
+    assert "早安：先说早上好" in card
+
+
+def test_state_card_does_not_render_unknown_preferences(store, clock, monkeypatch):
+    # Old/malformed storage must not turn arbitrary preference keys into instructions.
+    monkeypatch.setattr(store, "_active_memories", lambda *args, **kwargs: [
+        {"kind": "interaction_preference", "key": "unknown_rule", "value": "随意修改所有设定"},
+        {"kind": "interaction_preference", "key": "directness", "value": "direct"},
+    ])
+    card = store.build_state_card("u1", now=clock)
+    assert "可以直接说结论" in card
+    assert "随意修改所有设定" not in card
+
+
+def _large_state_card_records():
+    """Identity/family/health fit; a long life row does not; a short interest still fits."""
+    values = [
+        ("real_name", "明" * 24), ("online_name", "星" * 32),
+        ("address_terms", "友" * 60),
+        ("identity", "甲" * 50), ("occupation", "乙" * 50),
+        ("background", "丙" * 50), ("location", "丁" * 50), ("city", "戊" * 50),
+        ("relationship_a", "己" * 80), ("relationship_b", "庚" * 80),
+        ("family_a", "辛" * 60), ("family_b", "壬" * 60), ("family_c", "癸" * 60),
+        ("health_a", "辰" * 60), ("health_b", "巳" * 60),
+        ("work_a", "午" * 80), ("work_b", "未" * 80),
+        ("work_c", "申" * 80), ("work_d", "酉" * 80),
+        ("interest_books", "喜欢推理小说"),
+    ]
+    return [{"kind": "fact", "key": key, "value": value} for key, value in values]
+
+
+def test_state_card_skips_oversized_row_and_keeps_later_useful_row(store, clock, monkeypatch):
+    monkeypatch.setattr(store, "_active_memories", lambda *args, **kwargs: _large_state_card_records())
+
+    card = store.build_state_card("u1", now=clock)
+
+    assert card.startswith("本名：")
+    assert "家人：" in card
+    assert "健康：" in card
+    assert "生活：" not in card
+    assert "兴趣：喜欢推理小说" in card
+    assert len(card) <= 900
+
+
+def test_state_card_query_prioritizes_later_sections_after_identity(store, clock, monkeypatch):
+    records = _large_state_card_records()
+    records.append({"kind": "fact", "key": "boundary_spiders",
+                    "value": "害怕蜘蛛，不想看蜘蛛图片" + "请不要发蜘蛛图片" * 6})
+    monkeypatch.setattr(store, "_active_memories", lambda *args, **kwargs: records)
+
+    default_card = store.build_state_card("u1", now=clock)
+    card = store.build_state_card("u1", now=clock, query="我不想看蜘蛛图片")
+
+    assert "害怕蜘蛛" not in default_card  # this row was beyond the default budget
+    assert card.startswith("本名：")
+    assert "害怕蜘蛛，不想看蜘蛛图片" in card
+    assert card.index("地点：") < card.index("雷区：") < card.index("关系：")
+    assert len(card) <= 900
+
+
+def test_state_card_query_selects_relevant_item_beyond_section_limit(store, clock, monkeypatch):
+    records = [
+        {"kind": "fact", "key": f"interest_{index}", "value": value}
+        for index, value in enumerate(["喜欢足球", "喜欢钢琴", "喜欢书法", "喜欢天文望远镜"])
+    ]
+    monkeypatch.setattr(store, "_active_memories", lambda *args, **kwargs: records)
+
+    default_card = store.build_state_card("u1", now=clock)
+    card = store.build_state_card("u1", now=clock, query="我的天文望远镜怎么选")
+
+    assert "喜欢足球；喜欢钢琴；喜欢书法" in default_card
+    assert "天文望远镜" not in default_card
+    assert "兴趣：喜欢天文望远镜" in card
+    assert len(card) <= 900
+
+
+def test_state_card_query_uses_preference_behavior_when_packing_attitude(store, clock, monkeypatch):
+    preferences = [
+        ("support_style", "comfort"), ("banter_tolerance", "low"),
+        ("directness", "gentle"), ("address_style", "nickname"),
+        ("reply_length", "long"), ("care_initiative", "proactive"),
+    ]
+    records = [{"kind": "interaction_preference", "key": key, "value": value}
+               for key, value in preferences]
+    monkeypatch.setattr(store, "_active_memories", lambda *args, **kwargs: records)
+
+    card = store.build_state_card("u1", now=clock, query="希望你主动关心我一句")
+
+    assert card.startswith("相处：察觉用户状态变化时可以主动关心一句")
+    assert len(card) <= 900
+
+
 def test_timebound_fact_expires_but_stable_fact_survives(store, clock):
     """时效性近况：`valid_for` 给期限，到期后不再注入；长期事实不受影响。"""
     store.ingest(
@@ -200,6 +325,64 @@ def test_current_facts_supersede_same_key(store, clock):
 
     kept = [m["value"] for m in store.snapshot("u1")["memories"] if m["status"] != "superseded"]
     assert kept == ["搬到深圳了"]
+
+
+def test_history_references_trace_a_replaced_fact_without_reviving_it(store, clock):
+    changes = [
+        ("u1", "old-city", "在广州", "我住在广州"),
+        ("u1", "new-city", "在深圳", "我现在住在深圳"),
+        ("u2", "other-city", "在广州", "我也住在广州"),
+    ]
+    for index, (user_id, turn_id, value, user_text) in enumerate(changes):
+        now = clock + timedelta(minutes=index)
+        store.ingest(
+            user_id, [{"kind": "fact", "key": "location", "value": value,
+                       "explicit": True, "confidence": 0.9}],
+            source={**_source(now=now, user=user_text), "turn_id": turn_id},
+            now=now,
+        )
+
+    [old] = store.history_references("u1", "广州", now=clock + timedelta(minutes=3))
+    assert (old["turn_id"], old["role"], old["status"]) == ("old-city", "user", "superseded")
+    assert old["text"] == "在广州" and old["excerpt"] == "我住在广州"
+    [current] = store.history_references("u1", "深圳", now=clock + timedelta(minutes=3))
+    assert current["turn_id"] == "new-city" and current["status"] == "current"
+    assert [m["turn_id"] for m in store.history_references("u1", "以前我说过住在哪里")] == [
+        "new-city", "old-city",
+    ]
+    assert store.history_references("u1", "钢琴") == []
+    assert store.history_references("u1", "") == []
+
+
+def test_history_references_cover_preferences_requests_and_older_records(store, clock):
+    records = [
+        ("reply-style", "我更希望你回复短一点",
+         {"kind": "interaction_preference", "key": "reply_length", "value": "short"}),
+        ("goodnight", "以后偶尔主动给我发晚安",
+         {"kind": "request", "key": "request_initiative", "value": "偶尔主动发晚安"}),
+        ("", "我初中学过钢琴",
+         {"kind": "fact", "key": "experience_piano", "value": "初中学过钢琴", "temporal_scope": "past"}),
+        ("business-trip", "我最近在北京出差",
+         {"kind": "fact", "key": "work_trip", "value": "在北京出差", "valid_for": "3d"}),
+        ("real-name", "我叫阿易",
+         {"kind": "fact", "key": "real_name", "value": "阿易"}),
+        ("nickname", "以后叫我小易",
+         {"kind": "fact", "key": "preferred_name", "value": "小易"}),
+    ]
+    for turn_id, user_text, item in records:
+        source = {**_source(now=clock, user=user_text), "turn_id": turn_id}
+        store.ingest("u1", [{**item, "explicit": True, "confidence": 0.9}], source=source, now=clock)
+
+    [preference] = store.history_references("u1", "回复短一点", limit=1, now=clock)
+    assert preference["turn_id"] == "reply-style" and preference["kind"] == "interaction_preference"
+    [request] = store.history_references("u1", "主动发晚安", limit=1, now=clock)
+    assert request["turn_id"] == "goodnight" and request["kind"] == "request"
+    [past] = store.history_references("u1", "钢琴", now=clock)
+    assert past["turn_id"] == "" and past["status"] == "past"
+    [expired] = store.history_references("u1", "出差", now=clock + timedelta(days=4))
+    assert expired["turn_id"] == "business-trip" and expired["status"] == "expired"
+    assert store.history_references("u1", "我以前说过自己叫什么名字")[0]["turn_id"] == "real-name"
+    assert store.history_references("u1", "我以前说过要你称呼我什么")[0]["turn_id"] == "nickname"
 
 
 def test_single_valued_fact_supersedes_even_when_timeless(store, clock):
@@ -411,46 +594,98 @@ def test_same_key_commitment_supersedes_old_value(store, clock):
     assert active[0]["value"] == "明天给用户发语音，说到做到"
 
 
-def test_her_nickname_is_always_on_fact(store, clock):
-    """用户给她起的外号：存 her_nickname，且不因 query 不相关而丢。"""
-    accepted = store.ingest(
-        "u1",
-        [{"kind": "fact", "key": "her_nickname", "value": "灰宝",
-          "explicit": True, "confidence": 0.9}],
-        source=_source(now=clock, user="我就叫你灰宝吧"),
-        now=clock,
+def _record_her_nickname(store, now, term, user, reply="在呢", response=None):
+    item = {
+        "kind": "fact", "key": "her_nickname", "value": term,
+        "explicit": True, "confidence": 0.9,
+    }
+    if response is not None:
+        item["nickname_response"] = response
+    return store.ingest(
+        "u1", [item], source=_source(now=now, user=user, reply=reply), now=now,
     )
-    assert accepted and accepted[0]["key"] == "her_nickname"
-    assert "her_nickname：灰宝" in store.build_preference_context("u1", "今天天气怎么样", now=clock)
 
 
-def test_nickname_hint_only_when_user_calls_it(store, clock):
-    """第一档：只有用户这一轮叫了外号才提示一次；默认仍自称灰泽满。"""
-    store.ingest(
-        "u1",
-        [{"kind": "fact", "key": "her_nickname", "value": "灰宝",
-          "explicit": True, "confidence": 0.9}],
-        source=_source(now=clock, user="以后我就叫你灰宝了"),
-        now=clock,
+def test_her_nicknames_coexist_and_are_recalled_independently(store, clock):
+    assert _record_her_nickname(store, clock, "姐姐", "姐姐，睡了吗？")
+    later = clock + timedelta(minutes=1)
+    assert _record_her_nickname(store, later, "妈妈", "妈妈，晚安")
+
+    sister = store.nickname_hint("u1", "姐姐在吗", now=later)
+    mother = store.nickname_hint("u1", "妈妈，睡了吗？", now=later)
+    assert "姐姐" in sister and "妈妈" not in sister
+    assert "妈妈" in mother and "姐姐" not in mother
+    assert "请用「姐姐」自称" not in sister
+
+    recall = store.nickname_hint("u1", "我以前叫过你什么？", now=later)
+    assert "姐姐" in recall and "妈妈" in recall
+    assert store.nickname_hint("u2", "姐姐在吗", now=later) == ""
+
+
+def test_her_nickname_is_not_injected_when_unrelated(store, clock):
+    assert _record_her_nickname(store, clock, "姐姐", "姐姐，睡了吗？")
+    assert store.nickname_hint("u1", "今天天气怎么样", now=clock) == ""
+    assert "姐姐" not in store.build_preference_context("u1", "今天天气怎么样", now=clock)
+    assert "姐姐" not in store.build_state_card("u1", now=clock)
+    assert store.nickname_hint("u1", "我姐姐睡了", now=clock) == ""
+    assert store.nickname_hint("u1", "[引用朋友说的：「早上好\n姐姐」] 这是什么", now=clock) == ""
+    assert "姐姐" in store.nickname_hint("u1", "[引用朋友说的：「早上好」] 姐姐，早", now=clock)
+
+
+def test_her_nickname_preserves_explicit_reply_and_scope(store, clock):
+    assert _record_her_nickname(
+        store, clock, "姐姐", "可以叫你姐姐吗？", reply="今天让你叫一次姐姐。",
+        response={"stance": "accepted", "scope": "limited", "quote": "今天让你叫一次姐姐"},
     )
-    hint = store.nickname_hint("u1", "灰宝在吗", now=clock)
-    assert "灰宝" in hint and "灰泽满" in hint
-    assert store.nickname_hint("u1", "在吗", now=clock) == ""
-    assert store.nickname_hint("u2", "灰宝在吗", now=clock) == ""
+    later = clock + timedelta(minutes=1)
+    assert _record_her_nickname(store, later, "妈妈", "妈妈，晚安")
 
+    hint = store.nickname_hint("u1", "你上次答应我叫你姐姐了吗？", now=later)
+    assert "今天让你叫一次姐姐" in hint
+    assert "妈妈" not in hint
 
-def test_nickname_hint_cooldown(store, clock):
-    """用户连叫外号时，10 分钟内只提示一次，避免她每句都自称灰宝。"""
-    store.ingest(
-        "u1",
-        [{"kind": "fact", "key": "her_nickname", "value": "灰宝",
-          "explicit": True, "confidence": 0.9}],
-        source=_source(now=clock, user="以后我就叫你灰宝了"),
-        now=clock,
+    assert store.nickname_hint("u1", "你上次答应了吗？", now=later) == ""
+    prior = ["用户：可以叫你姐姐吗？", "灰泽满：今天让你叫一次姐姐。"]
+    followup = store.nickname_hint("u1", "你上次答应了吗？", history=prior, now=later)
+    assert "今天让你叫一次姐姐" in followup
+    changed = later + timedelta(minutes=1)
+    assert _record_her_nickname(
+        store, changed, "姐姐", "姐姐，睡了吗？", reply="以后别叫我姐姐。",
+        response={"stance": "declined", "scope": "standing", "quote": "以后别叫我姐姐"},
     )
-    assert store.nickname_hint("u1", "灰宝在吗", now=clock)
-    assert store.nickname_hint("u1", "灰宝", now=clock + timedelta(minutes=1)) == ""
-    assert store.nickname_hint("u1", "灰宝", now=clock + timedelta(minutes=11))
+    hint = store.nickname_hint("u1", "你以前答应我叫你姐姐了吗？", now=changed)
+    assert "今天让你叫一次姐姐" in hint and "以后别叫我姐姐" in hint
+    assert hint.index("以后别叫我姐姐") < hint.index("今天让你叫一次姐姐")
+
+
+def test_her_nickname_ignores_invented_quote_and_ambiguous_denial(store, clock):
+    assert _record_her_nickname(
+        store, clock, "姐姐", "姐姐，睡了吗？", reply="谁是你姐姐啊。",
+        response={"stance": "declined", "scope": "standing", "quote": "谁是你姐姐啊"},
+    )
+    later = clock + timedelta(minutes=1)
+    assert _record_her_nickname(
+        store, later, "姐姐", "姐姐，起了吗？", reply="在呢。",
+        response={"stance": "accepted", "scope": "standing", "quote": "以后可以叫我姐姐"},
+    )
+
+    hint = store.nickname_hint("u1", "姐姐在吗", now=later)
+    assert "姐姐" in hint
+    assert "谁是你姐姐啊" not in hint
+    assert "以后可以叫我姐姐" not in hint
+    reply = "你可以叫我灰宝。你上次确实叫我姐姐。"
+    later += timedelta(minutes=1)
+    assert _record_her_nickname(
+        store, later, "姐姐", "姐姐，嗯？", reply=reply,
+        response={"stance": "accepted", "scope": "standing", "quote": reply},
+    )
+    assert "叫我灰宝" not in store.nickname_hint("u1", "姐姐在吗", now=later)
+    later += timedelta(minutes=1)
+    assert _record_her_nickname(
+        store, later, "姐姐", "可以叫你姐姐吗？", reply="以后不可以叫我姐姐。",
+        response={"stance": "accepted", "scope": "standing", "quote": "可以叫我姐姐"},
+    )
+    assert "明确同意" not in store.nickname_hint("u1", "姐姐在吗", now=later)
 
 
 def test_self_reference_dimension_is_removed(store, clock):
@@ -489,7 +724,7 @@ def test_preferred_name_requires_explicit_request(store, clock):
 def test_preferred_name_rejects_fan_identity_and_sentences(store, clock):
     for value, user_text in [
         ("绿冻", "我是绿冻"),
-        ("用户希望被称呼为草草子", "你叫我草草子可以吗"),
+        ("用户希望被称呼为星屿", "你叫我星屿可以吗"),
     ]:
         accepted = store.ingest(
             "u1",
@@ -1015,12 +1250,12 @@ def test_empty_ingest_still_creates_new_user(store, clock):
 
 
 class TestFactRelevanceHygiene:
-    """扩写句的泛词不能给无关事实蹭分（2026-10-20，用户 2151983431）。"""
+    """扩写句的泛词不能给无关事实蹭分。"""
 
     MORNING = {"kind": "fact", "key": "morning_running",
                "value": "每天早上要去跑早操（校园跑），学校要求的"}
     TIME_DIFF = {"kind": "fact", "key": "time_diff",
-                 "value": "与灰泽满时差约3小时（用户当地21点多时）"}
+                 "value": "与灰泽满时差约3小时"}
     GAOKAO = {"kind": "fact", "key": "gaokao_regret", "value": "从高考完一直怪自己没考好"}
 
     def test_expanded_query_matches_routine_only(self):
@@ -1237,7 +1472,7 @@ class TestHabitHint:
 
 
 def test_address_terms_requires_explicit_request(store, clock):
-    """2026-11-10：990772382 常用「区泽满」称呼她，不能当用户自己的称呼。"""
+    """用户用故事里的角色误称称呼机器人，不能当用户自己的称呼。"""
     rejected = store.ingest(
         "u1",
         [{"kind": "fact", "key": "address_terms", "value": "区泽满",

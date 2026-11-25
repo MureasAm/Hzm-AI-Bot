@@ -18,13 +18,21 @@ import re
 from datetime import datetime
 
 from . import context_probe, daily_memory
+from .constants import AT_SELF_MARK
 
 _WEATHER_RE = re.compile(
     r"(天气|几度|多少度|冷不冷|冷吗|热不热|热吗|凉不凉|凉吗|暖和吗|"
     r"下雨|下雪|刮风|风大|风很|降温|升温|气温|寒潮)(?<!角度)"
 )
 _TODAY_RE = re.compile(r"(我今天|我早上|我中午|我晚上|我今天干嘛|我今天干啥|吃了什么|干啥了|做了什么)")
-_PERCEPTION_RE = re.compile(r"(现在几点|几点了|你那边几点|农历|初几|节气|什么日子)")
+_CALENDAR_RE = re.compile(r"农历|初几|节气|什么日子")
+_CLOCK_PLACE = r"(?:你(?:那边|那里|那儿|那)|我(?:这边|这里|这儿|这)|国内|北京|墨尔本|澳洲)(?:当地)?(?:时间)?"
+_CLOCK_QUESTION_RE = re.compile(
+    r"(?:^|[，,。！？!?；;：:\n])\s*(?:(?:请问|问一下|告诉我|帮我看看)\s*)?"
+    rf"(?:{_CLOCK_PLACE}\s*)?(?:(?:现在|此刻|这会儿|目前|都)\s*)?"
+    rf"(?:{_CLOCK_PLACE}\s*)?(?:是\s*)?几点(?:钟|几分(?:钟)?)?[了呀啊呢吗嘛哦]*"
+    r"\s*(?=$|[，,。！？!?；;\n])"
+)
 
 # 从“X天气/气温/几度”里抠出地点；probe 的扩写句通常会把“坡县”规范成“新加坡”。
 _PLACE_RE = re.compile(
@@ -54,6 +62,11 @@ def _weather_subject(msg: str) -> str:
     return ""
 
 
+def asks_current_time(msg: str) -> bool:
+    """识别问此刻钟点的句子，包括「几点？」和带地点的问法。"""
+    return bool(_CLOCK_QUESTION_RE.search((msg or "").replace(AT_SELF_MARK, "")))
+
+
 def requests_for(msg: str) -> list[dict]:
     """返回本轮需要预取的请求；空 = 不是显式场景。"""
     m = msg or ""
@@ -64,7 +77,7 @@ def requests_for(msg: str) -> list[dict]:
     if _TODAY_RE.search(m):
         out.append({"kind": "daily", "subject": "user", "when": "today",
                     "query": "用户今天的日常事件"})
-    if _PERCEPTION_RE.search(m):
+    if asks_current_time(m) or _CALENDAR_RE.search(m):
         out.append({"kind": "perception", "when": "now", "query": "现在几点、农历日期"})
     return out
 
@@ -109,10 +122,11 @@ async def prefetch(*, user_id: str, msg: str, store, user_city: str,
     lines = list(dict.fromkeys(x for x in lines if x))
     if not lines:
         return "", []
-    body = "；".join(lines)[:360]
-    text = (f"【预取】{body}\n"
-            f"（这些是用户这一轮明确问到的，直接用；没有的不要编。）")
-    return text[:400], lines
+    head = "【预取】"
+    clock_note = "当前时间按对方问的时区报到分钟。" if asks_current_time(msg) else ""
+    tail = f"\n（这些是用户这一轮明确问到的，直接用；没有的不要编。{clock_note}）"
+    body = "；".join(lines)[:min(360, 400 - len(head) - len(tail))]
+    return f"{head}{body}{tail}", lines
 
 
-__all__ = ["requests_for", "prefetch", "place_from_text"]
+__all__ = ["requests_for", "prefetch", "place_from_text", "asks_current_time"]

@@ -22,12 +22,12 @@ NoneBot2 + OneBot v11(NapCat) 的"灰泽满"人格聊天机器人。核心是**�
 
 ## 怎么跑 / 怎么测
 - 启动：NapCat 自己开 → `env\python.exe api_v2.py`(GPT-SoVITS,端口9880) → `python bot.py`（或双击 `启动.bat`）。**改代码/数据后要重启 bot**（有进程内缓存）。
-- 测试：`.venv\Scripts\python.exe -m pytest -q`（**1508 个**，全绿才算完）。
+- 测试：`.venv\Scripts\python.exe -m pytest -q`（收集数见地图 §10，实际结果看 pytest 输出）。
   ⚠️ **数字的权威在 `docs/地图.md` §10**——改了用例数去那里改一次，然后跑
   `.venv/Scripts/python.exe scripts/check_docs.py` 看还有哪几处没跟上（别只改本文件）。
 - 改**检索/判据/素材**后必跑这两个（unit test 测不出"检索该不该命中"）：
-  `run_tool.py retrieval-eval`（query→各路期望，**改语料会把候选排名洗牌，改完必须重跑**）、
-  `run_tool.py regression --check`（真实翻车固化成的确定性判据）。
+  `scripts/run_tool.py retrieval-eval`（共享资料选择、融合与预算后的各路期望；降级不算通过）、
+  `scripts/run_tool.py regression --check`（真实翻车固化成的确定性判据）。
   看到答得不对 → `run_tool.py problems --query "那句话"` 先看检索实况，再决定改哪个文件。
 - 新增直播素材：`run_tool.py persona-pipeline <corpus|behaviors>`
   先产候选，人工看 review，确认后加 `--apply`；corpus 会自动重建向量。
@@ -50,7 +50,7 @@ NoneBot2 + OneBot v11(NapCat) 的"灰泽满"人格聊天机器人。核心是**�
 - 人格数据：`persona/`（**injection/ = 24 个注入块，一块一个文件夹**，块里的 block.json 写着段头/文案/来源/时机；
   core=骨架；world/legendary.json 不进提示词；media=表情包。`behavior/` `speech/` `core/traits|styles` 已分别于 2026-10-16 / 10-04 删除）
 - 长期记忆：`memory_v2.py`（**类型化条目，2026-10-10 起正位**：真实聊天重建 + 运行时写入/注入；
-  临时关掉设 `MEMORY_V2_SHADOW=0` / `MEMORY_V2_INJECT=0`）。**v1 已于 2026-10-12 整个删除**
+  启动进程设 `MEMORY_V2_SHADOW=0` 关闭常规异步提取、`MEMORY_V2_INJECT=0` 关闭私聊回复中的 V2 注入）。**v1 已于 2026-10-12 整个删除**
   ——根 `memory_manager.py` 和 `user_memory/long_term*` 都没了，名字/城市/事实全从 V2 取。
 - 离线工具：`scripts/run_tool.py <工具>`；**76 个脚本各干什么见 `docs/操作手册.md`**
 

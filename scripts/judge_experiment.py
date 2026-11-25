@@ -117,7 +117,8 @@ def load_tasks() -> dict:
     推导规则（看 `expect.<route>` 里写了什么）：
         should / contains / should_fire  → want=True  （该路该出东西）
         should_not_hit                   → want=False （该路该是空的）
-    该 route 两边都没写的 query → 不参与这个任务。
+    只含 allowed / must_not 的条件不推导二元标签；二元负例需明确 should_not_hit。
+    facts 是跨来源的信息检查，也不替各路推导正负标签。
     ⚠️ `contains` 也算"该命中"——它是"命中且 top 文本含关键词"，
       只把它当 should_not_hit 的反面会**漏掉走 contains 的正例**（踩过：co1/co2/co6 被判成不命中）。
     `borderline` 原样带过来 —— **边界案例的标签直接决定'哪个判据赢'**，最该由人裁决。
@@ -132,8 +133,10 @@ def load_tasks() -> dict:
                 continue
             if "should_not_hit" in cond:
                 want = False
+            elif "should" in cond or "contains" in cond or cond.get("should_fire"):
+                want = True
             else:
-                want = bool("should" in cond or "contains" in cond or cond.get("should_fire"))
+                continue
             item = {"q": c["query"], "want": want, "why": c.get("why", "")}
             if c.get("borderline"):
                 item["borderline"] = True

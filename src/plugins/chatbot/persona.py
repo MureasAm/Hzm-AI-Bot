@@ -126,6 +126,24 @@ def _format_behavior_rule(rule: dict) -> str:
         parts.append(f"触发情境：{trigger_desc}")
     if desc:
         parts.append(f"回应模式：{desc}")
+    if "style_fragments" in rule:
+        # 由素材明确选出的短语只供迁移语气；不再把同题整段答案交给生成器。
+        sources = [str(s.get("reply") or "").strip() for s in samples if isinstance(s, dict)]
+        configured = rule["style_fragments"]
+        fragments = []
+        for value in configured if isinstance(configured, list) else []:
+            if not isinstance(value, str):
+                continue
+            fragment = value.strip()
+            if fragment and fragment not in fragments and any(
+                    fragment in source and fragment != source for source in sources):
+                fragments.append(fragment)
+                if len(fragments) == 4:
+                    break
+        if fragments:
+            parts.append("过往表达中的语气片段（仅作表达证据，本轮内容按当前对话组织）：\n"
+                         + "\n".join(f"  · {fragment}" for fragment in fragments))
+        return "\n".join(parts)
     if samples:
         # 真人原话示范：模型照这个腔调学，不自己发明
         sample_lines = []

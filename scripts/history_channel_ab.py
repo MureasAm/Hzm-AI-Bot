@@ -356,7 +356,7 @@ def write_report(result: dict) -> Path:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--users", default="2151983431,905860780")
+    ap.add_argument("--users", default="900000001,900000001")
     ap.add_argument("--turns", type=int, default=10)
     ap.add_argument("--samples", type=int, default=1)
     ap.add_argument("--arms", default="ABC", help="要跑哪几组，如 ABC / AB / B")

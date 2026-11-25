@@ -97,7 +97,7 @@ import src.plugins.chatbot as pkg  # noqa: E402
 
 def _event(msg, self_id="10000", user_id="20000", message_type="group"):
     return SimpleNamespace(
-        message=msg, self_id=self_id, message_type=message_type, group_id="901907410",
+        message=msg, self_id=self_id, message_type=message_type, group_id="900000002",
         raw_message="", to_me=False,
         get_message=lambda: msg, get_user_id=lambda: user_id,
     )
@@ -132,6 +132,31 @@ class TestUnrecognizedSegmentsNotDropped:
         await self._run(Message([MessageSegment("video", {"file": "x.mp4"})]))
         assert len(self.enqueued) == 1
         assert "视频" in self.enqueued[0][0][2]
+
+    @pytest.mark.parametrize("user_id,sender_id,is_incoming", [
+        (20000, 10000, False),
+        (10000, None, False),
+        (20000, 20000, True),
+    ])
+    async def test_private_file_is_only_enqueued_for_an_incoming_message(
+            self, user_id, sender_id, is_incoming):
+        from nonebot.adapters.onebot.v11 import Adapter, PrivateMessageEvent
+
+        event = Adapter.json_to_event({
+            "time": 1, "self_id": 10000, "post_type": "message",
+            "message_type": "private", "sub_type": "friend",
+            "user_id": user_id, "message_id": 3, "font": 0, "raw_message": "",
+            "sender": {"user_id": sender_id} if sender_id is not None else {},
+            "message": [{"type": "file", "data": {"file": "勇气.m4a", "name": "勇气.m4a"}}],
+        })
+        assert isinstance(event, PrivateMessageEvent)
+        await pkg._handle_chat(bot=SimpleNamespace(self_id="10000"), event=event)
+        if is_incoming:
+            assert len(self.enqueued) == 1
+            assert "音频文件「勇气.m4a」" in self.enqueued[0][0][2]
+            assert "未读取音频内容" in self.enqueued[0][0][2]
+        else:
+            assert self.enqueued == []
 
     @pytest.mark.asyncio
     async def test_plain_text_unaffected(self):

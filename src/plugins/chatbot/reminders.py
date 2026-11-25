@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """定时提醒：读 memory_v2 里带 due_at 的 commitment，到点用她的口吻私聊发出。
 
-**不另存提醒文本**（2026-11-17 用户定）：提醒就是一条 commitment，
-`due_at` 是它的字段；发送后标 done，注入层不会再把它当"未完成约定"。
+提醒的内容和时间由一条 commitment 保存，发出后标为 done，错过补发期限时标为 missed。
+实际发出的那句话通过私聊回复档案回查。
 识别在 `routing.classify_l3` 的 `reminder` 槽，落库在 `memory_v2` 的 commitment 提取。
 
 调度用项目现有的 `on_startup` + `spawn` 轮询，不引入 APScheduler/Redis：
@@ -12,11 +12,13 @@ import asyncio
 import datetime
 import os
 import re
+from uuid import uuid4
 
 from nonebot import get_bot, get_driver
+from nonebot.adapters.onebot.v11 import Message, MessageSegment
 
 from .bg import spawn
-from . import context_probe, daily_memory, injection as inj
+from . import context_probe, daily_memory, injection as inj, reply_evidence
 from .memory import get_user_history_timed
 from .session_memory import mood_note
 from .reply_style import planning_leak_reason
@@ -114,14 +116,20 @@ async def tick(now: datetime.datetime | None = None) -> int:
             due_at = now
         if now - due_at > datetime.timedelta(hours=LATE_SKIP_HOURS):
             print(f"[提醒] 过期超过 {LATE_SKIP_HOURS} 小时，跳过: {item.get('value')}")
-            _MEMORY_V2_STORE.mark_reminder_delivered(user_id, item.get("id"), now)
+            _MEMORY_V2_STORE.mark_reminder_missed(user_id, item.get("id"), now)
             continue
         msg = await _render(item, now)
+        message = Message(MessageSegment.text(msg))
         try:
-            await bot.send_private_msg(user_id=int(user_id), message=msg)
+            receipt = await bot.send_private_msg(user_id=int(user_id), message=message)
         except Exception as e:
             print(f"⚠️ 提醒发送失败（下轮重试）: {type(e).__name__}: {e}")
             continue
+        turn_id = uuid4().hex
+        message_id = receipt.get("message_id") if isinstance(receipt, dict) else None
+        if not reply_evidence.record_part(user_id, turn_id, 0, msg, message_id=str(message_id or "")):
+            turn_id = ""
+        _MEMORY_V2_STORE.mark_reminder_delivered(user_id, item.get("id"), now, turn_id=turn_id)
         # 和主动发言一样：她主动发出去的话不进事件循环，必须手动写进短期记忆，
         # 否则对方顺着提醒回她时，她的【最近对话记录】里没有这一句。
         try:
@@ -129,7 +137,6 @@ async def tick(now: datetime.datetime | None = None) -> int:
             append_bot_message(user_id, msg)
         except Exception:
             pass
-        _MEMORY_V2_STORE.mark_reminder_delivered(user_id, item.get("id"), now)
         sent += 1
         print(f"[提醒] 已发送 -> {user_id}: {msg}")
     return sent

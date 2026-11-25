@@ -196,8 +196,8 @@ def log_injection_trace(record: dict) -> None:
 
 
 def log_turn(target_id: str, is_group: bool, user_text: str, reply: str,
-             images=None, batch_messages=None) -> None:
-    """追加一轮。**只在消息真的发出去之后调用。**
+             images=None, batch_messages=None, *, reply_evidence_turn_id: str = "") -> None:
+    """追加一轮聊天诊断。发出证据由私聊发送流程单独记录。
 
     `images`：本批所有图片的视觉描述（含被抑制的表情包，供事后诊断）；
     `batch_messages`：本批由几条原始消息攒成。
@@ -222,6 +222,8 @@ def log_turn(target_id: str, is_group: bool, user_text: str, reply: str,
             rec["images"] = list(images)
         if batch_messages is not None:
             rec["batch_messages"] = int(batch_messages)
+        if reply_evidence_turn_id:
+            rec["reply_evidence_turn_id"] = reply_evidence_turn_id
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     except Exception as e:

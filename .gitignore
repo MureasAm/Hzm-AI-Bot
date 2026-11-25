@@ -248,3 +248,9 @@ data/sticker_log.jsonl
 
 # Remotion 说明视频（本地独立工程，与 bot 源码无关；2026-10-19 从仓库移出）
 video/
+
+# 本机机器人运行产物，可能含聊天、行为轨迹或缓存；不进入公开仓库。
+/data/*.jsonl
+/data/self_speech_cache.json
+/data/sticker_group_vectors.json
+/data/wiki_cache.json

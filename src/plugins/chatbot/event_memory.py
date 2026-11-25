@@ -16,6 +16,7 @@
 
 状态是**当前状态**：车祸发生但伤还在 = ongoing；好了 = ended。
 更新同一件事时只留一条事件，旧状态进 history。
+存在 QQ 回复证据时，事件及最近的历史版本各自保存可回查的 turn_id。
 """
 from __future__ import annotations
 
@@ -26,9 +27,14 @@ import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from .constants import PROJECT_ROOT
+from .llm_json import parse_json_object, selected_indices
 from .rag import cosine_similarity, embed_query
+
+if TYPE_CHECKING:
+    from .retrieval_context import RetrievalContext
 
 EVENT_DIR = PROJECT_ROOT / "user_memory" / "events"
 _LOCK = threading.Lock()
@@ -54,6 +60,9 @@ _EXPLICIT_REF_RE = re.compile(
 MAX_EVENTS = 200
 MAX_WHAT_CHARS = 160
 MAX_ENTITY_CHARS = 12
+_MAX_HISTORY_REFERENCES = 8
+_TURN_ID = re.compile(r"[A-Za-z0-9_-]{1,120}")
+_RECALL_USER_ID = re.compile(r"[A-Za-z0-9_-]{1,80}")
 
 
 def _dir(user_id: str) -> Path:
@@ -206,10 +215,27 @@ def recent_summary(user_id: str, limit: int = 8) -> str:
     )
 
 
+def _append_history(event: dict, now: datetime) -> None:
+    prior = {"t": now.isoformat(), "status": event.get("status"), "what": event.get("what")}
+    if turn_id := event.get("turn_id"):
+        prior.update(turn_id=turn_id, entities=event.get("entities") or [],
+                     observed_at=event.get("last_observed_at"))
+    history = event.setdefault("history", [])
+    history.append(prior)
+    if len(history) > _MAX_HISTORY_REFERENCES:
+        # 保留旧状态，只淘汰最早版本的回查指针。
+        retired = history[-_MAX_HISTORY_REFERENCES - 1]
+        retired.pop("turn_id", None)
+        retired.pop("entities", None)
+        retired.pop("observed_at", None)
+
+
 def add_events(user_id: str, events: list[dict], *, source: dict | None = None,
                now: datetime | None = None) -> list[dict]:
     """提取候选 → 事件库。模型可用 `update_of` 声明这是同一件事的更新。"""
     now = now or datetime.now()
+    turn_id = (source or {}).get("turn_id")
+    turn_id = turn_id if isinstance(turn_id, str) and _TURN_ID.fullmatch(turn_id) else ""
     accepted: list[dict] = []
     with _LOCK:
         stored = _load_events(user_id)
@@ -222,14 +248,14 @@ def add_events(user_id: str, events: list[dict], *, source: dict | None = None,
             target = by_id.get(update_of)
             if target is not None and target.get("type") == event["type"] and _same_entity(target, event) \
                     and _near_in_time(target.get("date", ""), event["date"]):
-                target.setdefault("history", []).append({
-                    "t": now.isoformat(),
-                    "status": target.get("status"),
-                    "what": target.get("what"),
-                })
+                _append_history(target, now)
                 for key in ("date", "subject", "source", "what", "status", "type",
                             "entities", "confidence", "expires_at"):
                     target[key] = event[key]
+                if turn_id:
+                    target["turn_id"] = turn_id
+                else:
+                    target.pop("turn_id", None)
                 target["last_observed_at"] = now.isoformat()
                 accepted.append(target)
                 continue
@@ -237,9 +263,18 @@ def add_events(user_id: str, events: list[dict], *, source: dict | None = None,
             event["created_at"] = now.isoformat()
             event["last_observed_at"] = now.isoformat()
             event["history"] = []
-            # 完全重复（同 id）只刷新时间，不新增
+            if turn_id:
+                event["turn_id"] = turn_id
+            # 完全重复只更新同一条。新回执可以为同一事件补上另一轮原话。
             dup = by_id.get(event["id"])
             if dup is not None:
+                # 事件更新后仍保留旧 ID。旧说法重现时，不能把它挂到更新后的描述上。
+                same_observation = all(dup.get(key) == event[key]
+                                       for key in ("what", "status", "date", "subject", "source"))
+                if same_observation and turn_id and turn_id != dup.get("turn_id"):
+                    if dup.get("turn_id"):
+                        _append_history(dup, now)
+                    dup["turn_id"] = turn_id
                 dup["last_observed_at"] = now.isoformat()
                 accepted.append(dup)
                 continue
@@ -297,23 +332,62 @@ def _overlap(a: str, b: str) -> float:
     return len(A & B) / min(len(A), len(B)) if A and B else 0.0
 
 
+def history_references(user_id: str, topic: str, *, limit: int = 3) -> list[dict]:
+    """按话题查同一私聊的事件来源。已结束和过期版本也可用于回顾。"""
+    user_id = str(user_id)
+    topic = (topic or "").strip().casefold()
+    if limit <= 0 or not topic or not _RECALL_USER_ID.fullmatch(user_id):
+        return []
+    candidates = []
+    for event in _load_events(user_id):
+        if not isinstance(event, dict):
+            continue
+        history = (event.get("history") or [])[-_MAX_HISTORY_REFERENCES:]
+        for observed in (event, *reversed(history)):
+            if not isinstance(observed, dict):
+                continue
+            turn_id = observed.get("turn_id")
+            text = str(observed.get("what") or "")
+            if not isinstance(turn_id, str) or not _TURN_ID.fullmatch(turn_id) or not text:
+                continue
+            entity_match = any(entity.casefold() in topic for entity in observed.get("entities") or [])
+            overlap = _overlap(topic, text.casefold())
+            if not entity_match and overlap < 0.35:
+                continue
+            timestamp = observed.get("observed_at") or observed.get("last_observed_at") or ""
+            candidates.append((int(entity_match) + overlap, timestamp, turn_id, text))
+    candidates.sort(key=lambda entry: (entry[0], entry[1]), reverse=True)
+    result = {}
+    for _, _, turn_id, text in candidates:
+        result.setdefault(turn_id, {"turn_id": turn_id, "text": text})
+        if len(result) >= limit:
+            break
+    return list(result.values())
+
+
 async def retrieve(user_id: str, query: str, *, entities=None, explicit: bool = False,
                    zhipu_client=None, judge_client=None, judge_model: str | None = None,
                    limit: int | None = None, now: datetime | None = None,
-                   avoid_text: str = "") -> list[dict]:
-    """按“明确指涉/实体命中优先，向量兜底”取事件；最多 2 条。"""
+                   avoid_text: str = "", context: RetrievalContext | None = None) -> list[dict]:
+    """实体和向量只召回候选；有上下文时统一确认是否需要注入，最多 2 条。
+
+    未传 context 的旧调用保留实体直达方式。avoid_text 保留兼容参数，
+    近期出现同一实体不再整条排除事件；上下文选择负责判断是否重复。
+    """
+    if context is not None:
+        if context.needs is not None and "event" not in context.needs:
+            return []
+        query = context.query
     query = str(query or "").strip()
-    if not query:
+    if not query or (limit is not None and limit <= 0):
         return []
     events = _active_events(user_id, now=now)
-    if avoid_text:
-        # 最近 10 轮已经出现过的同一实体，别再作为“背景事件”注一遍。
-        events = [e for e in events
-                  if not any(ent in avoid_text for ent in (e.get("entities") or []))]
     if not events:
         return []
     wants = _norm_entities(entities) + _norm_entities(re.findall(r"[一-鿿]{2,6}", query)[:6])
-    scored: list[tuple[float, dict]] = []
+    if context is not None:
+        wants += _norm_entities(context.entities)
+    scored: list[tuple[float, dict, bool]] = []
     vectors = (_load(_vectors_file(user_id), {"items": {}}) or {}).get("items") or {}
     qvec = None
     if zhipu_client is not None and vectors:
@@ -337,12 +411,39 @@ async def retrieve(user_id: str, query: str, *, entities=None, explicit: bool = 
     if not scored:
         return []
     scored.sort(key=lambda x: (-x[0], x[1].get("last_observed_at") or ""))
+    recall = explicit or bool(_EXPLICIT_REF_RE.search(query))
+    if context is not None:
+        recall = recall or bool(_EXPLICIT_REF_RE.search(context.raw_text))
+    cap = 2 if recall else 1
+    cap = cap if limit is None else min(limit, cap)
+    if context is not None:
+        from .retrieval_context import MaterialCandidate, select_materials
+
+        # 先让选择器看完整候选池，再施加输出条数；实体碰词不能绕过此门。
+        candidates = [e for _, e, _ in scored[:8]]
+        selection = await select_materials(
+            judge_client, context,
+            [MaterialCandidate(
+                source="event", item_id=e["id"], text=render_event(e),
+                metadata={"subject": e.get("subject"), "status": e.get("status"),
+                          "entities": e.get("entities") or []})
+             for e in candidates], model=judge_model)
+        if not selection.available:
+            return []
+        picked = []
+        for event in candidates:
+            key = ("event", event["id"])
+            if key in selection.disputed:
+                picked.append(dict(event, _retrieval_disputed=True))
+            elif key in selection.selected:
+                picked.append(event)
+        picked.sort(key=lambda event: not event.get("_retrieval_disputed", False))
+        return picked[:cap]
     picked = [e for _, e, ent_hit in scored
               if (ent_hit or _EXPLICIT_REF_RE.search(query) or explicit)]
     if not picked:
         picked = [e for _, e, _ in scored[:1]]
-    cap = 2 if (explicit or _EXPLICIT_REF_RE.search(query)) else 1
-    picked = picked[:cap if limit is None else min(limit, cap)]
+    picked = picked[:cap]
     # 向量兜底且没有实体/指涉锚点时，让 judge 再确认一次；失败不放行。
     if judge_client is not None and not any(
             set(e.get("entities") or []) & set(wants) for e in picked):
@@ -369,15 +470,17 @@ async def _judge(client, model: str | None, query: str, events: list[dict]) -> l
             temperature=0, max_tokens=80, **THINKING_DISABLED)
         log_cache_usage(resp, "事件判定")
         content = extract_chat_content(resp)
-        if "```" in content:
-            content = content.split("```")[1].split("```")[0].strip()
-        keep = json.loads(content).get("keep") or []
+        keep = selected_indices(parse_json_object(content), len(events))
         return [e for i, e in enumerate(events, start=1) if i in keep]
     except Exception:
         return []
 
 
 def render_event(e: dict) -> str:
+    if e.get("_retrieval_disputed"):
+        return (f"[{e.get('date') or '日期未知'} | 历史记录·待核对 | "
+                f"{_SOURCE_ZH.get(e.get('source'), '')}] 旧记录曾称：{e.get('what', '')}"
+                "（当前对话已否认或纠正，不能当作当前事实）")
     return (f"[{e.get('date') or '日期未知'} | {_STATUS_ZH.get(e.get('status'), '')} | "
             f"{_SOURCE_ZH.get(e.get('source'), '')}] {e.get('what', '')}")
 
@@ -389,4 +492,4 @@ def render_context(events: list[dict]) -> str:
 
 
 __all__ = ["EVENT_DIR", "add_events", "refresh_vectors", "recent_summary",
-           "retrieve", "render_event", "render_context"]
+           "history_references", "retrieve", "render_event", "render_context"]

@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 """私聊历史走 assistant 原生轮次（2026-11-19）。"""
+from datetime import datetime
+
 import pytest
 
 from src.plugins.chatbot import core, memory, self_speech
@@ -51,6 +53,61 @@ def test_history_flag_defaults_on_and_can_roll_back(monkeypatch):
     assert core.history_as_assistant_enabled() is True
     monkeypatch.setenv("HISTORY_AS_ASSISTANT", "0")
     assert core.history_as_assistant_enabled() is False
+
+
+@pytest.mark.parametrize(("question", "old_reply"), [
+    ("几点？", "凌晨3点了还不睡"),
+    ("你那里现在几点几分？", "凌晨3点了还不睡"),
+    ("现在几点了", "墨尔本现在凌晨2点34分"),
+])
+async def test_clock_question_uses_live_time_after_native_history(monkeypatch, question, old_reply):
+    monkeypatch.setenv("INJECTION_V3", "1")
+    monkeypatch.setenv("HISTORY_AS_ASSISTANT", "1")
+    monkeypatch.setattr(core, "_get_clients", lambda: (None, None))
+    monkeypatch.setattr(core.memory_v2, "injection_enabled", lambda: False)
+    monkeypatch.setattr(core.memory_v2, "shadow_enabled", lambda: False)
+
+    async def fake_probe(user_id, msg, *args, **kwargs):
+        assert msg == question
+        return msg, {}
+
+    async def fake_retrieval(*args, **kwargs):
+        return {"fused_items": [], "preference_items": [], "core_stories": []}
+
+    async def no_weather(city):
+        pass
+
+    monkeypatch.setattr(core, "probe_session", fake_probe)
+    monkeypatch.setattr(core, "gather_retrieval", fake_retrieval)
+    monkeypatch.setattr(core.context_probe, "warm_weather", no_weather)
+    monkeypatch.setattr(core.context_probe, "_cst", lambda now: datetime(
+        2026, 11, 25, 23, 34, tzinfo=core.context_probe._CST))
+
+    memory.append_user_history("u1", "还没睡", old_reply)
+    requests = []
+
+    async def fake_reply(messages):
+        requests.append(messages)
+        if len(requests) > 1:
+            return "快去睡吧"
+        return "墨尔本现在凌晨2点34分"
+
+    monkeypatch.setattr(core, "generate_reply", fake_reply)
+    timed_transcript = f"[北京时间 11月25日 23:33] {question}"
+    reply = await core.handle_chat(
+        "u1", question, user_transcript=question, timed_user_transcript=timed_transcript,
+    )
+
+    messages = requests[0]
+    assistant_index = messages.index({"role": "assistant", "content": old_reply})
+    assert messages[-1] == {"role": "user", "content": timed_transcript}
+    assert any(m["role"] == "system" and "北京时间 11月25日 周三 23:34" in m["content"]
+               and "墨尔本当地时间 11月26日 周四 02:34" in m["content"]
+               and "报到分钟" in m["content"]
+               for m in messages[assistant_index + 1:-1])
+    assert len(requests) == 1
+    assert reply == "墨尔本现在凌晨2点34分"
+    assert memory.get_user_history("u1")[-2] == f"用户：{question}"
 
 
 async def test_annotate_quotes_without_quote_returns_unchanged():

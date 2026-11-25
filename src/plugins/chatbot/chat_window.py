@@ -14,14 +14,17 @@ import random
 import re
 import time
 from pathlib import Path
+from uuid import uuid4
 
 from nonebot.adapters.onebot.v11 import Message, MessageSegment
 
 from .bg import spawn
 from .core import (
     handle_chat, summarize_batch, summarize_group_batch, _get_clients, _compose_record_msg,
+    update_memory_v2_shadow_task, history_as_assistant_enabled,
 )
 from .config import set_llm_route, get_vision_client, aux_clients_or, get_voice_enabled
+from .context_probe import message_time_prefix
 from .memory import get_user_history, append_user_history, humanize_gap, mark_last_bot_modality
 from .group_gate import should_reply_in_group, _addressed_to_her
 from .chatlog import log_turn
@@ -29,7 +32,8 @@ from .stickers import pick_sticker, log_event
 from .reply_style import (
     split_reply, split_delay, clean_reply,
 )
-from .voice import should_voice, send_voice, voice_requested
+from .voice import should_voice, send_voice, voice_requested, _tts_text
+from .songs import send_song
 from .vision import describe_image_bytes, _read_image_bytes, image_kind
 from .constants import (
     READ_WINDOW_MIN_SECONDS, READ_WINDOW_MAX_SECONDS, SPLIT_REPLY_ENABLED,
@@ -37,6 +41,8 @@ from .constants import (
     AT_SELF_MARK,
 )
 from . import group_memory
+from . import reply_evidence
+from . import self_speech
 from . import session_memory
 
 
@@ -55,6 +61,7 @@ class _UserWindow:
         self.pending_meta: list[dict] = []
         self.task: asyncio.Task | None = None      # 当前"窗口等待/发送"任务
         self.generation = 0                        # 每次 enqueue 自增
+        self.committed_generation = -1             # 已提交的最新回复批次
         self.bot = None
         self.is_private = True
         # 表情包冷却**不放这里**——窗口空闲会被销毁，放这儿等于每次重置（见 _sticker_state 的注释）
@@ -239,7 +246,8 @@ async def _describe_image_src(bot, image_url: str, image_file: str) -> str:
 
 def enqueue(target_id: str, sender_id: str, text: str,
             image_sources: list[tuple[str, str]], bot, is_private: bool,
-            *, ts: float | None = None, message_id: str = "") -> None:
+            *, ts: float | None = None, message_id: str = "", quoted_message_id: str = "",
+            authored_text: str | None = None, authored_order: int | None = None) -> None:
     """采集一条消息进缓冲，重置读秒窗口。
 
     窗口按 target_id（私聊=user_id，群聊=group_id）开——群成员发言攒同一个窗口。
@@ -260,6 +268,9 @@ def enqueue(target_id: str, sender_id: str, text: str,
     win.pending_meta.append({
         "ts": float(ts) if ts is not None else time.time(),
         "message_id": str(message_id or ""),
+        "quoted_message_id": str(quoted_message_id or ""),
+        "authored_text": text if authored_text is None else authored_text,
+        "authored_order": time.monotonic_ns() if authored_order is None else authored_order,
     })
     if len(win.pending) > 30:
         cut = len(win.pending) - 30
@@ -298,19 +309,37 @@ async def _flush(win: _UserWindow) -> None:
     set_llm_route("群" if not win.is_private else "私")
     # ⚠️ 先取快照，**不要**把 pending 清空。这一批什么时候算“处理完”？
     #    回复真的生成并记入短期记忆之后才从 pending 里删（_commit_batch）。
-    #    踩坑（2026-10-20，用户 2151983431）：旧代码一进来就 `msgs, win.pending = win.pending, []`，
-    #    而新消息会取消正在进行的 _process；取消时这批已经被取走 → **静默丢失**。
-    #    实况：「跑步呀」已经开始回复，6 秒后「你忘了吗」进来把它取消，
-    #    于是「跑步呀」既没回复、也没进记忆/聊天记录，下一轮只看得到「早」。
+    #    生成中若收到新消息，取消本轮时也不能丢掉原有待处理消息。
     msgs = list(win.pending)
     # 与 msgs 对齐的元信息；测试里手工设置 pending 时没有 meta，用空 dict 兜底。
     metas = [win.pending_meta[i] if i < len(win.pending_meta) else {} for i in range(len(msgs))]
+    turn_id = uuid4().hex if win.is_private else ""
+    bot = win.bot
+    is_private = win.is_private
+    incoming = tuple(
+        {"message_id": meta.get("message_id") or "", "t": meta.get("ts"), "text": text}
+        for (_, text, _), meta in zip(msgs, metas)
+    ) if turn_id else ()
+    quoted_message_ids = tuple(dict.fromkeys(
+        meta["quoted_message_id"] for meta in metas if meta.get("quoted_message_id")
+    )) if turn_id else ()
     my_gen = win.generation   # 起跑时的代际；后面用它判断"我是否已被新消息取代"
+    incoming_saved = False
 
     def _commit_batch() -> None:
-        """这一批已经生成并记录完毕，从 pending 删掉；中途被取消就永远走不到这里。"""
+        """提交批次，并持久化用户端已经收到的消息。"""
+        nonlocal incoming_saved
         del win.pending[:len(msgs)]
         del win.pending_meta[:len(msgs)]
+        win.committed_generation = my_gen
+        if turn_id:
+            try:
+                session_memory.clear_last_song(win.target_id)
+            except OSError as e:
+                print(f"⚠️ 唱歌回执清理失败: {e}")
+            incoming_saved = reply_evidence.record_incoming(
+                win.target_id, turn_id, user_transcript, incoming=incoming,
+            )
 
     # 读图：本批所有消息里的**所有**图片统一在回复前解析（不是收到就秒解析，避免节奏割裂）
     async def _parse(src: tuple[str, str]) -> str:
@@ -333,7 +362,7 @@ async def _flush(win: _UserWindow) -> None:
     full = [(s, t, ds) for (s, t, _), ds in zip(msgs, descs)]  # 完整描述（归纳/日志用）
 
     # 组装：
-    # · 私聊 = 纯文本 transcript（图片按顺序内联）
+    # · 私聊 = 原始 transcript + 给本轮模型看的带时间版本（图片按顺序内联）
     # · 群聊 = 纯「昵称：文本」（图片按顺序内联）+ 一条**系统元信息**说明本批谁点名了她。
     #   ⚠️ 2026-10-21 改：原来把 `[对灰泽满]/[未点名]` 直接写进用户消息，模型偶尔会把
     #   标记原样吐出来（实测 2/216 条群回复带了 `[未点名]`）。**标记不该出现在用户消息里**——
@@ -342,6 +371,7 @@ async def _flush(win: _UserWindow) -> None:
     id_to_name = {}
     combined = ""
     user_transcript = ""
+    timed_user_transcript = ""
     group_address_note = ""
     batch_addressed = False
     group_items: list[tuple[str, str, str]] = []   # (昵称, 文本, 图片描述) → 对话线归纳
@@ -349,12 +379,15 @@ async def _flush(win: _UserWindow) -> None:
     group_refs: dict[int, dict] = {}
     if win.is_private:
         combined = _combine_text([(t, ds) for _, t, ds in parsed])
-        tlines = []
-        for _, t, ds in parsed:
-            if t.strip():
-                tlines.append(t.strip())
-            tlines.extend(ds)   # _image_note 已经拼好 "[图片：…]" / "[表情包：无奈]"，别再包
-        user_transcript = "\n".join(tlines).strip()
+        event_bodies = []
+        timed_events = []
+        for (_, text, image_notes), meta in zip(parsed, metas):
+            body = "\n".join(part for part in (text.strip(), *image_notes) if part)
+            if body:
+                event_bodies.append(body)
+                timed_events.append(message_time_prefix(meta.get("ts")) + body)
+        user_transcript = "\n".join(event_bodies)
+        timed_user_transcript = "\n".join(timed_events)
     else:
         lines, plain_lines, addressed_lines = [], [], []
         addressed_speakers = []
@@ -442,7 +475,14 @@ async def _flush(win: _UserWindow) -> None:
     # 群聊的 user_transcript 带批次标记（给模型看）；**短期记忆记干净版**——
     # 批次级标记不该被当成"对话历史"喂回去（record_text，见 core.handle_chat）。
     record_kwargs = {}
-    if not win.is_private:
+    if win.is_private:
+        # 引用或转发的补全可能让较早的点歌晚于取消入队；QQ 同秒消息按入口次序判。
+        ordered = sorted(zip(msgs, metas),
+                         key=lambda pair: (pair[1].get("ts") or 0, pair[1].get("authored_order") or 0))
+        record_kwargs["song_text"] = _combine_text(
+            (meta.get("authored_text", text),) for (_, text, _), meta in ordered
+        )
+    else:
         # 内部 @ 标记也不进历史（模型会照抄）；历史只留干净的「昵称：文本」
         record_kwargs["record_text"] = _compose_record_msg(_clean_group_record(combined), vision_desc)
     group_batch_note = (f"本批 {len(msgs)} 条"
@@ -456,11 +496,14 @@ async def _flush(win: _UserWindow) -> None:
     reply = await handle_chat(win.target_id, combined, vision_desc=vision_desc,
                               batch_summary=batch_summary, is_group=not win.is_private,
                               user_transcript=user_transcript,
+                              timed_user_transcript=timed_user_transcript,
                               group_addressed=(True if win.is_private else batch_addressed),
                               group_address_note=group_address_note,
                               group_thread_note=group_thread_note,
                               group_batch_note=group_batch_note,
                               reply_to=reply_to if not win.is_private else "",
+                              quoted_message_ids=quoted_message_ids,
+                              defer_memory=win.is_private,
                               **record_kwargs)
     # <reply:编号>：桥接式群聊的“接某一条”协议。只在群聊生效；
     # 编号映射到本批消息的 QQ message_id，发送时变成引用回复。
@@ -477,72 +520,162 @@ async def _flush(win: _UserWindow) -> None:
     # 动作意图挂在她这句的 Reply 上（handle_chat 已剥掉 [[语音]]/[[表情:类别]] 标记）；
     # clean_reply 返回普通 str，会把这个属性丢掉，所以先取出来。
     actions = getattr(reply, "actions", {}) or {}
+    song = actions.get("song") if is_private else None
+    memory_context = getattr(reply, "memory_context", None) if turn_id else None
+    memory_text = (memory_context or {}).get("user_text") or user_transcript
     reply = clean_reply(reply)  # 去括号前缀 + 整条至多 1 个括号
-    if not reply:
+    acknowledged: list[str] = []
+    evidence_complete = True
+    finalized = False
+    finalize_in_media = False
+
+    def _acknowledge(text: str, part_index: int, modality: str = "text",
+                     message_id: str = "") -> None:
+        nonlocal evidence_complete
+        if not turn_id:
+            return
+        acknowledged.append(text)
+        recorded = reply_evidence.record_part(
+            win.target_id, turn_id, part_index, text,
+            user_text=memory_text, incoming=() if incoming_saved else incoming, modality=modality,
+            message_id=message_id or "",
+        )
+        evidence_complete = evidence_complete and recorded
+
+    def _finish_memory(*, voice: bool = False) -> None:
+        nonlocal finalized
+        if not memory_context or finalized:
+            return
+        finalized = True
+        delivered = "\n".join(acknowledged)
+        try:
+            if song is None or win.committed_generation == my_gen:
+                append_user_history(win.target_id, memory_text, delivered)
+                if voice and delivered:
+                    mark_last_bot_modality(win.target_id, "voice", reply_text=delivered)
+        except Exception as e:
+            print(f"⚠️ 短期记忆写入失败（忽略）: {e}")
+        if delivered and self_speech.enabled() and not history_as_assistant_enabled():
+            spawn(self_speech.prewarm(delivered))
+        spawn(update_memory_v2_shadow_task(
+            win.target_id, memory_text, delivered, memory_context["session_id"],
+            reminder_hint=memory_context.get("reminder_hint") if delivered else None,
+            source_turn_id=turn_id if ((acknowledged and evidence_complete)
+                                       or (not delivered and incoming_saved)) else "",
+            delivery_verified=bool(delivered),
+        ))
+
+    if song is not None and win.generation != my_gen:
+        return
+
+    if not reply and song is None:
         # 未点名的群聊批次，模型输出的是“没点我/保持潜水”式元回复 → 这批就当没接。
         # handle_chat 已经只记了用户侧（不记这句元回复），这里不发送、不落聊天记录。
         _commit_batch()
+        _finish_memory()
         print(f"[读秒] {'群' if not win.is_private else '私聊'}={win.target_id} 这轮选择不说话")
         return
 
-    # 聊天落盘（分析用，gitignore）。放这里而不是发完之后：下面**语音那条路会提前 return**，
-    # 放到发送之后会漏掉所有语音回复。这里记的是"她这轮说了什么"（不管最终是语音还是文字）。
+    # 聊天诊断保留本轮拟发全文；发出证据在每段确认后单独写。
     log_turn(win.target_id, not win.is_private, combined, reply,
-             images=all_descs, batch_messages=len(msgs))
-    _commit_batch()   # 回复已生成并记录；从这里开始即使被取消也不能重答这一批
+             images=all_descs, batch_messages=len(msgs), reply_evidence_turn_id=turn_id)
+    _commit_batch()   # 从这里开始即使被取消也不能重答这一批
 
-    # 语音优先：成句回复(≥30字、无内心戏括号/链接)朗读成语音条——像真人"话多就录给你听"。
-    # 成功就不刷文字分段（互斥不双发）；未启用/合成失败时 send_voice 返回 False，
-    # 落回下方文字分段兜底，绝不影响收到回复。
-    # 用户点名要语音（消息里带"语音"）→ force：短句也读，别让人白问一句。
-    if should_voice(reply, force=(voice_requested(combined)
-                                  or bool(actions.get("voice"))
-                                  or session_memory.voice_preference_active(win.target_id))):
-        if win.generation != my_gen:
-            # 已经被新消息取代：别再占 GPU 去合成（合成了也送不出去）
-            print("[读秒] 语音：已被新消息取代，跳过合成")
-            return
-        # ⚠️ shield：合成+发送**一旦开始就让它做完**。
-        # 不 shield 的话：用户在这几秒里插话 → enqueue 的 win.task.cancel() 会把
-        # await 中的 send_voice 打断 → **wav 已经生成、消息没发出去**，而且文字兜底
-        # 也不会走（CancelledError 是 BaseException，except Exception 抓不到）——
-        # 她那边什么都收不到。实测症状就是"TTS 转出来了但没发出去"，且**时有时无**
-        # （取决于插话有没有落在合成那几秒里）。
-        # 语义上也说得通：文字分段是"发一段是一段"，语音是一条整消息，
-        # 所以"已开始就等于第一段已发出"。
-        voice_ok = await asyncio.shield(
-            send_voice(win.bot, win.target_id, win.is_private, reply))
-        if get_voice_enabled():
-            # 只有真的发出语音才给最后一条历史标 [语音]；TTS 失败回退文字时不标。
-            # 语音形态是**历史行自己的元数据**，不再往 last_actions 里另记一份。
+    async def _send_voice_with_evidence() -> bool:
+        # 用户插话可以取消外层 _flush，发送确认及其记忆提交随这条语音一起跑完。
+        try:
+            voice_ok = await send_voice(bot, win.target_id, is_private, reply)
             if voice_ok:
-                mark_last_bot_modality(win.target_id, "voice", reply_text=reply)
-            session_memory.log_action_event(win.target_id, "voice", ok=voice_ok)
-        if voice_ok:
-            # 语音之后**也补表情包**（用户 2026-10-05）：原来这里直接 return，
-            # 表情包永远是语音轮的盲区。表情包自己有"十分对应才发"的闸门，不会硬凑。
-            await _maybe_send_sticker(win, reply, context=combined,
-                                      preferred_group=str(actions.get("sticker") or ""))
-            return
+                _acknowledge(_tts_text(reply), 0, modality="voice")
+                _finish_memory(voice=True)
+            return voice_ok
+        finally:
+            if finalize_in_media:
+                _finish_memory()
 
-    parts = split_reply(reply) if SPLIT_REPLY_ENABLED else [reply]
-    # 拆分后每段再清一次：内联括号可能落在某段开头（如 （刚醒，声音哑哑的）...），剥掉
-    parts = [clean_reply(p) for p in parts]
-    for i, p in enumerate(parts[:-1]):
-        if i == 0 and reply_mid:
-            await _send(win, p, reply_mid=reply_mid)
-        else:
-            await _send(win, p)
-        await asyncio.sleep(split_delay(p))
-    if len(parts) == 1 and reply_mid:
-        await _send(win, parts[-1], reply_mid=reply_mid)
-    else:
-        await _send(win, parts[-1])
+    async def _send_song_with_evidence() -> bool:
+        try:
+            if win.generation != my_gen:
+                return False
+            try:
+                song_ok = await send_song(bot, win.target_id, song)
+            except Exception as e:
+                print(f"⚠️ 唱歌音频发送失败: {e}")
+                song_ok = False
+            kind = "song_full" if song.mode == "full" else "song_clip"
+            if song_ok:
+                label = "[唱歌片段]"
+                if song.mode == "full":
+                    label = "[歌曲文件]" if song.as_file else "[唱歌完整版]"
+                _acknowledge(f"{label}《{song.title}》", len(acknowledged), modality="song")
+                # 发出后用户可能已聊到下一轮，较早批次的确认只保留在发送证据。
+                if win.committed_generation == my_gen:
+                    try:
+                        session_memory.add_last_action(win.target_id, kind, song.title)
+                    except OSError as e:
+                        print(f"⚠️ 唱歌回执写入失败: {e}")
+            else:
+                session_memory.log_action_event(win.target_id, kind, song.title, ok=False)
+            return song_ok
+        finally:
+            if finalize_in_media:
+                _finish_memory()
 
-    # 表情包：文字发完之后，若某张表情与这句话"十分对应"就补一张。
-    # （语音那条路在上面单独调了一次——它提前 return，不在这里。）
-    await _maybe_send_sticker(win, reply, context=combined,
-                              preferred_group=str(actions.get("sticker") or ""))
+    try:
+        # 用户要语音时短句也尝试；合成或发送失败后再发文字。
+        voice_ok = False
+        if song is None and should_voice(reply, force=(
+            voice_requested(combined) or bool(actions.get("voice"))
+            or session_memory.voice_preference_active(win.target_id)
+        )):
+            if win.generation != my_gen:
+                print("[读秒] 语音：已被新消息取代，跳过合成")
+                return
+            voice_task = spawn(_send_voice_with_evidence())
+            try:
+                voice_ok = await asyncio.shield(voice_task)
+            except asyncio.CancelledError:
+                finalize_in_media = not voice_task.done()
+                raise
+            if get_voice_enabled():
+                if voice_ok and not turn_id:
+                    mark_last_bot_modality(win.target_id, "voice", reply_text=reply)
+                session_memory.log_action_event(win.target_id, "voice", ok=voice_ok)
+
+        if not voice_ok and reply:
+            parts = split_reply(reply) if SPLIT_REPLY_ENABLED else [reply]
+            # 拆分后每段再清一次，内联括号可能落在某段开头。
+            parts = [clean_reply(part) for part in parts]
+            for i, part in enumerate(parts):
+                if i == 0 and reply_mid:
+                    message_id = await _send(win, part, reply_mid=reply_mid)
+                else:
+                    message_id = await _send(win, part)
+                _acknowledge(part, i, message_id=message_id)
+                if i + 1 < len(parts):
+                    await asyncio.sleep(split_delay(part))
+
+        if song is not None and win.generation == my_gen:
+            song_task = spawn(_send_song_with_evidence())
+            try:
+                song_ok = await asyncio.shield(song_task)
+            except asyncio.CancelledError:
+                finalize_in_media = not song_task.done()
+                raise
+            if not song_ok and win.generation == my_gen:
+                failure = "这段没发出去。"
+                if song.mode == "full":
+                    failure = "整首的文件没发出去。" if song.as_file else "整首没发出去。"
+                message_id = await _send(win, failure)
+                _acknowledge(failure, len(acknowledged), message_id=message_id)
+    finally:
+        if not finalize_in_media:
+            _finish_memory()
+
+    # 语音或文字发完以后，才尝试补一张表情包。
+    if reply:
+        await _maybe_send_sticker(win, reply, context=combined,
+                                  preferred_group=str(actions.get("sticker") or ""))
 
 
 # 表情包冷却状态：**必须按 target_id 持久，不能挂在 _UserWindow 上**。
@@ -636,15 +769,16 @@ def _to_qq_image(rel_path: str) -> str:
     return "file:///" + p.as_posix()
 
 
-async def _send(win: _UserWindow, content: str, reply_mid: str = "") -> None:
+async def _send(win: _UserWindow, content: str, reply_mid: str = "") -> str:
     """按私聊/群聊路由发送；群聊带 reply_mid 时首段变成引用回复。"""
-    message = Message(content)
+    message = Message(MessageSegment.text(content)) if win.is_private else Message(content)
     if reply_mid and not win.is_private:
         try:
             message = Message(MessageSegment.reply(int(reply_mid))) + message
         except (TypeError, ValueError):
             pass
     if win.is_private:
-        await win.bot.send_private_msg(user_id=win.target_id, message=message)
+        result = await win.bot.send_private_msg(user_id=win.target_id, message=message)
     else:
-        await win.bot.send_group_msg(group_id=win.target_id, message=message)
+        result = await win.bot.send_group_msg(group_id=win.target_id, message=message)
+    return str(result.get("message_id") or "") if isinstance(result, dict) else ""

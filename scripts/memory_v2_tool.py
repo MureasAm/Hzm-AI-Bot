@@ -600,7 +600,7 @@ def dedupe_single_valued(*, dry_run: bool = False) -> dict:
 
     为什么要它：顶替规则以前只认 `temporal_scope == "current"`，而模型常把
     `preferred_name` 标成 `timeless` → 走"累积" → 同一个名字存 3 份、**每轮注入 3 次**
-    （实测 1750961968）。规则已修（`_SINGLE_VALUED_FACT_KEYS` 无条件顶替），
+    （实测 900000001）。规则已修（`_SINGLE_VALUED_FACT_KEYS` 无条件顶替），
     但**已经攒下的存量**不会自己消失，所以补这一趟。
 
     做法：把最新那条**重新 ingest 一次**——修好的顶替规则会把同键的旧份标记为 superseded。

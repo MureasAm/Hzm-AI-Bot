@@ -460,6 +460,7 @@ def _add_retrieval_eval(sub):
     p = sub.add_parser("retrieval-eval", help="检索命中率评测（各 source 的 hit rate）")
     p.add_argument("--case", default=None, help="只看某个 case id 前缀")
     p.add_argument("--verbose", action="store_true", help="失败 case 打印实际命中项")
+    p.add_argument("--output", default=None, help="将本次报告保存到指定 JSON 文件")
     p.set_defaults(func=_run_retrieval_eval)
 
 
@@ -467,7 +468,8 @@ def _run_retrieval_eval(args):
     import asyncio
     import retrieval_eval
     cases = retrieval_eval.load_cases()
-    asyncio.run(retrieval_eval.run(cases, verbose=args.verbose, only_id=args.case))
+    raise SystemExit(asyncio.run(retrieval_eval.run(
+        cases, verbose=args.verbose, only_id=args.case, output=args.output)))
 
 
 # ==================== 子命令：problems ====================
@@ -767,7 +769,7 @@ def _run_memory_hygiene(args):
 def _add_history_channel_ab(sub):
     p = sub.add_parser("history-channel-ab",
                        help="历史注入 A/B：assistant 原句 vs 转述 system vs 混合")
-    p.add_argument("--users", default="2151983431,905860780")
+    p.add_argument("--users", default="900000001,900000001")
     p.add_argument("--turns", type=int, default=10)
     p.add_argument("--samples", type=int, default=1)
     p.add_argument("--arms", default="ABC", help="要跑哪几组，如 ABC / AB / B")

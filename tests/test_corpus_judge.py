@@ -87,6 +87,18 @@ class TestDecision:
         assert [k.text for k in kept] == [CANDS[1].text]
 
     @pytest.mark.asyncio
+    async def test_bom_is_tolerated(self):
+        client = _StubClient(content='\ufeff{"keep": [2]}')
+        kept = await judge_corpus(client, "你室友是谁", CANDS)
+        assert kept == [CANDS[1]]
+
+    @pytest.mark.asyncio
+    async def test_fence_inside_json_string_is_preserved(self):
+        client = _StubClient(content='```JSON\n{"keep": [2], "reason": "literal ```"}\n```')
+        kept = await judge_corpus(client, "你室友是谁", CANDS)
+        assert kept == [CANDS[1]]
+
+    @pytest.mark.asyncio
     async def test_fabricated_index_is_dropped(self):
         # 模型编了不存在的编号（"保留第 9 条"，候选只有 3 条）→ 直接丢弃，别让下游崩
         client = _StubClient(content='{"keep": [9]}')
@@ -103,6 +115,12 @@ class TestDecision:
         client = _StubClient(content='{"keep": [1, 1]}')
         kept = await judge_corpus(client, "你多高啊", CANDS)
         assert len(kept) == 1
+
+    @pytest.mark.asyncio
+    async def test_canonical_decimal_string_indices_are_accepted(self):
+        client = _StubClient(content='{"keep": [" 2 ", "1", 2, "01", "1.0", "1e0", "-1"]}')
+        kept = await judge_corpus(client, "你室友是谁", CANDS)
+        assert kept == [CANDS[1], CANDS[0]]
 
     @pytest.mark.asyncio
     async def test_keep_is_capped(self, monkeypatch):

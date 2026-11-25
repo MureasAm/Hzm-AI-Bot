@@ -20,11 +20,11 @@
 理由：漏掉只是"没加分"，而注入错的经历是**主动伤害**——她会理直气壮地说一件没发生过的事
 （"搬家"那个坑就是这么来的）。这是本仓一贯取向：宁可漏，不可错。
 """
-import json
 import os
 
 from .constants import CORPUS_JUDGE_MAX_KEEP, MAX_RETRIEVAL_ITEM_CHARS, THINKING_DISABLED
 from .config import log_cache_usage, _get_model_name, extract_chat_content, aux_model
+from .llm_json import parse_json_object, selected_indices
 from .term_hints import terms_hint_block
 
 # ⚠️ **别重排这段提示词**（2026-10-11）：`{query}` 是每轮都变的变量，必须留在**判据之后**、
@@ -102,26 +102,15 @@ async def judge_corpus(deepseek_client, query: str, candidates: list) -> list:
         )
         log_cache_usage(resp, "直播记忆判")
         content = extract_chat_content(resp)
-        # 剥 ``` 围栏。**要连语言标签一起剥**（模型常返回 ```json），
-        # 只取 ``` 之间那段的话，剩下的 `json\n{...}` 会让 json.loads 直接失败。
-        if "```" in content:
-            parts = content.split("```")
-            if len(parts) >= 2:
-                content = parts[1]
-        content = content.strip()
-        if content[:4].lower() == "json":
-            content = content[4:].strip()
-        data = json.loads(content)
+        data = parse_json_object(content)
         keep = data.get("keep")
         if not isinstance(keep, list):
             print("⚠️ corpus 判定返回的 keep 不是列表（不带经历）")
             return []
         # 拦住模型编的编号——只认候选范围内、且不重复的
         picked = []
-        for k in keep:
-            if not isinstance(k, int) or isinstance(k, bool):
-                continue
-            if 1 <= k <= len(items) and items[k - 1] not in picked:
+        for k in selected_indices(data, len(items)):
+            if items[k - 1] not in picked:
                 picked.append(items[k - 1])
         if len(picked) > CORPUS_JUDGE_MAX_KEEP:      # 限爆破半径：判错也只是多说一句
             picked = picked[:CORPUS_JUDGE_MAX_KEEP]

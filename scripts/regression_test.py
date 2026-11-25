@@ -39,10 +39,10 @@ sys.path.insert(0, str(PROJECT_ROOT))
 # 虚构弹幕：覆盖典型触发场景
 DANMAKU = [
     "小满你昨天唱歌好好听！声音好甜啊",
-    "说好的八点直播呢？都八点四十了！",
+    "原定八点开播，快九点了怎么还没来？！",
     "今天有什么好玩的事吗？",
     "好几天没见你了，有点想你",
-    "你怎么又鸽了，不是说这周不鸽吗",
+    "这回怎么也鸽了？本周说过不鸽呀。",
     "小满当我女朋友吧（羞涩）",
     "你最近在忙什么啊，动态也不发",
     "感觉你今天声音有点累，好好休息啊",
@@ -145,6 +145,7 @@ def _baseline_openers():
     返回 None 表示算不出来（没有 chat_log / 条数太少）——**这时退回旧行为**
     （只看占比），并且调用方要**明说**这个降级，别让人以为新判据生效了。
     """
+    import _common
     global _BASELINE_OPENERS
     if _BASELINE_OPENERS is not None:
         return _BASELINE_OPENERS or None
@@ -175,7 +176,7 @@ def _load_cases(path=None) -> list:
     return data.get("cases", data) if isinstance(data, dict) else data
 
 
-def _run_case(core, case: dict) -> dict:
+async def _run_case(core, case: dict) -> dict:
     """跑一个 case N 次，每次换一个 user_id（空短期记忆），返回回复与指标。
 
     支持的可选字段：
@@ -189,13 +190,13 @@ def _run_case(core, case: dict) -> dict:
     is_group = bool(case.get("is_group"))
     history = case.get("history") or []
 
-    def one(i: int) -> str:
+    async def one(i: int) -> str:
         uid = f"regr_{cid}_{i}"
         for h in history:  # 垫历史：她"记得"前面发生过什么
             memory.append_user_history(uid, h.get("user", ""), h.get("reply", ""))
-        return asyncio.run(core.handle_chat(uid, case["user"], is_group=is_group))
+        return await core.handle_chat(uid, case["user"], is_group=is_group)
 
-    replies = [one(i) for i in range(runs)]
+    replies = [await one(i) for i in range(runs)]
     openers = Counter(_opener(r) for r in replies)
     top_opener, top_n = openers.most_common(1)[0]
     return {
@@ -262,6 +263,11 @@ def _judge(case: dict, res: dict) -> list:
 
 def check(case_id=None, cases_file=None, out_dir=None) -> int:
     """跑判据回归。返回失败数（0 = 全过）。"""
+    return asyncio.run(_check(case_id, cases_file, out_dir))
+
+
+async def _check(case_id=None, cases_file=None, out_dir=None) -> int:
+    # 同一批所有调用共用事件循环；缓存的异步HTTP客户端不能跨已关闭的循环复用。
     cases = _load_cases(cases_file)
     if case_id:
         cases = [c for c in cases if c.get("id") == case_id]
@@ -275,7 +281,7 @@ def check(case_id=None, cases_file=None, out_dir=None) -> int:
 
     lines, failed, failed_cases = [], 0, 0
     for case in cases:
-        res = _run_case(core, case)
+        res = await _run_case(core, case)
         fails = _judge(case, res)
         failed += len(fails)
         if fails:

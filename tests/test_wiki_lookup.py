@@ -2,6 +2,7 @@
 import pytest
 
 from src.plugins.chatbot import wiki_lookup as w
+from src.plugins.chatbot.retrieval_context import RetrievalContext
 
 
 @pytest.fixture(autouse=True)
@@ -100,3 +101,93 @@ async def test_fresh_intent_passes_force(monkeypatch):
     monkeypatch.setattr(w, "lookup", fake_lookup)
     await w.wiki_context_for("小松绿最近怎么样", ["小松绿"], set())
     assert seen["force"] is True
+
+
+async def test_context_requires_explicit_global_allowlist_before_lookup(monkeypatch):
+    calls = []
+
+    async def fake_lookup(term, force=False):
+        calls.append(term)
+        return {"title": term, "extract": "背景资料"}
+
+    monkeypatch.setattr(w, "lookup", fake_lookup)
+    context = RetrievalContext("小松绿和鹿目圆是谁")
+    assert await w.wiki_context_for(context.raw_text, ["小松绿", "鹿目圆"],
+                                    context=context) == ""
+    assert calls == []
+
+    out = await w.wiki_context_for(context.raw_text, ["小松绿", "鹿目圆"],
+                                   context=context, allowed_entities={"小松绿"})
+    assert calls == ["小松绿"]
+    assert out == "小松绿：背景资料"
+
+
+async def test_context_accepts_only_raw_anchored_surface_to_canonical_mapping(monkeypatch):
+    calls = []
+
+    async def fake_lookup(term, force=False):
+        calls.append(term)
+        return {"title": term, "extract": "日本推理小说作家"}
+
+    monkeypatch.setattr(w, "lookup", fake_lookup)
+    context = RetrievalContext("东野写过什么", resolved_text="东野圭吾的作品有哪些")
+    out = await w.wiki_context_for(context.query, ["东野圭吾"], context=context,
+                                   allowed_entities={"东野圭吾"},
+                                   entity_mentions={"东野圭吾": "东野"})
+    assert calls == ["东野圭吾"]
+    assert out.startswith("东野（百科词条：东野圭吾）：")
+
+    calls.clear()
+    for mentions in ({}, {"东野圭吾": "东野老师"}, {"东野圭吾": ""}):
+        assert await w.wiki_context_for(context.query, ["东野圭吾"], context=context,
+                                        allowed_entities={"东野圭吾"}, entity_mentions=mentions) == ""
+    assert calls == []
+
+
+async def test_context_never_uses_resolved_text_as_evidence_for_entity(monkeypatch):
+    calls = []
+
+    async def unexpected_http(api, term):
+        calls.append((api, term))
+        raise AssertionError("unapproved or unanchored entity must not trigger HTTP")
+
+    monkeypatch.setattr(w, "_query_one", unexpected_http)
+    context = RetrievalContext("那个人写过什么", resolved_text="东野圭吾的作品有哪些")
+    assert await w.wiki_context_for(context.query, ["东野圭吾"], context=context,
+                                    allowed_entities={"东野圭吾"},
+                                    entity_mentions={"东野圭吾": "东野"}) == ""
+    raw_context = RetrievalContext("东野圭吾写过什么")
+    assert await w.wiki_context_for(raw_context.raw_text, ["东野圭吾"], context=raw_context,
+                                    allowed_entities=set()) == ""
+    assert calls == []
+    assert w._cache_get("东野圭吾") is None
+
+
+async def test_context_lookup_attempts_are_bounded_even_when_every_entity_misses(monkeypatch):
+    calls = []
+
+    async def fake_lookup(term, force=False):
+        calls.append(term)
+        return None
+
+    monkeypatch.setattr(w, "lookup", fake_lookup)
+    entities = ["甲作品", "乙作品", "丙作品"]
+    context = RetrievalContext("比较甲作品、乙作品、丙作品")
+    assert await w.wiki_context_for(context.raw_text, entities, max_items=1, context=context,
+                                    allowed_entities=set(entities)) == ""
+    assert calls == ["甲作品"]
+
+
+async def test_context_does_not_query_known_canonical_entity_via_alias(monkeypatch):
+    calls = []
+
+    async def fake_lookup(term, force=False):
+        calls.append(term)
+        return {"title": term, "extract": "背景资料"}
+
+    monkeypatch.setattr(w, "lookup", fake_lookup)
+    context = RetrievalContext("东野写过什么")
+    assert await w.wiki_context_for(context.raw_text, ["东野圭吾"], {"东野圭吾"},
+                                    context=context, allowed_entities={"东野圭吾"},
+                                    entity_mentions={"东野圭吾": "东野"}) == ""
+    assert calls == []

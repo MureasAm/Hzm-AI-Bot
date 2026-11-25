@@ -115,7 +115,7 @@ def _mutate_verbatim(name: str, reply: str):
         if b.get("name") == name:
             # ⚠️ `user` 不能留空：core.py 里是 `if user_part and reply_part:` ——
             # **空 user 的样本会被直接跳过、压根不注入**（踩过：让 #3/#4 时灵时不灵）。
-            b.setdefault("samples", []).append({"user": "你怎么又迟到了，说好八点的",
+            b.setdefault("samples", []).append({"user": "你今天迟到了，等你好一会儿了！",
                                                "reply": reply})
     _save(BEHAVIORS, d)
     return ["persona/injection/10_behaviors/behaviors.json"]

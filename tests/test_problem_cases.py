@@ -365,11 +365,11 @@ class TestMergedCasesFile:
             assert c.get("source"), f"{c['id']} 缺 source"
             assert c.get("why"), f"{c['id']} 缺 why"
 
-    def test_期望写法只有这四种(self, doc):
+    def test_期望写法仅包含受支持的条件(self, doc):
         for c in doc["cases"]:
             assert c["expect"], f"{c['id']} 没有任何期望"
             for route, cond in c["expect"].items():
-                assert set(cond) <= {"should", "should_not_hit", "contains", "should_fire"}, \
+                assert set(cond) <= {"should", "should_not_hit", "contains", "should_fire", "must_not", "allowed"}, \
                     f"{c['id']}/{route} 写法不认识：{cond}"
 
     def test_同一路不能说既该中又不该中(self, doc):

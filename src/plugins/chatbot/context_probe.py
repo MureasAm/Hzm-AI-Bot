@@ -43,6 +43,22 @@ def _format_time(dt: datetime) -> str:
     return f"{dt.month}月{dt.day}日 {_WEEKDAYS[dt.weekday()]} {dt.hour:02d}:{dt.minute:02d}"
 
 
+def message_time_prefix(timestamp: float | None) -> str:
+    """把 QQ 事件时间标为北京时间，供本轮用户消息使用。"""
+    if timestamp is None:
+        return ""
+    try:
+        sent_at = datetime.fromtimestamp(timestamp, _CST)
+    except (TypeError, ValueError, OSError, OverflowError):
+        return ""
+    return f"[北京时间 {sent_at.month}月{sent_at.day}日 {sent_at:%H:%M}] "
+
+
+def _format_current_times(dt_cn: datetime) -> str:
+    dt_mel = dt_cn.astimezone(_MEL)
+    return f"北京时间 {_format_time(dt_cn)}（墨尔本当地时间 {_format_time(dt_mel)}）"
+
+
 def _format_lunar(dt: datetime) -> str:
     """农历部分：农历七月初七 七夕 / 立秋。不是节气日、无节日时只返回农历日期。"""
     lunar = Solar.fromDate(dt).getLunar()
@@ -189,15 +205,14 @@ def _live_status_text() -> str:
 def get_now_context(city: str = "") -> str:
     """生成一行感知注入文本。含北京时间、墨尔本当地时间（灰泽满所在地）、农历/节气/节日、
     真实直播状态、天气（city 传用户城市则按用户城市，否则默认墨尔本）。如：
-    【当前时间】北京时间 8月10日 周一 02:36（墨尔本当地时间 04:36），农历六月廿八，灰泽满所在地：澳洲，灰泽满现在没有在直播，天气：Light Rain 11℃。（农历和节气是中国历法的日期参考，……）
+    【当前时间】北京时间 8月10日 周一 02:36（墨尔本当地时间 8月10日 周一 04:36），农历六月廿八，灰泽满所在地：澳洲，灰泽满现在没有在直播，天气：Light Rain 11℃。（农历和节气是中国历法的日期参考，……）
 
     ⚠️ 结尾那两句是**读取这一行数据的守则**，必须挂在这一行自己身上（2026-10-16 从骨架搬来）：
     骨架是最前面那块、这行是最后一块，中间隔着十几块——守则写在骨架里等于写在离它最远的地方。
     """
     dt_cn = datetime.now(_CST)
-    dt_mel = datetime.now(_MEL)
     parts = [
-        f"{_format_time(dt_cn)} 北京时间（澳洲当地时间 {dt_mel.hour:02d}:{dt_mel.minute:02d}）",
+        _format_current_times(dt_cn),
         _format_lunar(dt_cn),
         "灰泽满所在地：澳洲",
     ]
@@ -265,7 +280,4 @@ def weather_now(city: str = "") -> str:
 def perception_now(now: datetime | None = None) -> str:
     """精确时间 + 农历/节气；查询驱动，不进常驻 frame。"""
     dt_cn = _cst(now)
-    dt_mel = dt_cn.astimezone(_MEL)
-    return (f"北京时间 {_format_time(dt_cn)}"
-            f"（澳洲当地时间 {dt_mel.hour:02d}:{dt_mel.minute:02d}），"
-            f"{_format_lunar(dt_cn)}")
+    return f"{inj.T('now', 'head')}{_format_current_times(dt_cn)}，{_format_lunar(dt_cn)}"

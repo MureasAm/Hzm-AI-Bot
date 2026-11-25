@@ -14,6 +14,7 @@ import time
 import httpx
 
 from .constants import PROJECT_ROOT
+from .retrieval_context import RetrievalContext
 
 WIKI_APIS = (
     "https://zh.moegirl.org.cn/api.php",
@@ -196,26 +197,49 @@ def _eligible(entity: str, user_msg: str, known: set) -> bool:
 
 
 async def wiki_context_for(user_msg: str, entities, known_terms=None,
-                           max_items: int = 1) -> str:
+                           max_items: int = 1, *, context: RetrievalContext | None = None,
+                           allowed_entities=None, entity_mentions=None) -> str:
     """从 probe 的 entities 里挑第一个可查的，返回一段「标题：摘要」。
 
-    每轮最多查 `max_items` 个；查不到 / 超时 / 已知词都直接跳过，返回空串。
+    有共用语境时，只有全局裁决允许、且能落到原话的实体可查；规范名与原词的
+    映射也必须以原话为证。此路径最多尝试 `max_items` 个实体，查不到也计数。
+    未传 context 时保留旧调用按成功条数计限的行为。
     """
     known = {_cache_key(x) for x in (known_terms or set()) if str(x).strip()}
+    allowed = {_cache_key(x) for x in (allowed_entities or ()) if str(x).strip()}
+    mentions = {}
+    if isinstance(entity_mentions, dict):
+        mentions = {_cache_key(name): _norm(surface) for name, surface in entity_mentions.items()
+                    if isinstance(name, str) and isinstance(surface, str)}
     force = bool(WIKI_FRESH_RE.search(user_msg or ""))
     picked = 0
+    attempts = 0
+    seen: set[str] = set()
     notes = []
     for entity in entities or []:
-        if picked >= max_items:
+        if picked >= max_items or (context is not None and attempts >= max_items):
             break
-        if not _eligible(entity, user_msg, known):
+        term = _norm(entity)
+        surface = term
+        if context is not None:
+            key = _cache_key(term)
+            if key not in allowed or key in seen or not _eligible(term, term, known):
+                continue
+            if not _eligible(term, context.raw_text, known):
+                surface = mentions.get(key, "")
+                if (not surface or surface not in context.raw_text
+                        or not _eligible(surface, context.raw_text, known)):
+                    continue
+            seen.add(key)
+        elif not _eligible(term, user_msg, known):
             continue
-        data = await lookup(entity, force=force)
+        attempts += 1
+        data = await lookup(term, force=force)
         if not data:
             continue
-        name = data.get("title") or _norm(entity)
-        if name != _norm(entity):
-            note = f"{_norm(entity)}（百科词条：{name}）：{data['extract']}"
+        name = data.get("title") or term
+        if name != surface:
+            note = f"{surface}（百科词条：{name}）：{data['extract']}"
         else:
             note = f"{name}：{data['extract']}"
         notes.append(note)

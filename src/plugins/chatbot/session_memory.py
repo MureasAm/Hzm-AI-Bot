@@ -65,6 +65,7 @@ PREV_SESSION_NOTE_SECONDS = SESSION_STALE_SECONDS
 PREV_SESSION_EVENTS_MAX = 2
 # 动作回执最多保留几条（表情包/语音）；下一轮注入只看最近 10 分钟。
 MAX_LAST_ACTIONS = 3
+SONG_ACTIONS = frozenset({"song_clip", "song_full"})
 # 「以后都用语音」这种短期模式的有效期（秒）：到期自动失效，每轮仍由主模型重新判断。
 VOICE_PREF_SECONDS = 600
 # 动作流水（带结果），给初步测试/人工抽检用；不影响运行时注入。
@@ -243,6 +244,33 @@ def actions_note(user_id: str, *, now: datetime | None = None,
     return ("上一轮动作：" + "、".join(parts)) if parts else ""
 
 
+def last_song(user_id: str, *, now: datetime | None = None) -> str:
+    """取上一轮确认发送的歌名，十分钟过期。"""
+    now = now or datetime.now()
+    actions = _raw_session(user_id).get("last_actions") or []
+    for action in reversed(actions):
+        if action.get("kind") not in SONG_ACTIONS or not action.get("ok"):
+            continue
+        try:
+            age = (now - datetime.fromisoformat(action["t"])).total_seconds()
+        except (KeyError, ValueError, TypeError):
+            continue
+        if 0 <= age <= 600:
+            return str(action.get("detail") or "")
+    return ""
+
+
+def clear_last_song(user_id: str) -> None:
+    """下一轮已处理，清掉上轮歌曲的指代依据。"""
+    with _lock:
+        sess = _raw_session(user_id)
+        actions = sess.get("last_actions") or []
+        remaining = [action for action in actions if action.get("kind") not in SONG_ACTIONS]
+        if len(remaining) != len(actions):
+            sess["last_actions"] = remaining
+            _write_json(_file_for(user_id), sess)
+
+
 def _write_action_log(user_id: str, record: dict) -> None:
     """动作流水（审计用，不参与注入）。失败静默，不影响聊天。"""
     try:
@@ -265,14 +293,14 @@ def log_action_event(user_id: str, kind: str, detail: str = "", *, ok: bool = Tr
 
 
 def add_last_action(user_id: str, kind: str, detail: str = "", *, ok: bool = True) -> None:
-    """记录一次动作回执（表情包/反馈）：进会话状态（下一轮注入）并写流水。"""
+    """记录动作回执，写入会话状态和流水。"""
     kind = str(kind or "").strip()
     if not kind:
         return
     now = datetime.now()
     record = {
         "kind": kind,
-        "detail": str(detail or "")[:20],
+        "detail": str(detail or "")[:255 if kind in SONG_ACTIONS else 20],
         "ok": bool(ok),
         "t": now.isoformat(),
     }
@@ -442,9 +470,9 @@ SESSION_PROBE_PROMPT = """你是会话话题追踪器。用户在聊天中刚发
 
 输出 JSON：
 {{
-  "topic": "当前话题的一句话概括（如'用户在撒娇，灰泽满在傲娇推拉''聊灰泽满的香水'；话题没变就沿用上一轮的，变了就换成新的）",
+  "topic": "用一个短语写清本轮在聊什么（如'询问灰泽满在做什么''聊香水牌子'）",
   "topic_changed": true 或 false,
-  "new_event": "这条消息值得记住的关键事件，一句话（如'用户发比爱心示好'）；纯寒暄无事件则 null",
+  "new_event": "本轮明确说出或做出且值得记住的一件新事，用一句短话；无新事件则 null",
   "mood": "用户**此刻**的情绪状态，一句话（如'因为考试失利而失落''和队友闹别扭后很委屈'）；看不出来 / 没有明显情绪则 null",
   "entities": "用户这句话提到/问到的**专名**（作品、作者、地点、动物，以及动画/漫画/游戏、虚拟主播/角色、网络梗等；**即使用户只发了一个名字/专名，也要收进来**；最多 3 个，写规范名/全名，如'空中杀人现场''东野圭吾''小松绿''初音未来'）；没有或只是普通闲聊则 null",
   "speech_act": "literal_question | factual_statement | request | complaint | tease | anticipation | roleplay | other",
@@ -457,15 +485,14 @@ SESSION_PROBE_PROMPT = """你是会话话题追踪器。用户在聊天中刚发
   "expanded_query": "如果这条消息很短（≤4字）**或是指代性的**（必须结合前面聊的话题才能理解，如'能读给我听听吗''那个呢''然后呢'——单看这句不知道指什么），补全成既能检索到相关记忆、又能帮模型理解的一句话（如'用户让灰泽满念她写的小说乌色月'）；其他情况则 null"
 }}
 要求：
-- topic 要能体现**对话调性**（在干嘛、什么氛围），不是只复述用户那句话。
-  ✅「用户和灰泽满互相斗嘴骂人」「用户要求灰泽满说晚安，灰泽满傲娇反驳，氛围轻松打闹」
-     ——写得出"**这一场在干嘛**"。
-  ❌「用户惊讶发现有语言功能」「用户向灰泽满分享买了生日礼物」
-     ——这是把**他那句话又说了一遍**，没有"在干嘛"。（2026-10-16 量过：全库约 7% 是这种。）
-- **topic 只概括双方实际说的话，不要添加对话里没有的设定或推断**：用户没提"时差/异地/对方在哪/身份"，就别写"时差/异地"——用户只说时间是几点，就写"聊时间/几点/作息"；拿不准就平实地概括内容，宁可朴素不要加戏（曾踩坑：用户说"现在是墨尔本时间凌晨六点"，被脑补成"调侃时差"并注入带偏回复）
+- topic 和 new_event 只概括对话明确表达的内容，省略氛围、推测的动机和场景修饰。
+  历史用于确认指代和话题延续；延续话题时沿用其对象，仍按本轮内容简洁概括。
+- 【现在】供理解提醒和相对时间使用。摘要只保留原话明确提及且影响话题或事件含义的时间。
+  「在干嘛呢」→ topic「询问灰泽满在做什么」，new_event 为 null。
+  「我凌晨三点才睡」→ new_event「用户说自己凌晨三点才睡」。
 - topic_changed 判定标准（**新主题优先**）：只要用户这条消息是在**问/聊一个新的具体主题**（如"你最近有在用香水吗""你会不会游泳"），即使语气还延续之前的氛围，也视为转话题 → topic_changed=true，topic 换成这个新主题。只有当消息是**同一主题下的继续**（如上一轮聊香水、这轮"那你喜欢哪个牌子"）才 topic_changed=false 沿用。
-- new_event 只记有意义的互动（示好/情绪/承诺/分享），寒暄问候不记
-- **判断这句话在干什么，而不只是它说了什么**：
+- new_event 只记有意义的新情况或互动（承诺、分享、明确的情绪表达等），寒暄或重复旧事时为 null。
+- **语用字段按以下规则识别言外之意**：
   · 中文里的「快进到 X」是一个梗：跳过过程，直接预演一个可预见的坏结果；通常是玩笑/自嘲，
     **不是事实陈述，也不是求助**。例：「快进到我又忘了带钥匙」= 开玩笑地预演自己会忘带钥匙。
   · 判断 target 要看上一轮谁在做什么、这个玩笑最可能在拿谁开涮：

@@ -1,4 +1,5 @@
 """retrieval.py：六路检索 + RRF 融合 + 预算截断的单元测试。"""
+import json
 import os
 
 import pytest
@@ -13,7 +14,7 @@ from src.plugins.chatbot.retrieval import (
     _score_candidates,
     _corpus_keyword_overlap,
 )
-from src.plugins.chatbot.constants import CORPUS_KEYWORD_FLOOR
+from src.plugins.chatbot.constants import BEHAVIOR_KEYWORDS_FILE, CORPUS_KEYWORD_FLOOR
 
 
 # ==================== RRF 融合 ====================
@@ -66,11 +67,29 @@ class TestTruncateByBudget:
         kept = truncate_by_budget(items, budget_chars=15, max_item_chars=300)
         assert [i.item_id for i in kept] == ["a"]
 
-    def test_single_item_capped_at_max_item_chars(self):
+    def test_full_item_cost_exceeding_total_budget_is_dropped(self):
         items = [RetrievalItem(source="corpus", item_id="a", score=1.0, text="x" * 500)]
         kept = truncate_by_budget(items, budget_chars=400, max_item_chars=300)
-        # 单条按 300 计 > 400? no, 300 < 400 → 保留
-        assert [i.item_id for i in kept] == ["a"]
+        assert kept == []
+        assert len(items[0].text) == 500
+
+    def test_full_personality_sample_is_kept_when_actual_budget_fits(self):
+        sample = "完整的情境与反应样本" * 50
+        item = RetrievalItem(source="behavior", item_id="b", score=1.0, text=sample)
+        assert truncate_by_budget([item], budget_chars=len(sample), max_item_chars=300) == [item]
+        assert item.text == sample
+
+    def test_skip_oversized_item_and_keep_later_items_using_real_lengths(self):
+        items = [
+            RetrievalItem(source="behavior", item_id="too-large", score=1.0, text="x" * 700),
+            RetrievalItem(source="behavior", item_id="fits", score=0.9, text="y" * 350),
+            RetrievalItem(source="corpus", item_id="too-much", score=0.8, text="z" * 300),
+            RetrievalItem(source="corpus", item_id="also-fits", score=0.7, text="w" * 200),
+        ]
+        kept = truncate_by_budget(items, budget_chars=550, max_item_chars=300)
+        assert [it.item_id for it in kept] == ["fits", "also-fits"]
+        assert sum(len(it.text) for it in kept) == 550
+        assert [len(it.text) for it in items] == [700, 350, 300, 200]
 
 
 # ==================== 三路 retriever ====================
@@ -138,6 +157,35 @@ class TestRetrieveCorpusCandidates:
         monkeypatch.setattr("src.plugins.chatbot.retrieval.load_vector_db", lambda: [])
         assert retrieve_corpus_candidates("q", [1, 0, 0, 0]) == []
 
+    def test_missing_vector_preserves_precise_keyword_hook(self, monkeypatch):
+        db = [{"text": "灰泽满写过一篇小说", "vector": [1, 0, 0, 0]}]
+        monkeypatch.setattr("src.plugins.chatbot.retrieval.load_vector_db", lambda: db)
+        monkeypatch.setattr("src.plugins.chatbot.retrieval.load_corpus_keywords",
+                            lambda: {"0": ["乌色月"]})
+        candidates = retrieve_corpus_candidates("你写过乌色月吗", None)
+        assert [item.item_id for item in candidates] == ["0"]
+        assert candidates[0].score == 0.0
+
+    def test_missing_vector_preserves_lexical_candidates_without_semantic_fill(self, monkeypatch):
+        db = [{"text": "灰泽满和女同学一起上学", "vector": [1, 0, 0, 0]},
+              {"text": "完全无关的小说记录", "vector": [1, 0, 0, 0]}]
+        monkeypatch.setattr("src.plugins.chatbot.retrieval.load_vector_db", lambda: db)
+        monkeypatch.setattr("src.plugins.chatbot.retrieval.load_corpus_keywords", lambda: {})
+        candidates = retrieve_corpus_candidates("和女同学一起上学", None)
+        assert [item.item_id for item in candidates] == ["0"]
+
+    @pytest.mark.parametrize("vector", [None, [1, 0, 0, 0]])
+    def test_lexical_additions_keep_normal_six_item_bound(self, monkeypatch, vector):
+        monkeypatch.delenv("CORPUS_CANDIDATE_N", raising=False)
+        monkeypatch.delenv("CORPUS_LEXICAL_EXTRA_N", raising=False)
+        db = [{"text": f"小说记录{i}", "vector": [1, 0, 0, 0]} for i in range(12)]
+        monkeypatch.setattr("src.plugins.chatbot.retrieval.load_vector_db", lambda: db)
+        monkeypatch.setattr("src.plugins.chatbot.retrieval.load_corpus_keywords",
+                            lambda: {str(i): ["乌色月"] for i in range(12)})
+        candidates = retrieve_corpus_candidates("乌色月", vector, top_n=2)
+        assert len(candidates) == (6 if vector is None else 8)
+        assert len({item.item_id for item in candidates}) == len(candidates)
+
 
 class TestCorpusKeywordGate:
     """V6：corpus 关键词门（语义降阈值 + 区分性词重叠，防'名词撞车但不相关'乱锁）。"""
@@ -185,10 +233,10 @@ class TestCorpusKeywordGate:
         n7 挡住了，co9/co10 一起被打回红。
         """
         fp = _corpus_keyword_overlap(
-            "宝宝我明天要早起我先去睡了",
+            "明天要早起，我先睡了。",
             "粉丝问她明天会不会早起，她先表示可能性很低，又说其实很想早起")
         tp = _corpus_keyword_overlap(
-            "你不是以前有喜欢的男学霸吗，你直播里说的",
+            "你直播提过以前喜欢的那个男学霸吗？",
             "灰泽满聊到学生时代时，提到自己曾被女同学质问是不是女同，情急之下谎称喜欢一个男同学")
         assert fp > tp, (
             f"前提变了（误报 ov={fp:.3f} 不再 > 真阳性 ov={tp:.3f}）—— "
@@ -213,7 +261,7 @@ class TestCorpusKeywordGate:
         db = [target] + filler
         monkeypatch.setattr("src.plugins.chatbot.retrieval.load_vector_db", lambda: db)
         monkeypatch.setattr("src.plugins.chatbot.retrieval.load_corpus_keywords", lambda: {})
-        cands = retrieve_corpus_candidates("你不是以前有喜欢的男学霸吗，你直播里说的",
+        cands = retrieve_corpus_candidates("你直播提过以前喜欢的那个男学霸吗？",
                                           [1, 0, 0, 0], top_n=1)
         assert "0" in [c.item_id for c in cands], "语义分低但词面沾边的条目没被递过去 → 等于丢召回"
 
@@ -234,7 +282,7 @@ class TestSelectBehaviorItem:
 
     def test_llm_intent_wins(self):
         behaviors = [
-            {"name": "被质疑时心虚辩解", "trigger": "质疑", "response": "先否认"},
+            {"name": "被质疑戳穿时心虚辩解", "trigger": "质疑", "response": "先否认"},
             {"name": "被夸时把夸奖调小", "trigger": "夸奖", "response": "否认"},
         ]
         item = select_behavior_item("你唱歌好好听", "被夸时把夸奖调小", behaviors)
@@ -244,7 +292,7 @@ class TestSelectBehaviorItem:
 
     def test_keyword_fallback_when_llm_null(self):
         behaviors = [
-            {"name": "被质疑时心虚辩解", "trigger": "质疑", "response": "先否认"},
+            {"name": "被质疑戳穿时心虚辩解", "trigger": "质疑", "response": "先否认"},
             {"name": "失约被催时认栽滑跪", "trigger": "迟到", "response": "滑跪"},
         ]
         # LLM 拿不准（空）但有判别词 → 关键词兜底命中
@@ -253,18 +301,35 @@ class TestSelectBehaviorItem:
 
     def test_yuejie_keyword_fallback(self):
         # 领域黑话（黄桃/擦边）是判别词：LLM 对"造个黄桃吧"判 null，关键词兜底可靠
-        behaviors = [{"name": "被越界时冷静推开", "trigger": "越界", "response": "推开"}]
+        behaviors = [{"name": "被说低俗或擦边时冷脸挡回", "trigger": "越界", "response": "推开"}]
         item = select_behavior_item("给我们造个黄桃吧", "", behaviors)
-        assert item is not None and item.item_id == "被越界时冷静推开"
-        assert select_behavior_item("说点擦边的听听", "", behaviors).item_id == "被越界时冷静推开"
+        assert item is not None and item.item_id == "被说低俗或擦边时冷脸挡回"
+        assert select_behavior_item("说点擦边的听听", "", behaviors).item_id == "被说低俗或擦边时冷脸挡回"
+
+    def test_null_l3_does_not_override_keyword_cue_when_fallback_disabled(self):
+        behaviors = [{"name": "失约被催时认栽滑跪", "trigger": "失约", "response": "认栽"}]
+        assert select_behavior_item("他说好的事情没做到，我只是在转述", "", behaviors,
+                                    allow_fallback=False) is None
+
+    def test_valid_l3_name_still_works_when_fallback_disabled(self):
+        name = "被夸时把夸奖调小"
+        behaviors = [{"name": name, "trigger": "夸奖", "response": "调小"}]
+        assert select_behavior_item("声音好听", name, behaviors,
+                                    allow_fallback=False).item_id == name
+
+    def test_all_keyword_mappings_reference_existing_behavior_names(self):
+        keywords = json.loads(BEHAVIOR_KEYWORDS_FILE.read_text(encoding="utf-8"))
+        behaviors = json.loads(BEHAVIOR_KEYWORDS_FILE.with_name("behaviors.json").read_text(encoding="utf-8"))
+        names = {item["name"] for item in behaviors["behaviors"]}
+        assert {name for name in keywords if not name.startswith("_")} <= names
 
     def test_keyword_does_not_hit_unrelated(self):
-        behaviors = [{"name": "被质疑时心虚辩解", "trigger": "质疑", "response": "先否认"}]
+        behaviors = [{"name": "被质疑戳穿时心虚辩解", "trigger": "质疑", "response": "先否认"}]
         # "被骗"不在关键词表（敷衍/又骗/在骗…），不兜底
         assert select_behavior_item("我是不是被骗了", "", behaviors) is None
 
     def test_no_match_returns_none(self):
-        behaviors = [{"name": "被质疑时心虚辩解", "trigger": "质疑", "response": "先否认"}]
+        behaviors = [{"name": "被质疑戳穿时心虚辩解", "trigger": "质疑", "response": "先否认"}]
         assert select_behavior_item("今天天气不错", "", behaviors) is None
 
     def test_empty_input_returns_none(self):

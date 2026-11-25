@@ -2,6 +2,7 @@
 """事件记忆：存/更新/检索/渲染。"""
 import asyncio
 import json
+from datetime import datetime
 
 from src.plugins.chatbot import event_memory as em
 
@@ -39,6 +40,48 @@ def test_same_event_updates_status(tmp_path, monkeypatch):
     assert len(events) == 1
     assert events[0]["status"] == "ended"
     assert events[0]["history"][0]["status"] == "ongoing"
+
+
+def test_history_references_keep_event_versions_within_one_private_chat(tmp_path, monkeypatch):
+    _seed(tmp_path, monkeypatch)
+    start = datetime(2026, 11, 3, 16)
+    first = em.add_events(
+        "u1", [_event(what="他出了车祸，现在住院", type="health", entities=["车祸"])],
+        source={"turn_id": "injury"}, now=start,
+    )[0]
+    em.add_events(
+        "u1", [_event(update_of=first["id"], what="他车祸的伤已经好了", type="health",
+                      entities=["车祸"], status="ended", expires_at="2026-11-05T16:00:00")],
+        source={"turn_id": "recovery"}, now=datetime(2026, 11, 4, 16),
+    )
+    em.add_events(
+        "u2", [_event(what="他出了车祸，现在住院", type="health", entities=["车祸"])],
+        source={"turn_id": "another-user"}, now=start,
+    )
+    em.add_events(
+        "u1", [_event(what="他出了车祸，现在住院", type="health", entities=["车祸"])],
+        source={"turn_id": "later-hospital-story"}, now=datetime(2026, 11, 5, 16),
+    )
+
+    assert em.history_references("u1", "住院") == [
+        {"turn_id": "injury", "text": "他出了车祸，现在住院"},
+    ]
+    assert [row["turn_id"] for row in em.history_references("u1", "车祸")] == ["recovery", "injury"]
+    assert em.history_references("u1", "考试") == []
+    assert em.history_references("../u1", "车祸") == []
+
+
+def test_legacy_and_duplicate_events_cannot_fabricate_turn_links(tmp_path, monkeypatch):
+    _seed(tmp_path, monkeypatch)
+    event = _event(turn_id="from-extracted-item")
+    em.add_events("u1", [event], source={"turn_id": "../invalid-reference"})
+    assert em.history_references("u1", "收养") == []
+
+    em.add_events("u1", [event], source={"turn_id": "first"})
+    em.add_events("u1", [event])
+    assert em.history_references("u1", "收养") == [{"turn_id": "first", "text": event["what"]}]
+    em.add_events("u1", [event], source={"turn_id": "latest"})
+    assert em.history_references("u1", "收养", limit=1) == [{"turn_id": "latest", "text": event["what"]}]
 
 
 def test_template_or_joke_rejected(tmp_path, monkeypatch):

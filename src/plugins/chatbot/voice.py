@@ -651,7 +651,7 @@ async def _synthesize(reply_text: str, deadline: float | None = None) -> str | N
 
 
 def _to_qq_voice(wav_path: str) -> str | None:
-    """wav → QQ 语音文件 URL。方案 A：NapCat 较新版本支持本地文件路径自动转。
+    """本地音频 → NapCat 能读取并转为 QQ 语音的 file URI。
 
     ⚠️ **必须是正斜杠**。`Path.resolve()` 在 Windows 上给出反斜杠路径，直接拼进
     `file:///` 会得到 `file:///D:\\a\\b.wav`——这**不是合法的 file URL**：
@@ -660,11 +660,12 @@ def _to_qq_voice(wav_path: str) -> str | None:
     踩坑：接入方案「三.4」当初试通的是 `file:///D:/...`（正斜杠），实现时用了
     `.resolve()` 忘了转 `.as_posix()`，于是一直在发反斜杠版本。
 
-    若 NapCat 不认 wav，需要装 silk 编码器转（方案 B，见接入方案「三.4」）。
+    `as_uri()` 使用正斜杠，并编码曲名中的 `%`、`#`、空格等字符。
+    NapCat 读取本地 file URI 时会解码一次，曲名里的字面 `%20` 因此保留为 `%20`。
     """
     if not wav_path:
         return None
-    return "file:///" + Path(wav_path).resolve().as_posix()
+    return Path(wav_path).resolve().as_uri()
 
 
 async def synthesize_voice(reply_text: str, deadline: float | None = None) -> str | None:

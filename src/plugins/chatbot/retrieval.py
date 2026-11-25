@@ -148,7 +148,7 @@ def _corpus_gate_pass(query: str, statement: str, sim: float) -> bool:
     ⚠️ **它曾经的含义是"直通注入"（放行就进提示词、跳过 LLM 判）。2026-09-29 已改为"只进候选池"。**
 
     为什么必须改：实测**基于词重叠/词频的尺子分不开"说的是谁"**——
-      · 误报 n7「宝宝我明天要早起我先去睡了」（用户在说**自己**）对 #271：`ov=0.40`
+      · 误报 n7「明天要早起，我先睡了。」（用户在说**自己**）对 #271：`ov=0.40`
       · 真阳性 co9「你不是以前有喜欢的男学霸吗」（在问**她**）对 #42：`ov=0.143`
     **误报的重叠度反而更高**，所以任何 FLOOR 都是在拿一个换另一个（试过 0.5：
     n7 挡住了，co9/co10 一起被打回红）。区别在"**说的是谁**"——那是 LLM 判的事，
@@ -202,7 +202,7 @@ def retrieve_corpus_candidates(user_query: str, query_vector,
     ⚠️ ②③ **只看词面、不看语义分**：要救的正是"语义分低但用户确实提到了"的那批。
     """
     db = load_vector_db()
-    if not db or not user_query or not query_vector:
+    if not db or not user_query:
         return []
     # 成本开关（2026-10-27）：可用环境变量临时缩小判定池做 A/B；
     # 默认值仍由 constants 决定，生产行为不变。
@@ -212,10 +212,12 @@ def retrieve_corpus_candidates(user_query: str, query_vector,
                       or CORPUS_LEXICAL_EXTRA_N)
     except (TypeError, ValueError):
         extra_n = CORPUS_LEXICAL_EXTRA_N
+    # 向量暂不可用时，只停掉语义 top-N；精确钩子与词面补位仍可生成候选。
+    scores = cosine_scores(query_vector, db) if query_vector else [0.0] * len(db)
     scored = [RetrievalItem(source="corpus", item_id=str(i), score=sim, text=it["text"])
-              for i, (it, sim) in enumerate(zip(db, cosine_scores(query_vector, db)))]
+              for i, (it, sim) in enumerate(zip(db, scores))]
     scored.sort(key=lambda x: x.score, reverse=True)
-    top = scored[:top_n]
+    top = scored[:top_n] if query_vector else []
     # **钩子命中的也塞进候选**——它们语义分低（正是"没有入口"那批），
     # 但用户确实提到了里面的词，值得让 LLM 判一次"是不是在聊这件事"。
     # 让 LLM 看一眼的还有两类"**语义分低、但词面上确实沾边**"的条目：
@@ -243,8 +245,8 @@ def retrieve_corpus_candidates(user_query: str, query_vector,
     return top
 
 
-# 行为判别词 → 强制命中行为（语义检索对"敷衍/鸽/迟到"这类口语有~0.55天花板且易错配，
-# 对齐 LEGENDARY 的思路：固定判别词 → 固定反应）。
+# 行为判别词 → 行为候选（语义检索对"敷衍/鸽/迟到"这类口语有~0.55天花板且易错配）。
+# 关键词只提供召回线索；线上需由上下文判定确认，不能凭同词推定主体/情境。
 # 数据化：从 persona/injection/10_behaviors/behavior_keywords.json 加载，填 JSON 不用改代码。
 _behavior_keywords_cache = None
 
@@ -268,10 +270,12 @@ def load_behavior_keywords() -> dict:
 _BEHAVIOR_KEYWORDS = load_behavior_keywords()
 
 
-def select_behavior_item(user_msg: str, behavior_intent: str, behaviors: list) -> "RetrievalItem | None":
+def select_behavior_item(user_msg: str, behavior_intent: str, behaviors: list,
+                         *, allow_fallback: bool = True) -> "RetrievalItem | None":
     """L3：把行为意图（LLM 判定）转成行为注入项。
 
     优先级：LLM 意图 > 关键词兜底（判别词：敷衍/骗/鸽/迟到…，当 LLM 拿不准时保底）。
+    allow_fallback=False 时只接受有效 L3 名称；关键词只供另一层生成待判候选。
     返回 None 表示本轮不注入任何行为。替代旧的纯语义检索（embedding 按句式聚团，
     把'夸奖'和'质问'这类同句式消息挤在一起会误判——见 ROADMAP/L3 说明）。
     """
@@ -283,7 +287,9 @@ def select_behavior_item(user_msg: str, behavior_intent: str, behaviors: list) -
             if b.get("name") == behavior_intent:
                 return RetrievalItem(source="behavior", item_id=behavior_intent, score=1.0,
                                      text=_format_behavior_rule(b))
-    # ② 关键词兜底：LLM 拿不准但消息含判别词（"你是不是在敷衍我"这类），保底命中
+    if not allow_fallback:
+        return None
+    # ② 关键词候选：旧调用默认保留；统一上下文路径由调用方再判断是否适用。
     for b in behaviors:
         name = b.get("name", "")
         kws = _BEHAVIOR_KEYWORDS.get(name)
@@ -611,12 +617,13 @@ def _item_cost(it: RetrievalItem) -> int:
 
 def truncate_by_budget(items: list, budget_chars: int = RETRIEVAL_BUDGET_CHARS,
                        max_item_chars: int = MAX_RETRIEVAL_ITEM_CHARS) -> list:
-    """按融合序贪心保留，超预算丢弃低优先级条目。"""
+    """按实际正文长度贪心保留，放不下的条目整条跳过，不截断人格样本。
+
+    max_item_chars 仅保留调用兼容，不再把完整正文虚计成较短文本。
+    """
     total, kept = 0, []
     for it in items:
         cost = _item_cost(it)
-        if cost > max_item_chars:
-            cost = max_item_chars
         if total + cost > budget_chars:
             continue
         kept.append(it)

@@ -4,7 +4,7 @@ from src.plugins.chatbot.reply_style import planning_leak_reason
 
 
 def test_production_planning_leak_is_flagged():
-    # 905860780 2026-11-13 22:41 的真实泄露（节选）
+    # 900000001 2026-11-13 22:41 的真实泄露（节选）
     text = (
         "“谢谢姐姐”这句先接住，他平时叫她姐姐或者机长，但系统要求尽量别再叫名字，"
         "直接说事。他情绪好转了，之前是寻求安慰，现在说“好多了”。灰泽满的回应应该"

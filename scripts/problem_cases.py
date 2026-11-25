@@ -44,7 +44,7 @@
 
 ## 问题记录.md 的字段（都在行首写「字段：值」，缺的脚本会问你）
 
-    用户说：为什么今天不直播 我想你想的浑身难受     ← 必填（这条消息本身）
+    用户说：今天怎么没有开播呀？     ← 必填（这条消息本身）
     她答：搬家的事还没弄完，今天真播不了            ← 生成层判据的来源
     应该是：不该拿两个月前的旧事当成现在的理由      ← 人话写就行
     层：生成                                        ← 检索 / 生成（不写就替你别猜并说明）
@@ -379,17 +379,24 @@ def load_last_report() -> dict:
 
 
 def describe_expect(expect: dict) -> str:
-    """把 expect 翻成人话。"""
+    """把 expect 翻成人话；必须、允许和禁止条件同时展示。"""
     parts = []
     for route, cond in (expect or {}).items():
         if "should" in cond:
             parts.append(f"{route} 该命中 {cond['should']}")
-        elif "contains" in cond:
-            parts.append(f"{route} 该含关键词 {cond['contains']}")
-        elif cond.get("should_fire"):
+        if "contains" in cond:
+            if route == "facts":
+                parts.append(f"最终可用信息须覆盖全部 {cond['contains']}")
+            else:
+                parts.append(f"{route} 该含任一备选关键词 {cond['contains']}")
+        if cond.get("should_fire"):
             parts.append(f"{route} 该有东西（不钉是哪条）")
-        elif cond.get("should_not_hit"):
+        if cond.get("should_not_hit"):
             parts.append(f"{route} 不该命中")
+        if "allowed" in cond:
+            parts.append(f"{route} 可空，非空仅允许 {cond['allowed']}")
+        if "must_not" in cond:
+            parts.append(f"{route} 禁止 {cond['must_not']}")
     return "；".join(parts) or "（没有期望 —— 这条本身写坏了）"
 
 

@@ -31,7 +31,9 @@ import asyncio
 import os
 import re
 from pathlib import Path
+from uuid import uuid4
 
+from . import reply_evidence
 from .constants import THINKING_DISABLED
 from .config import (
     log_cache_usage, _get_clients, _get_model_name, extract_chat_content,
@@ -307,6 +309,23 @@ async def _describe_first_image(vision_client, image_paths) -> str:
         return ""
 
 
+def _record_delivery(user_id, text: str, *, modality: str = "text", response=None) -> None:
+    message_id = str(response.get("message_id") or "") if isinstance(response, dict) else ""
+    reply_evidence.record_part(str(user_id), uuid4().hex, 0, text,
+                               modality=modality, message_id=message_id)
+
+
+async def _deliver_text(bot, user_id, text: str, image_paths, *, record: bool = True) -> None:
+    from nonebot.adapters.onebot.v11 import Message, MessageSegment
+
+    message = Message(text)
+    for path in image_paths or ():
+        message += MessageSegment.image(file=str(path))
+    response = await bot.send_private_msg(user_id=user_id, message=message)
+    if record:
+        _record_delivery(user_id, message.extract_plain_text(), response=response)
+
+
 async def deliver_proactive(bot, user_id, text: str,
                             image_paths: list | None = None, *,
                             voice: bool = False) -> str:
@@ -318,7 +337,7 @@ async def deliver_proactive(bot, user_id, text: str,
     """
     from nonebot.adapters.onebot.v11 import Message, MessageSegment
 
-    from .voice import prepare_proactive_tts, send_voice
+    from .voice import _tts_text, prepare_proactive_tts, send_voice
 
     if voice:
         prepared, why = prepare_proactive_tts(text)
@@ -329,6 +348,7 @@ async def deliver_proactive(bot, user_id, text: str,
                 print(f"⚠️ 主动语音发送异常（改发文字）: {e}")
                 ok = False
             if ok:
+                _record_delivery(user_id, _tts_text(prepared), modality="voice")
                 if image_paths:
                     try:
                         msg = Message()
@@ -342,10 +362,7 @@ async def deliver_proactive(bot, user_id, text: str,
         else:
             print(f"[主动] 内容不适合语音（{why}）→ 改发文字版")
 
-    msg = Message(text)
-    for p in (image_paths or []):
-        msg += MessageSegment.image(file=str(p))
-    await bot.send_private_msg(user_id=user_id, message=msg)
+    await _deliver_text(bot, user_id, text, image_paths)
     return "text"
 
 
@@ -361,7 +378,7 @@ async def broadcast_proactive(bot, targets, text: str,
     """
     from nonebot.adapters.onebot.v11 import Message, MessageSegment
 
-    from .voice import prepare_proactive_tts, send_voice_file, synthesize_voice
+    from .voice import _tts_text, prepare_proactive_tts, send_voice_file, synthesize_voice
 
     ids = list(dict.fromkeys(str(t) for t in (targets or []) if t))
     if not ids:
@@ -372,12 +389,15 @@ async def broadcast_proactive(bot, targets, text: str,
         concurrency = 8
 
     wav_path = None
+    spoken = ""
     if voice:
         prepared, why = prepare_proactive_tts(text)
         if prepared:
             wav_path = await synthesize_voice(prepared)
             if wav_path is None:
                 print("[主动] 语音合成失败 → 全量改发文字")
+            else:
+                spoken = _tts_text(prepared)
         else:
             print(f"[主动] 内容不适合语音（{why}）→ 全量改发文字")
 
@@ -397,12 +417,6 @@ async def broadcast_proactive(bot, targets, text: str,
         head = "发了1张图片" if count == 1 else f"发了{count}张图片"
         note = f"{head}：{desc}" if desc else head
         memory_text = f"[{note}] {memory_text}".strip()
-
-    async def _send_text(uid: str) -> None:
-        msg = Message(text)
-        for p in (image_paths or []):
-            msg += MessageSegment.image(file=str(p))
-        await bot.send_private_msg(user_id=uid, message=msg)
 
     async def _send_images(uid: str) -> None:
         if not image_paths:
@@ -425,13 +439,15 @@ async def broadcast_proactive(bot, targets, text: str,
                         print(f"⚠️ 主动语音发送异常（改发文字）user={uid}: {e}")
                         ok = False
                     if ok:
+                        if record:
+                            _record_delivery(uid, spoken, modality="voice")
                         await _send_images(uid)
                         stats["voice"] += 1
                     else:
-                        await _send_text(uid)
+                        await _deliver_text(bot, uid, text, image_paths, record=record)
                         stats["text"] += 1
                 else:
-                    await _send_text(uid)
+                    await _deliver_text(bot, uid, text, image_paths, record=record)
                     stats["text"] += 1
                 if record:
                     append_bot_message(uid, memory_text)

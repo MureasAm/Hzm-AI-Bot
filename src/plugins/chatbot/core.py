@@ -9,6 +9,7 @@ import random
 import asyncio
 import re
 import time
+from dataclasses import replace
 
 from .bg import spawn
 from .constants import (
@@ -39,10 +40,17 @@ from . import group_memory
 from . import injection as inj
 from . import daily_memory
 from . import event_memory
+from . import memory_recall
 from . import memory_v2
 from . import self_speech
+from . import song_requests
+from . import songs
 from . import need_triggers
 from . import wiki_lookup
+from .material_retrieval import retrieve_contextual_materials
+from .retrieval_context import RetrievalContext
+from .llm_json import parse_json_object
+from .memory_context import filter_memory_hints
 from .routing import (
     LEGENDARY_REPLIES, LEGENDARY_CONFIRMS, legendary_confirmed, legendary_hit, classify_l3,
 )
@@ -53,9 +61,9 @@ from .reply_style import (
 )
 from .session_memory import (
     probe_session, build_session_context, get_session, is_emoji_msg, previous_session_note,
-    mood_note, actions_note, voice_preference_note,
+    mood_note, actions_note, last_song, voice_preference_note,
 )
-from .term_hints import terms_hint_block
+from .term_hints import terms_hint_block, term_match
 
 
 _MEMORY_V2_STORE = memory_v2.ShadowMemoryStore()
@@ -302,7 +310,7 @@ from .persona import load_terms  # noqa: E402
 
 
 def build_terms_note(user_msg: str, denied_terms: set | None = None,
-                     hit_out: list | None = None) -> str:
+                     hit_out: list | None = None, selected_terms: set | None = None) -> str:
     """根据用户消息命中名词库：核心词(always)每次注入 + 命中词(关键词/别名/正则)注入。
 
     返回注入文本【灰泽满的世界】。客观打底 + 带灰泽满态度，让模型既懂词义又有正确的相处态度。
@@ -337,21 +345,17 @@ def build_terms_note(user_msg: str, denied_terms: set | None = None,
             continue
         if kw in denied:
             continue
-        keys = [kw] + [str(a) for a in t.get("aliases", []) if a]
-        pattern = t.get("pattern")
+        if selected_terms is not None and kw not in selected_terms:
+            continue
         usage = t.get("usage")
-        if t.get("pattern_only") and pattern:
-            # 单字/短词（如“养”）只走正则，避免 keyword 子串撞“养生/养成/养宠物”
-            key_hit = bool(re.search(pattern, msg))
-        else:
-            key_hit = any(k in msg for k in keys) or (pattern and re.search(pattern, msg))
-        concept_hit = any(w in msg for w in (t.get("usage_triggers") or []))
-        hit = t.get("priority") == "always" or key_hit
+        key_hit, concept_hit = term_match(t, msg)
+        approved = selected_terms is not None and kw in selected_terms
+        hit = approved or t.get("priority") == "always" or key_hit
         if hit:
             parts = [t.get("meaning", "")]
             if t.get("reaction"):
                 parts.append(f"被提到时：{t['reaction']}")
-            if usage and (key_hit or concept_hit):
+            if usage and (approved or key_hit or concept_hit):
                 parts.append(f"用词规则：{usage}")
             notes.append(f"{kw}：{'；'.join(parts)}")
             if hit_out is not None:
@@ -384,12 +388,7 @@ def _hits_on_demand_term(msg: str) -> bool:
         kw = t.get("keyword", "")
         if not kw or t.get("priority") == "always":
             continue
-        keys = [kw] + [str(a) for a in t.get("aliases", []) if a]
-        pattern = t.get("pattern")
-        if t.get("pattern_only") and pattern:
-            if re.search(pattern, msg):
-                return True
-        elif any(k in msg for k in keys) or (pattern and re.search(pattern, msg)):
+        if term_match(t, msg)[0]:
             return True
     return False
 
@@ -416,12 +415,7 @@ async def confirm_ambiguous_terms(user_msg: str, aux_client=None) -> set:
         kw = t.get("keyword", "")
         if not kw or not t.get("confirm"):
             continue
-        keys = [kw] + [str(a) for a in t.get("aliases", []) if a]
-        pattern = t.get("pattern")
-        if t.get("pattern_only") and pattern:
-            hit = bool(re.search(pattern, msg))
-        else:
-            hit = any(k in msg for k in keys) or (pattern and re.search(pattern, msg))
+        hit = term_match(t, msg)[0]
         if hit:
             candidates.append(t)
     if not candidates:
@@ -450,11 +444,9 @@ async def confirm_ambiguous_terms(user_msg: str, aux_client=None) -> set:
             **THINKING_DISABLED,
         )
         log_cache_usage(resp, "术语消歧")
-        content = extract_chat_content(resp)
-        if "```" in content:
-            content = content.split("```")[1].split("```")[0].strip()
-        data = json.loads(content)
-        exclude = set(data.get("exclude", []))
+        data = parse_json_object(extract_chat_content(resp))
+        values = data.get("exclude", [])
+        exclude = {value for value in values if isinstance(value, str)} if isinstance(values, list) else set()
         return {t["keyword"] for t in candidates if t["keyword"] in exclude}
     except Exception as e:
         print(f"⚠️ 术语语境确认失败（放行）: {e}")
@@ -479,13 +471,14 @@ def build_message_list(user_msg: str, fused_items: list,
                        group_thread_note: str = "", name_budget: str = "",
                        group_batch_note: str = "",
                        habit_hint: str = "", now_context: str = "",
-                       time_hint: str = "", prefetch_context: str = "",
+                       time_hint: str = "", prefetch_context: str = "", recall_context: str = "",
                        request_context: str = "",
                        reminders_context: str = "",
                        state_stable: str = "", state_dynamic: str = "",
                        event_context: str = "",
                        history_turns: list | None = None,
-                       show_actions: bool = False) -> list:
+                       show_actions: bool = False, selected_terms: set | None = None,
+                       song_context: str = "") -> list:
     """按优先级组装发送给模型的消息列表。
 
     fused_items 为融合后的 RetrievalItem 列表（corpus + behavior），按源分组注入。
@@ -526,7 +519,7 @@ def build_message_list(user_msg: str, fused_items: list,
     只对拥有该习惯的用户有值；放在用户消息前，让短问候也能接住个人习惯。
 
     history_turns：私聊原生历史轮次（`build_native_history_turns`）。提供时**跳过**
-    `user_history` 的 system 块，改为在最后一条 user 前插入 header + native turns +
+    `user_history` 的 system 块，在本轮感知前插入 header + native turns +
     【别自相矛盾】；群聊不传，仍走原来的转述 system 块。
     """
     # 场景（第 00 块）：**只有群聊注入**。
@@ -644,7 +637,8 @@ def build_message_list(user_msg: str, fused_items: list,
     # 名词库（terms/lorebook）：核心词 always 注入 + 命中用户消息的词注入——让模型懂"绿冻/枪神8/slg"这类词并带对的态度
     _term_hits: list = []
     terms_note = build_terms_note(user_msg, denied_terms=denied_terms,
-                                  hit_out=_term_hits if trace is not None else None)
+                                  hit_out=_term_hits if trace is not None else None,
+                                  selected_terms=selected_terms)
     if terms_note:
         messages.append({"role": "system", "content": inj.T("terms", note=terms_note)})
         _mark("terms")
@@ -736,10 +730,7 @@ def build_message_list(user_msg: str, fused_items: list,
     # 2026-10-14 曾把她自己的话从注入里过滤掉（去自反馈：实测"灰泽满"起手黏性
     # 51.7% vs 17.4%）；用户 2026-10-18 明确要求恢复完整上下文——她需要看到
     # 自己上一轮说了什么，才能接得住、不前后打架。记忆里两边本来就都记着。
-    if history_turns:
-        # 原生历史在最后一条 user 前插入（见下方 final_user 之前），这里不再注 system 的历史块。
-        pass
-    elif user_history:
+    if user_history and not history_turns:
         if isinstance(user_history, list):
             context = "\n".join(ln for ln in user_history if ln)
             if context:
@@ -817,15 +808,21 @@ def build_message_list(user_msg: str, fused_items: list,
         hit_blocks.append("query_hint")
         _mark("query_hint")
 
+    # 原生历史先于本轮感知，避免旧回复里的报时离当前提问更近。
+    # 时间只标在用户消息上，assistant 正文沿用她的原话。
+    if history_turns:
+        messages.append({"role": "system", "content": inj.T("history", "turns_head")})
+        messages.extend(history_turns)
+        messages.append({"role": "system",
+                         "content": inj.T("history", "contradiction").strip()})
+        hit_blocks.append("history")
+        _mark("history")
+
     # 感知源①：当前时间/农历/天气（始终注入，占预算极少；天气按该用户所在城市）。
     # **放在最后**：它是唯一"每分钟必变"的块，而 DeepSeek 的缓存按**前缀**匹配——
     # 它放中间会把后面所有块（行为/直播记忆/长期短期记忆…）一起拖成 miss。
     # 语义上也更顺：紧挨着用户这句，"现在几点"最贴近此刻。
     # v3：动态段由 state_dynamic 提供（日期/星期/直播/天气/话题/情绪）。
-    if prefetch_context:
-        messages.append({"role": "system", "content": prefetch_context})
-        hit_blocks.append("prefetch")
-        _mark("prefetch")
     if time_hint:
         messages.append({"role": "system", "content": time_hint})
         hit_blocks.append("time_hint")
@@ -896,10 +893,22 @@ def build_message_list(user_msg: str, fused_items: list,
                              for s in load_stickers() if s.get("group")})
         except Exception:
             groups = []
-        messages.append({"role": "system", "content": inj.T(
-            "actions", groups="、".join(groups) or "（暂无表情）")})
+        action_note = inj.T("actions", groups="、".join(groups) or "（暂无表情）")
+        if song_context and not is_group:
+            action_note += "\n" + song_context
+        messages.append({"role": "system", "content": action_note})
         hit_blocks.append("actions")
         _mark("actions")
+
+    if prefetch_context:
+        messages.append({"role": "system", "content": prefetch_context})
+        hit_blocks.append("prefetch")
+        _mark("prefetch")
+
+    if recall_context:
+        messages.append({"role": "system", "content": recall_context})
+        hit_blocks.append("reply_evidence")
+        _mark("reply_evidence")
 
     # 自称方式（第 21 块，2026-10-27 用户定）：骨架里不再写整段自称规则，
     # 只在**所有注入之后、用户消息之前**留一句弱约束。实测（60 条真实消息）：
@@ -912,16 +921,6 @@ def build_message_list(user_msg: str, fused_items: list,
     # 运行时块级开火留痕（scene_* / 12–19；真实聊天路径才写，离线实验/回归不污染）
     if log_hits and get_llm_route() in ("私", "群"):
         log_block_hits(hit_blocks)
-
-    # 原生历史（私聊，2026-11-19）：真实 user/assistant turns 放在最后一条 user 前。
-    # 时间只标在用户消息上；她说的话保持正文，避免她学会在回复里写时间前缀。
-    if history_turns:
-        messages.append({"role": "system", "content": inj.T("history", "turns_head")})
-        messages.extend(history_turns)
-        messages.append({"role": "system",
-                         "content": inj.T("history", "contradiction").strip()})
-        hit_blocks.append("history")
-        _mark("history")
 
     messages.append({"role": "user", "content": final_user})
     return messages
@@ -1062,6 +1061,9 @@ async def update_memory_v2_shadow_task(
     reply: str,
     session_id: str,
     reminder_hint: dict | None = None,
+    *,
+    source_turn_id: str = "",
+    delivery_verified: bool = False,
 ) -> list[dict]:
     """Extract one private turn into the opt-in V2 shadow store.
 
@@ -1078,13 +1080,11 @@ async def update_memory_v2_shadow_task(
     if not msg or is_emoji_msg(msg):
         return []
     force_extract = bool(reminder_hint and not reminder_hint.get("ambiguous"))
-    # 成本闸门（2026-10-27）：短寒暄/表情/纯情绪不值得一次 3k prompt 的提取；
-    # 长消息和带事实/事件/偏好线索的一律放行。MEMORY_EXTRACT_GATE=0 可回退。
-    if not force_extract and get_flag("MEMORY_EXTRACT_GATE", "1") != "0" \
-            and not memory_v2.worth_extracting(msg):
-        return []
+    # 成本闸门只控制模型提取，短句里的明确称呼仍走本地记录。
+    use_model = (force_extract or get_flag("MEMORY_EXTRACT_GATE", "1") == "0"
+                 or memory_v2.worth_extracting(msg))
     try:
-        deepseek_client, zhipu_client = _get_clients()
+        deepseek_client, zhipu_client = _get_clients() if use_model else (None, None)
         # 可选的提取模型覆盖（2026-10-27 成本 A/B）：
         # 默认跟随主模型；设 MEMORY_EXTRACT_MODEL=... 可只给提取换模型，不动主回复。
         model = get_flag("MEMORY_EXTRACT_MODEL", "") or _get_model_name()
@@ -1098,6 +1098,8 @@ async def update_memory_v2_shadow_task(
             session_id=session_id,
             zhipu_client=zhipu_client,
             reminder_hint=reminder_hint,
+            source_turn_id=source_turn_id,
+            delivery_verified=delivery_verified,
         )
     except Exception:
         return []
@@ -1135,7 +1137,7 @@ def _weather_city_for(user_id: str) -> str:
 
 _USER_NAME_KEYS = {"preferred_name", "name", "nickname"}
 
-# 名字记忆的"外壳词"：V2 的值常常被写成整句（"用户希望被称呼为草草子哥""希望被叫小温"），
+# 名字记忆的"外壳词"：V2 的值常常被写成整句（"用户希望被称呼为星屿哥""希望被叫小温"），
 # 得把这层剥掉才拿得到名字本身。⚠️ **名单要够全**——漏一个词，这里就返回整句，
 # 下面那个"别老拿名字开头"的守卫会因为比对不上而**静默失效**。
 # 踩坑（2026-10-12 实测）：名单里只有"称呼为/被称为/希望被称为"，没有"希望被叫"，
@@ -1152,7 +1154,7 @@ def _bare_name_from(value: str) -> str:
     """从记忆值里取出裸名字：「希望被叫小温」→「小温」。
 
     值常被写成整句（提取模型不听话），所以两步：① **只取第一个逗号前那截**——
-    后面多半是"不叫hikami"这类补充说明；② 反复剥掉外壳词。剥不干净就返回原样
+    后面多半是"不叫lumen_example"这类补充说明；② 反复剥掉外壳词。剥不干净就返回原样
     （调用方有长度检查兜底）。
     """
     v = value.split("，")[0].split(",")[0].strip()
@@ -1191,7 +1193,7 @@ def _user_name_for(user_id: str) -> str:
     """用户希望被怎么称呼——用来判"她是不是又在拿名字当开头"。
 
     只从 V2 的 preferred_name/name/nickname 取。V2 的值常常是一整句
-    （"用户希望被称呼为草草子哥，或者hikami"），所以取第一个逗号前、再剥掉外壳、
+    （"用户希望被称呼为星屿哥，或者lumen_example"），所以取第一个逗号前、再剥掉外壳、
     且要求长度像名字（剥不干净的整句宁可返回空——返回错的还会**骗过**守卫）。
     （v1 卡 `user_name` 的首选层已于 2026-10-12 随 v1 清理撤掉。）
     """
@@ -1275,109 +1277,104 @@ def name_budget_note(user_id: str) -> str:
 async def gather_retrieval(query_text: str, retrieval_query: str, history_text: str,
                            deepseek_client, zhipu_client,
                            is_user_msg: bool = True,
-                           extra_preference_ids: list | None = None) -> dict:
-    """规范取素材：一段文本该配的东西一次捞齐（人设 + 行为/措辞 + 直播记忆 + 风格样本 + 偏好 + 核心记忆）。
-
-    **聊天和主动发言共用这一份**。抽出来的原因：主动发言原来是自己在
-    `proactive.py` 里另拼一套（system_prompt + 自己写的规则），**素材层整层没接**，
-    输出就成了"干说、没有生活感"。两处各拼一套必然漂，所以收成一个入口
-    （周表/感知/名词库那些"每轮都注入"的层在 build_message_list 里，这里管"按内容取的"）。
-
-    `is_user_msg`：要取素材的这段文本，**是不是"用户说的话"**？
-      · True（聊天，默认）：该走的都走——L3 按"用户这句想干嘛"判行为/措辞；
-        corpus 交 LLM 判"用户是不是在问她这段"。
-      · False（主动发言）：她发的动态/微博**不是用户说的话**，上面两步的前提不成立
-        （拿它去问"用户是不是在问她这段"，答案天然是否），所以跳过；其余按**话题**取的
-        路（风格样本/偏好/核心记忆）照旧，并按"她自己的陈述句"用不设阈值的取法。
-
-    ⚠️ 后续若要给主动发言也接直播记忆，得另写一个判据（"这条内容和她的哪段经历有关"），
-    不能直接复用 corpus_judge 的问法。
-    """
-    behaviors = load_persona_rules()
-    result = {"fused_items": [],
-              "preference_items": [], "core_stories": [], "same_request": None,
-              "reminder": None}
-
-    # 纯图片消息（无文字）不做检索：让灰泽满直接评价图片，避免语料/行为劫持图片内容
-    # 纯表情消息（emoji/[表情：xx]）也不做语义检索：表情只表达情绪不表达话题，
-    # 扩充句会作为语气提示注入，但检索 memory 会跑偏（如😭命中"被夸"样本）
-    if not (query_text and not is_emoji_msg(query_text)):
+                           extra_preference_ids: list | None = None,
+                           context: RetrievalContext | None = None, *,
+                           song_text: str = "") -> dict:
+    """回复按对话语境筛选材料；动态广播保留原有公共素材检索。"""
+    context = context or RetrievalContext(
+        query_text, resolved_text=retrieval_query, history=history_text,
+        is_user_msg=is_user_msg)
+    unconfirmed_terms = {t["keyword"] for t in load_terms() if t.get("keyword")}
+    result = {"fused_items": [], "preference_items": [], "core_stories": [],
+              "same_request": None, "reminder": None,
+              "denied_terms": unconfirmed_terms.copy(),
+              "approved_terms": set(), "association_context": "", "association_entities": [],
+              "wiki_entities": [], "entity_mentions": {},
+              "embedding_available": True, "selection_trace": {"available": True}, "context": context}
+    if not (query_text and not is_emoji_msg(query_text)) or is_emotion_only_query(retrieval_query):
+        if is_user_msg:
+            result["context"] = replace(context, needs=())
         return result
-    # 纯情绪消息（如'可惜🤭'，被 probe 补全成'用户发了个偷笑的表情'）无话题词，
-    # 语义检索会误命中无关样本（实测→peer_5'新衣服'）。对齐纯表情设计：跳过检索，
-    # 补全句只作语气提示（query_hint）注入。
-    if is_emotion_only_query(retrieval_query):
-        return result
-
     try:
         await _fill_retrieval(result, query_text, retrieval_query, history_text,
-                              deepseek_client, zhipu_client, behaviors, is_user_msg,
-                              extra_preference_ids)
-    except Exception as e:
-        # **检索层炸了不能让她变哑巴**：素材按"没检索到"处理，回复/主动发言继续。
-        # 踩坑（2026-09-27）：智谱 embedding key 过期 → 检索层抛
-        # TypeError('NoneType' object is not iterable)，而调用点没有兜底 →
-        # **整条回复任务死掉，她一个字都不回**（含群聊，看起来像"不接话"）。
-        # 兜底放这里=两条链路（聊天/主动发言）一起受保护。
-        print(f"⚠️ 检索层异常（按'没检索到'继续）: {e}")
+                              deepseek_client, zhipu_client, load_persona_rules(), is_user_msg,
+                              extra_preference_ids, context=context, song_text=song_text)
+    except Exception as error:
+        if is_user_msg:
+            # 异常不能把未判需求的 None 继续传给事件/个人提示，亦不保留半成品材料。
+            l3 = result.get("l3") or {}
+            confirmed_behavior = [item for item in result.get("fused_items", [])
+                                  if l3.get("classification_ok") is True
+                                  and getattr(item, "source", "") == "behavior"
+                                  and getattr(item, "item_id", "") == l3.get("behavior")]
+            result.update(
+                context=replace(context, needs=()), fused_items=confirmed_behavior,
+                corpus_items=[], behavior_items=[], preference_items=[], core_stories=[],
+                denied_terms=unconfirmed_terms, approved_terms=set(), association_context="",
+                association_entities=[], wiki_entities=[], entity_mentions={},
+            )
+        result["selection_trace"] = {"available": False, "error": type(error).__name__}
+        print(f"⚠️ 检索层异常（按未确认材料继续）: {type(error).__name__}")
     return result
 
 
 async def _fill_retrieval(result: dict, query_text: str, retrieval_query: str, history_text: str,
                           deepseek_client, zhipu_client, behaviors, is_user_msg: bool,
-                          extra_preference_ids: list | None = None) -> None:
-    """`gather_retrieval` 的干活部分（单独一层，方便上面统一兜底）。结果写进 result。"""
-    behavior_items, corpus_items = [], []
-    # L3：归属用 LLM 判意图（不再用 embedding 猜——embedding 按句式聚团，
-    # 会把'灰泽满你唱歌好听'（夸）和'灰泽满你怎么又迟到'（质问）挤在一起误判）。
-    # 同一次调用还判"连续第几轮在要同一件事"（same_request）。
-    # 判别词（敷衍/骗/鸽/迟到/黄桃/擦边…）退**兜底**位：L3 判不出来时才用。
-    # L3 和 embedding 互不依赖（L3 只看原话+历史，embedding 只看检索句），**并行发**，
-    # 省一次串行往返；两个函数都自己兜底异常，结果和先后 await 完全一样。
-    embed_text = retrieval_query or query_text
+                          extra_preference_ids: list | None = None,
+                          context: RetrievalContext | None = None, *, song_text: str = "") -> None:
+    """回复先判资料需求，再召回和确认；动态广播只检索公共素材。"""
+    classifier_kwargs = {"context": context} if context is not None else {}
+    if song_text:
+        classifier_kwargs["song_text"] = song_text
+    context = context or RetrievalContext(query_text, resolved_text=retrieval_query,
+                                           history=history_text, is_user_msg=is_user_msg)
+    l3 = {"behavior": "", "same_request": {"what": "", "count": 1},
+          "reminder": None, "classification_ok": True}
     if is_user_msg:
         l3, query_vector = await asyncio.gather(
-            classify_l3(deepseek_client, query_text, history_text, behaviors),
-            embed_query(zhipu_client, embed_text),
+            classify_l3(deepseek_client, query_text, history_text, behaviors, **classifier_kwargs),
+            embed_query(zhipu_client, context.query),
         )
-        if l3["behavior"]:
-            print(f"[行为] LLM 判定: {l3['behavior']}")
         sr = l3.get("same_request") or {}
         if int(sr.get("count") or 1) >= 2:
             result["same_request"] = sr
-            print(f"[连续索要] 第 {sr['count']} 轮：{sr.get('what') or '（未说明）'}")
-        if l3.get("reminder"):
-            result["reminder"] = l3["reminder"]
-        behavior_item = select_behavior_item(query_text, l3["behavior"], behaviors)
-        behavior_items = [behavior_item] if behavior_item else []
+        result["reminder"] = l3.get("reminder")
     else:
-        query_vector = await embed_query(zhipu_client, embed_text)
-
-    if is_user_msg:
-        # corpus：**全部交 LLM 判**。门/钩子只决定"把哪些条递过去看"，**不再有直通**。
-        # 为什么取消直通（2026-09-29）：实测词重叠这把尺子分不开"说的是谁"——
-        #   误报 n7「宝宝我明天要早起我先去睡了」（用户说**自己**）对 #271：ov=0.40
-        #   真阳性 co9「你不是以前有喜欢的男学霸吗」（问**她**）对 #42：ov=0.143
-        #   **误报的重叠度反而更高** → 阈值只是在拿一个换另一个（试过 0.5，co9/co10 一起红）。
-        # 判不出来一律不带（宁可漏不可错，见 corpus_judge 模块头）。
-        candidates = retrieve_corpus_candidates(retrieval_query or query_text, query_vector)
-        corpus_items = await judge_corpus(
-            aux_clients_or(lambda: (deepseek_client, None))[0], query_text, candidates)
-
+        query_vector = await embed_query(zhipu_client, context.query)
+    result["l3"] = l3
+    result["embedding_available"] = bool(query_vector)
+    if is_user_msg and "needs_ok" in l3:
+        context = replace(context, needs=tuple(l3.get("needs") or ()) if l3["needs_ok"] else (),
+                          response_task=str(l3.get("task") or "")[:240] if l3["needs_ok"] else "",
+                          response_scope=str(l3.get("scope") or "") if l3["needs_ok"] else "")
+    result["context"] = context
+    if not is_user_msg:
+        # 动态改写广播没有某位好友的交流现场，保持原有公共素材取法。
+        result["preference_items"] = retrieve_preferences(context.query, extra_ids=extra_preference_ids)
+        result["core_stories"] = retrieve_core_stories(context.query, query_vector)
+        result["denied_terms"] = None
+        result.pop("approved_terms", None)
+        result["selection_trace"] = {"available": True, "mode": "broadcast"}
+        return
+    behavior_name = l3.get("behavior", "")
+    if l3.get("song_request") and behavior_name == "被推着要求时打太极":
+        behavior_name = ""
+    behavior = (select_behavior_item(query_text, behavior_name, behaviors,
+                                    allow_fallback=l3.get("classification_ok") is False)
+                if is_user_msg else None)
+    # 成功的L3已按同一语境确认；失败后的关键词候选不能自行获得注入权限。
+    semantic_behavior = [behavior] if behavior and l3.get("behavior") else []
+    fallback = behavior if behavior and not l3.get("behavior") else None
+    materials = await retrieve_contextual_materials(
+        context, query_vector, aux_clients_or(lambda: (deepseek_client, None))[0],
+        extra_preference_ids=extra_preference_ids, behavior_candidate=fallback)
+    result.update(materials)
+    behavior_items = semantic_behavior + materials["behavior_items"]
+    corpus_items = materials["corpus_items"]
     if _detach_behavior_from_rrf():
-        # 行为**不进 RRF**：它是 L3 判出类别后**按名字查表**的结果（没有相似度、
-        # 分数写死 1.0），不是"从一堆里挑最像的"那种检索。RRF 是给检索造的（融合多路排名），
-        # 把查表结果丢进去，它会**占 top-6 名额和 1200 字预算**。
-        # → 截断**之后**再追加，永不参与名额竞争；名额全还给 corpus。
-        # 注入位置由 `_split_fused` 按段类型决定，**不受这里顺序影响**（见 build_message_list）。
         result["fused_items"] = fuse_and_truncate(corpus_items) + behavior_items
     else:
         result["fused_items"] = fuse_and_truncate(corpus_items, behavior_items)
-    # 第 5 路：偏好（关键词命中）／核心记忆（结晶）
-    # 关联边（has_preference）指过来的偏好排最前——"顺着作品/作者落到她的喜好上"比碰巧撞词更该带
-    result["preference_items"] = retrieve_preferences(
-        retrieval_query or query_text, extra_ids=extra_preference_ids)
-    result["core_stories"] = retrieve_core_stories(retrieval_query or query_text, query_vector)
 
 
 def _reminder_request_note(req: dict | None) -> str:
@@ -1403,15 +1400,18 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
                       user_transcript: str = "", record_text: str = "",
                       group_addressed: bool = True, group_address_note: str = "",
                       group_thread_note: str = "", group_batch_note: str = "",
-                      reply_to: str = "") -> str:
+                      reply_to: str = "", *, timed_user_transcript: str = "",
+                      defer_memory: bool = False, quoted_message_ids: tuple[str, ...] = (),
+                      song_text: str | None = None) -> str:
     """处理一条用户消息，返回机器人回复。vision_desc 为图片描述；batch_summary 为批量归纳。
 
     is_group=True 时按群会话处理：user_id 传群号（会话历史按群记），
     不建用户记忆卡（群不是单个用户），回复对象由调用方按群发送。
 
-    user_transcript = **给模型看的**本批完整文本（群聊带 [对灰泽满]/[未点名] 标记）；
-    record_text = **记进短期记忆的**版本（群聊是干净的「昵称：文本」）——两者分开，
-    免得批次级标记被当成对话历史喂回去。
+    user_transcript 是本批完整文本（群聊带发言人和批内编号）。
+    私聊的 timed_user_transcript 只用于模型请求的最后一条 user 消息。
+    defer_memory 让私聊调用方在确认发送后写入实际发出的文本。
+    record_text 可覆盖落盘的正文，供群聊去掉批次标记后写入记忆。
 
     group_addressed：这批群里有没有人点名/@ 她（接话门的确定性判定）。为 False 时，
     如果模型输出的是“没点我/保持潜水”这类**元回复**，视为这批不说话（只记用户侧、不发）。
@@ -1419,6 +1419,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     group_thread_note：本批群聊对话线归纳（见 summarize_group_batch）。
     reply_to：她这句在回群里哪位（写进短期记忆的「灰泽满（回X）：」，只用于群聊）。
     """
+    deferred_private = defer_memory and not is_group
     deepseek_client, zhipu_client = _get_clients()
     aux_client, _ = aux_clients_or(_get_clients)   # 辅助链（2026-10-29）：话题探测/直播记忆判走它
 
@@ -1431,6 +1432,10 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     # --- 会话级记忆：对话前同步探测（判断话题延续/转换 + 短 query 扩充） ---
     # 必须在组装消息前完成，这样本轮注入的就是本轮自己的话题，不滞后一轮。
     query_text = user_msg.strip()
+    clock_question = need_triggers.asks_current_time(query_text)
+    recall_enabled = not is_group and memory_v2.injection_enabled()
+    history_question = recall_enabled and memory_recall.needs_recall(
+        query_text, reference_ids=quoted_message_ids)
     v3 = injection_v3_enabled()
     # ⚠️ 带每条时间戳的版本（2026-10-05）：让模型看出"刚说完"和"三小时前说的"。
     #    两个消费者都用它：① 注入层（【最近对话记录】）② L3 判 same_request
@@ -1442,6 +1447,17 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     # 探测和 L3 都看**完整**短期记忆（10 条 / 5 轮）；原来只给 8 条，
     # 短句/提醒要指代的上一句可能刚好落在被裁掉的那两条里（2026-10-20）。
     history_text = "\n".join(history_for_model) if history_for_model else ""
+    show_actions = get_flag("ACTION_TAGS", "1").strip().lower() not in ("0", "false", "no", "off")
+    song_context = ""
+    song_kwargs = {}
+    song_options = {}
+    if not is_group and show_actions and song_text is not None:
+        catalog = songs.load_songs()
+        previous_reply = bot_line_text(history_for_model[-1]) if (
+            history_for_model and is_bot_line(history_for_model[-1])) else ""
+        song_context = inj.T("actions", "song_available" if catalog else "song_empty")
+        if song_requests.may_request_song(song_text, catalog, previous_reply):
+            song_kwargs["song_text"] = song_text
     # 距上一轮多久（此刻还没 append 本轮，最后一条就是上一轮）。同一场对话内为空串
     _gap_sec = get_last_turn_gap_seconds(user_id)
     history_gap_note = humanize_gap(_gap_sec) if _gap_sec is not None else ""
@@ -1479,21 +1495,35 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         or f"turn-{int(time.time())}"
     )
 
-    # --- 🃏 经典梗硬匹配（双路由：关键词粗筛 + LLM 语境确认，防误触发） ---
+    turn_context = RetrievalContext.from_probe(
+        query_text, retrieval_query, history_text, probe_meta,
+        is_group=is_group, addressed=group_addressed if is_group else True)
+
+    # --- 🃏 经典梗：所有入口都要按同一份语境确认，关键词不能直接决定回复 ---
     _confirm_history = ""
-    for trigger, entry in LEGENDARY_REPLIES.items():
+    legendary_entries = () if history_question else LEGENDARY_REPLIES.items()
+    for trigger, entry in legendary_entries:
         if legendary_hit(trigger, user_msg):
             replies = entry.get("replies") or []
             if not replies:
                 continue
-            confirm_tpl = LEGENDARY_CONFIRMS.get(trigger)
-            if confirm_tpl:
-                if not _confirm_history:
-                    _confirm_history = "\n".join(get_user_history(user_id)[-4:])
-                if not await legendary_confirmed(user_msg, confirm_tpl, history=_confirm_history):
-                    print(f"[梗] 关键词 {trigger!r} 命中但 LLM 未确认，继续查后续触发词")
-                    continue  # 只跳过这一条；同句还可能命中别的更明确梗，别一并放弃
+            confirm_tpl = LEGENDARY_CONFIRMS.get(trigger) or (
+                f"判断用户本轮是否确实在向灰泽满触发「{trigger}」这类固定应答。\n"
+                f"候选回复：{json.dumps(replies, ensure_ascii=False)}\n"
+                "核对说的是谁、引用范围、否定和真实意图；不要因为出现关键词就确认。\n"
+                "当前消息：{msg}\n最近对话：{context}\n只回答是或否。")
+            if not _confirm_history:
+                _confirm_history = "\n".join(get_user_history(user_id)[-4:])
+            if not await legendary_confirmed(user_msg, confirm_tpl, history=_confirm_history,
+                                               context=turn_context):
+                continue
             reply = random.choice(replies)
+            if deferred_private:
+                result = Reply(reply)
+                result.memory_context = {
+                    "user_text": user_msg, "session_id": memory_scope_id, "reminder_hint": None,
+                }
+                return result
             # 梗匹配也记入短期记忆 + 异步长期记忆，避免后续对话"失忆"
             append_user_history(user_id, user_msg, reply,
                                 user_label=_user_label, reply_label=_reply_label)
@@ -1503,40 +1533,26 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
                 ))
             return reply
 
-    # --- 🔗 关联背景（作品 → 作者 → 喜好）---
-    # 用**用户原话**匹配已知实体，再补上本轮 probe 识别出的专名（未知作品 → 作者/地点）。
-    # 必须放在检索前：边上 has_preference 指向的偏好要并进偏好检索（如 东野 → author）。
-    # 识别不到实体、或走完没有可说的关系 → note 为空，后面什么都不注。
-    _assoc = resolve_associations(query_text, probe_meta.get("entities"))
-    if _assoc["note"]:
-        print(f"[关联] {_assoc['entities']} → {_assoc['note'][:40]}")
-
-    # 未知专名 → 萌娘百科按需查一次。与检索**并行**：3 秒的网络查通常被 embedding/检索盖住；
-    # 超时/查不到/已知词都返回空，主链路完全不受影响。
-    _wiki_task = None
-    if wiki_lookup_enabled() and probe_meta.get("entities"):
-        _known_wiki = _known_wiki_terms()
-        _known_wiki.update(_assoc.get("entities") or [])
-        _wiki_task = asyncio.create_task(
-            wiki_lookup.wiki_context_for(
-                query_text, probe_meta["entities"], _known_wiki))
-
-    # --- 🎭 人格规则 + 🔍 检索融合（query 只算 1 次 embedding）---
-    # 素材统一从 gather_retrieval 取（主动发言也走同一个入口，别再各拼一套）
+    # 各路候选在共享入口一次确认；关联与百科也不能只凭专名就放行。
     ctx = await gather_retrieval(query_text, retrieval_query, history_text,
-                                 deepseek_client, zhipu_client,
-                                 extra_preference_ids=_assoc["preference_ids"],
-                                 )
+                                 deepseek_client, zhipu_client, context=turn_context, **song_kwargs)
+    turn_context = ctx.get("context", turn_context)
+    if song_kwargs and (song_request := (ctx.get("l3") or {}).get("song_request")):
+        song_note, song_options = song_requests.plan_song(song_request, catalog, last_song(user_id))
+        song_context += "\n" + song_note
     fused_items = ctx["fused_items"]
     preference_items = ctx["preference_items"]
     core_stories = ctx["core_stories"]
     reminder_req = ctx.get("reminder")
 
     wiki_context = ""
-    if _wiki_task is not None:
+    if wiki_lookup_enabled() and ctx.get("wiki_entities"):
         try:
-            # 硬上限 6s：wiki 只是锦上添花，不能把正常回复拖住。
-            wiki_context = await asyncio.wait_for(_wiki_task, timeout=6.0)
+            wiki_context = await asyncio.wait_for(
+                wiki_lookup.wiki_context_for(
+                    query_text, ctx["wiki_entities"], _known_wiki_terms(),
+                    context=turn_context, allowed_entities=ctx["wiki_entities"],
+                    entity_mentions=ctx.get("entity_mentions")), timeout=6.0)
         except asyncio.TimeoutError:
             print("⚠️ wiki 查询超时（忽略，不阻塞回复）")
         except Exception as e:
@@ -1608,7 +1624,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     memory_ids: list = []   # 本轮实际注入的记忆 id（注入轨迹用；群聊为 空）
     if not is_group and memory_v2.injection_enabled():
         if v3:
-            card = _MEMORY_V2_STORE.build_state_card(user_id)
+            card = _MEMORY_V2_STORE.build_state_card(user_id, query=turn_context.query)
             if card:
                 card_text = card
                 state_stable = inj.T("state", "stable", lines=card)
@@ -1635,7 +1651,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
                     explicit=_explicit, zhipu_client=zhipu_client,
                     judge_client=deepseek_client, judge_model=_get_model_name(),
                     limit=2 if _explicit else 1,
-                    avoid_text=history_text,
+                    avoid_text=history_text, context=turn_context,
                 ),
                 timeout=4.0,
             )
@@ -1645,14 +1661,25 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
             if v3 and card_text:
                 # 同一件事既在稳定卡、又被事件检索捞到时：把时间并进卡里，事件不再重复注。
                 card_text, _events = memory_v2.merge_events_into_card(card_text, _events)
-                if card_text:
-                    state_stable = inj.T("state", "stable", lines=card_text)
+                state_stable = inj.T("state", "stable", lines=card_text) if card_text else ""
             if _events:
                 event_context = inj.T("events", "main", context=event_memory.render_context(_events))
-    # 称呼提示：用户这轮叫了 her_nickname 才注入；不做长期自称偏好。
+    # 称呼证据：本轮直接称呼或追问以往叫法/答复时按词召回。
     nickname_hint = ""
-    if not is_group and memory_v2.injection_enabled():
-        nickname_hint = _MEMORY_V2_STORE.nickname_hint(user_id, user_msg)
+    recall_context = ""
+    matched_nicknames: list[str] = []
+    if recall_enabled:
+        nickname_turn_ids: list[str] = []
+        nickname_hint = _MEMORY_V2_STORE.nickname_hint(
+            user_id, user_msg, history=user_history_timed, matched_terms=matched_nicknames,
+            source_turn_ids=nickname_turn_ids)
+        recall_context = memory_recall.build_recall_context(
+            _MEMORY_V2_STORE, user_id, user_msg,
+            nicknames=matched_nicknames, nickname_turn_ids=nickname_turn_ids,
+            reference_ids=quoted_message_ids,
+        )
+    if not is_group and memory_recall.is_commitment_question(user_msg):
+        reminder_req = None
     # 称呼预算：最近几轮她叫对方名字太多 → 这轮前置提醒别再叫。
     # **只对私聊**：群聊没有“单独对某个人称呼”的语境，切进来只会让她更奇怪。
     name_budget = "" if is_group else name_budget_note(user_id)
@@ -1671,6 +1698,14 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
             ritual_hint = _MEMORY_V2_STORE.build_ritual_hint(user_id, query_text)
     if not is_group and not v3:
         emotion_context = mood_note(user_id)
+
+    if not is_group:
+        # 词面触发只形成候选，避免引用/第三人台词强行触发个人仪式和回查。
+        hints = await filter_memory_hints(aux_client, turn_context, {
+            "commitment_context": commitment_context, "ritual_hint": ritual_hint,
+            "habit_hint": habit_hint, "nickname_hint": nickname_hint, "recall_context": recall_context})
+        commitment_context, ritual_hint, habit_hint, nickname_hint, recall_context = (
+            hints.get(key, "") for key in ("commitment_context", "ritual_hint", "habit_hint", "nickname_hint", "recall_context"))
 
     # v3 关系收口：时效内容（约定/习惯/称呼预算/昵称提示）并成一条【本轮提醒】放用户消息前。
     reminders_context = ""
@@ -1761,10 +1796,12 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
                           + (f"（更自然的反应：{_st}）" if _st else ""))
         print(f"[语用] {_pa} → {pragmatic_hint[:60]}")
     # 术语语境确认：confirm:true 的命中做一次便宜 LLM 判断，剔除误触词条（词→意思守卫）
-    denied_terms = await confirm_ambiguous_terms(user_msg, aux_client)
+    denied_terms = ctx.get("denied_terms")
     # 条目级注入轨迹：build 时填"实际注入了哪些块/条目"，回复生成后再补称呼是否被用，
     # 由下面统一落盘（只有 私/群 真实聊天路径写，和 block_hits 同一个闸）。
     injection_trace: dict = {}
+    if ctx.get("selection_trace"):
+        injection_trace["retrieval"] = ctx["selection_trace"]
     if pragmatic_hint:
         injection_trace.setdefault("values", {})["pragmatic"] = pragmatic_hint[:200]
     # 历史注入（2026-11-19）：私聊默认走 assistant 原生轮次，不再逐条转述。
@@ -1811,7 +1848,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         core_stories=core_stories,
         session_context=session_context, query_hint=query_hint,
         pragmatic_hint=pragmatic_hint,
-        denied_terms=denied_terms, group_context=group_context,
+        denied_terms=denied_terms, selected_terms=ctx.get("approved_terms"), group_context=group_context,
         history_gap_note=history_gap_note,
         prev_session_note="" if v3 else _prev_session_note,
         same_request=same_request_arg,
@@ -1819,21 +1856,23 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         emotion_context=emotion_context, daily_context=daily_context,
         user_transcript=user_transcript, nickname_hint=nickname_hint,
         log_hits=True, trace=injection_trace,
-        association_context=_assoc["note"], association_entities=_assoc["entities"],
+        association_context=ctx.get("association_context", ""),
+        association_entities=ctx.get("association_entities"),
         wiki_context=wiki_context,
         is_group=is_group, group_address_note=group_address_note,
         group_thread_note=group_thread_note, name_budget=name_budget,
         group_batch_note=group_batch_note,
         habit_hint=habit_hint, now_context=now_context, time_hint=time_hint,
-        prefetch_context=prefetch_context,
+        prefetch_context=prefetch_context, recall_context=recall_context,
         request_context=request_context, reminders_context=reminders_context,
         state_stable=state_stable, state_dynamic=state_dynamic,
         event_context=event_context,
-        show_actions=(get_flag("ACTION_TAGS", "1").strip().lower()
-                      not in ("0", "false", "no", "off")),
+        show_actions=show_actions, song_context=song_context,
     )
 
     # --- 🤖 调用大模型 ---
+    if timed_user_transcript:
+        messages[-1]["content"] = timed_user_transcript
     reply = await generate_reply(messages)
 
     # --- 🔁 复读机防护 ---
@@ -1842,7 +1881,8 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     # 检测到就强制"换动作"重生成：光"换个说法"不够，得 pivot——
     # 对方大概率在重复同一句/同一情绪，应认怂答应去做/自嘲/点破，而不是把解释再说一遍。
     recent_bot = [bot_line_text(ln) for ln in get_user_history(user_id) if is_bot_line(ln)]
-    if is_echo_reply(reply, recent_bot, window=8):
+    # 用户明确问时间时，同一分钟的答案可以和上一轮相同。
+    if not clock_question and is_echo_reply(reply, recent_bot, window=8):
         print(f"[防复读] 与最近自己说过的话重复『{reply[:20]}』，强制换说法")
         nudge = {
             "role": "system",
@@ -1858,7 +1898,8 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     # 「时间钩子」重复：熬夜场景下她反复拿"现在几点了/还不睡"当开头（逐字复读抓不到——
     # 说法不同、公共子串不够长）。触发条件很窄：**这条提了时间 且 最近两条里也提过**。
     # 只换一句更具体的提醒，重生 2 次；判据本身只认时间词，不碰她别的口癖。
-    if uses_time_hook(reply) and any(uses_time_hook(prev) for prev in recent_bot[-2:]):
+    if not clock_question and uses_time_hook(reply) and any(
+            uses_time_hook(prev) for prev in recent_bot[-2:]):
         print(f"[防复读] 又拿时间当切入点『{reply[:20]}』，换角度")
         nudge = {
             "role": "system",
@@ -1937,11 +1978,9 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
             injection_trace.setdefault("items", {})["memory"] = ids
         injection_trace["session"] = str(user_id)
         injection_trace["route"] = get_llm_route()
-        try:
-            nickname = _MEMORY_V2_STORE.her_nickname(user_id) if nickname_hint else ""
-        except Exception:
-            nickname = ""
-        injection_trace["reply_used_nickname"] = bool(nickname and nickname in reply)
+        if v3 and matched_nicknames:
+            injection_trace.setdefault("blocks", []).append("nickname")
+        injection_trace["reply_used_nickname"] = any(nickname in reply for nickname in matched_nicknames)
         log_injection_trace(injection_trace)
 
     # --- 💾 更新短期记忆（带锁）：图片消息把视觉描述记进去，后续才记得聊过什么图 ---
@@ -1958,12 +1997,25 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     # 动作标记（[[语音]] / [[表情:类别]]）先剥掉：它绝不能进记忆/转述/发送。
     # 剥出来的意图挂到 Reply 上，由 chat_window 执行（语音/表情包）。
     no_tag_reply, actions = extract_action_tags(reply)
+    if "song" in actions:
+        delivery = song_options.get(actions.pop("song"))
+        if delivery is not None and not song_requests.declined_song(no_tag_reply, delivery.mode):
+            actions["song"] = delivery
+        elif not no_tag_reply and not is_group:
+            no_tag_reply = ("这段没选好，你想听哪首呀？" if song_options
+                            else "刚刚那句没回好，能再说一下吗？")
     # 未点名的群聊批次：模型如果把内部标记说成了回复（「没点我」「（不说话，潜水）」），
     # 视为这批她不说话——只记用户侧，不发。点名后的“关我什么事”是正常斗嘴，不拦。
     if is_group and not group_addressed and is_meta_silence(clean_reply(no_tag_reply)):
         print("[群聊] 模型输出的是“没点名/潜水”式元回复 → 这批不发，只记用户侧")
         append_user_history(user_id, record_msg, "", user_label=_user_label)
         return ""
+    result = Reply(no_tag_reply, actions)
+    if deferred_private:
+        result.memory_context = {
+            "user_text": record_msg, "session_id": memory_scope_id, "reminder_hint": reminder_req,
+        }
+        return result
     cleaned_reply = clean_reply(no_tag_reply)
     append_user_history(user_id, record_msg, cleaned_reply,
                         user_label=_user_label, reply_label=_reply_label)
@@ -1979,4 +2031,4 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
             reminder_hint=reminder_req,
         ))
 
-    return Reply(no_tag_reply, actions)
+    return result

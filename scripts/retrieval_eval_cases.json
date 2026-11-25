@@ -1,8 +1,8 @@
 {
  "_readme": "检索层评测标注集 —— **唯一**的 query→期望 存储。跑法：`python scripts/run_tool.py retrieval-eval`（或 `scripts/retrieval_eval.py`）。2026-09-29 起 `scripts/judge_labels.json` 已并入本文件并删除（原来两份同源数据互相打架，见 _change_log）。**改这里就是改用例**，不用碰代码。⚠️ corpus 一路**镜像线上**：关键词门直通 + 门没放行的交 LLM 判（见 src/plugins/chatbot/corpus_judge.py）。",
- "_expect_strength": "四档从强到弱，按'你能确定到什么程度'选：should（钉具体 id）> contains（钉关键词）> should_fire（只要求该路非空，不钉是哪条）> should_not_hit（必须为空）。⚠️ **别把'现在返回的东西'钉成 should** —— 那是把现状当真理，是反过来的循环论证（本仓踩过：合成场景自测 8/8 却毫无意义）。说不出是哪条时用 should_fire 或 contains。",
+ "_expect_strength": "四档从强到弱，按'你能确定到什么程度'选：should（钉具体 id）> contains（钉关键词）> should_fire（只要求该路非空，不钉是哪条）> should_not_hit（必须为空）。⚠️ **别把'现在返回的东西'钉成 should** —— 那是把现状当真理，是反过来的循环论证（本仓踩过：合成场景自测 8/8 却毫无意义）。说不出是哪条时用 should_fire 或 contains。 must_not（禁止具体id）可独立使用，也可与should/contains/should_fire/should_not_hit同时要求成立（AND）；不支持的条件或缺失检查不能算通过。",
  "_routes": "behavior=该套哪个行为模式（LLM 分类）｜preference=该带哪条偏好（keywords 子串/pattern，含关联边的 has_preference）｜core_story=该带哪条核心记忆（向量）｜corpus=该不该唤起某段经历（门+LLM 判）｜associations=关联背景沿边走到的实体（作品/作者/地点）｜terms=命中并注入的名词库词条",
- "_source_vocab": "翻车=由真实翻车固化的回归｜真实对话=data/chat_log 里查到的｜标注集=从旧 judge_labels.json 并入（原是 41 条手工 want 标注）｜问题记录=问题驱动入口生成｜抽查=spot_check 勾选生成",
+ "_source_vocab": "脱敏模拟：用虚构问法保留原来的检索判据；语义对照候选与评测校准对照：另写的正负对照。",
  "_borderline": "`borderline: true` = **这条的期望本身就是我的判断，最该由人裁决**。它不影响评测判定，但 judge_experiment 会单独报数量——边界案例的标签直接决定'哪个判据赢'，所以要盯着它。",
  "_change_log": [
   "2026-09-29 合并：judge_labels.json 的 41 条去重后并入（11 条 query 与本文件原有条目重合，why 已合并）；judge_labels.json 删除。",
@@ -12,15 +12,20 @@
   "2026-09-29 删 co11/co12（「你在哪里直播」「什么平台的直播间」）：corpus 322 条里**没有任何一条**说她'在哪直播/什么平台'（16 条含'直播间'的都是别的语境），LLM 判 6 条候选也全拒——两条独立检查一致。这是**身份事实**、不是**经历**，两层归属都错了：该进骨架（已补进 persona/core/system_prompt.txt 的【身份与位置】：'直接说在 B站直播'），不该进检索评测。原标注是从旧 judge_labels 继承来的'她的日常/所在地'，**指了不存在的东西**。⚠️ 教训：从旧标注集继承条目时，要确认它指的素材**真的存在**。",
   "2026-09-29 取消 corpus 的「门放行直通」（n7 驱动）：门/钩子只决定候选，判定全交 LLM；候选补位**只看词面不看语义分**、按 ov 排序封顶 6 条（`CORPUS_LEXICAL_EXTRA_N`）。⚠️ **中途走过一条错路、已退回**：先试的是把 `CORPUS_KEYWORD_FLOOR` 0.12→0.5，结果挡住 n7 却把 co9/co10 一起打回红——因为**误报的 ov(0.40) 比真阳性 co9 的 ov(0.143) 还高**，阈值只是在拿一个换另一个（换 bigram 文档频率方向同样相反）。根因：词重叠拿不到「说的是谁」。**别再试调阈值了。**\n   另记一个写错的机制：起初写成'钩子挂了裸词直通'——**错**，钩子不参与放行。教训：改之前先把机制算清楚，别照着名字猜。",
   "2026-09-29 改 co10「你就说过最近直播里」的期望：**该唤起 → 不该唤起**（理由见该条 why）。同时补了 #42 的钩子 `学霸/男学霸` 修 co9（用户的说法不在生成器给的钩子里 → 该条进不了候选；钩子现在是合并式的，手补不会被重跑覆盖）。",
-  "2026-09-29 最终评测 **48 条 47 过**（corpus 19/19、behavior 14/14、preference 22/22、voice_sample 3/3、core_story 2/2；phrase 8/9）。唯一红的 `n4_tech` 是待用户裁决的『你这个声音是怎么调试的这么真实的啊』算不算被夸（phrase 的 brag_deny 跟着行为走）。",
-  "2026-09-29 n4「你这个声音是怎么调试的这么真实的啊」：用户裁决为**问技术 → 期望装傻**。骨架补了对应条目；行为层还没有『装傻』这一类，所以本用例仍红、标注为已知缺口。同轮用户确认 co10 保持『不该唤起』（我改的方向对）。",
-  "2026-10-20 加关联背景（associations）与名词库（terms）两路 + 4 条用例：作品名→作者→偏好、作者简称、动物→地点、天气负例。"
+  "2026-09-29 最终评测 **48 条 47 过**（corpus 19/19、behavior 14/14、preference 22/22、voice_sample 3/3、core_story 2/2；phrase 8/9）。唯一红的 `n4_tech` 是待用户裁决的『你的声音为什么这么自然，是怎么调出来的？』算不算被夸（phrase 的 brag_deny 跟着行为走）。",
+  "2026-09-29 n4「你的声音为什么这么自然，是怎么调出来的？」：用户裁决为**问技术 → 期望装傻**。骨架补了对应条目；行为层还没有『装傻』这一类，所以本用例仍红、标注为已知缺口。同轮用户确认 co10 保持『不该唤起』（我改的方向对）。",
+  "2026-10-20 加关联背景（associations）与名词库（terms）两路 + 4 条用例：作品名→作者→偏好、作者简称、动物→地点、天气负例。",
+  "2026-11-26 新增12条预先标注的跨语境语义对照：药物/食物、成语/真实动物、动森具体偏好、引用年龄、普通闲聊、指代下的匿名提问/糖果、只有has_preference边的别名、引用别名/催问。保留原52条原话与期望；新增must_not按AND执行。未根据模型输出回填期望。",
+  "2026-11-26 经资料与实际任务核查校准：原64题全部保留且原话不变；8条边界调整为必须/允许/禁止，新增5条强正对照。新增allowed范围约束及最终批准材料的facts覆盖；活袋鼠问题明确禁止corpus77袋鼠蛋，真实袋鼠蛋回忆保留正例。旧64原件和逐条独立理由存于outputs/retrieval_followup_2026-11-26；未根据当前模型输出回填标签，未执行新在线评测。",
+  "2026-11-26 袋鼠题第二次校准：保留69题及原话，仅移除as3亲历问句强制常识facts覆盖，继续禁止corpus77。旧smoke已拒绝77却仅因缺袋鼠背景词失败，原失败报告完整保留；这说明该问法应测亲历证据边界，不能据此宣称代码问题全部解决。新增1条明确问词义/澳洲关系的强正例，总70；空资料不能通过定义题。69版与逐条修订理由另存outputs/retrieval_followup_2026-11-26。",
+  "2026-11-26 pref6_late独立核查后校准：保留原话，routine由必须改为可选，同时增加真实熬夜活动corpus209/342及最终facts的强制AND检查；不是全空可过。原完整70题期望及在线结果另存，不将校准当成代码提升；co9和singer强正例不放宽。最终70题中，原64的55题期望不变、9题修订，另6题新增。",
+  "2026-11-26 公开版移除原会话输入，换成保留任务语义的虚构问法。旧的线上得分不适用于这一版公开数据。"
  ],
  "cases": [
   {
    "id": "b1_youxiao",
-   "query": "你是不是在敷衍我",
-   "source": "翻车",
+   "query": "你这回答是在敷衍我吧？",
+   "source": "脱敏模拟",
    "why": "被质疑 → 该套『心虚辩解』，不是讲道理",
    "expect": {
     "behavior": {
@@ -32,8 +37,8 @@
   },
   {
    "id": "b2_shishuo",
-   "query": "说好的八点直播呢？都八点四十了",
-   "source": "翻车",
+   "query": "原定八点开播，快九点了怎么还没来？",
+   "source": "脱敏模拟",
    "why": "失约被催 → 该套『认栽滑跪』",
    "expect": {
     "behavior": {
@@ -45,8 +50,8 @@
   },
   {
    "id": "b3_ge",
-   "query": "你怎么又鸽了，不是说这周不鸽吗",
-   "source": "翻车",
+   "query": "这回怎么也鸽了？本周说过不鸽呀。",
+   "source": "脱敏模拟",
    "why": "同上，换个说法进",
    "expect": {
     "behavior": {
@@ -58,8 +63,8 @@
   },
   {
    "id": "b4_pian",
-   "query": "你又在骗人吧",
-   "source": "翻车",
+   "query": "你这话又是在骗我吧？",
+   "source": "脱敏模拟",
    "why": "质疑 → 心虚辩解",
    "expect": {
     "behavior": {
@@ -71,8 +76,8 @@
   },
   {
    "id": "b5_kuajiang",
-   "query": "灰泽满你唱歌好好听！声音好甜",
-   "source": "翻车",
+   "query": "灰泽满的歌唱得太好听了，嗓音真甜！",
+   "source": "脱敏模拟",
    "why": "被夸 → 把夸奖调小（她的核心反应）",
    "expect": {
     "behavior": {
@@ -84,8 +89,8 @@
   },
   {
    "id": "b7_kua_voice",
-   "query": "你声音真的好甜啊",
-   "source": "回归案例",
+   "query": "你的声音听着特别甜。",
+   "source": "脱敏模拟",
    "why": "只夸声音也该走『被夸』",
    "expect": {
     "behavior": {
@@ -97,8 +102,8 @@
   },
   {
    "id": "b8_birthday",
-   "query": "生日快乐！要一直当16岁风纪委员哦",
-   "source": "回归案例",
+   "query": "生日快乐，十六岁的风纪委员！",
+   "source": "脱敏模拟",
    "why": "纯道贺 ≠ 被夸（2026-10-04：L3 规则明确生日快乐不判被夸，原期望已废）",
    "expect": {
     "behavior": {
@@ -108,8 +113,8 @@
   },
   {
    "id": "b9_yuejie",
-   "query": "给我们造个黄桃吧",
-   "source": "回归案例",
+   "query": "来讲一个带颜色的段子吧。",
+   "source": "脱敏模拟",
    "why": "越界请求 → 冷静推开",
    "expect": {
     "behavior": {
@@ -121,8 +126,8 @@
   },
   {
    "id": "b10_lengchang",
-   "query": "今天你在小群里成冷场大王了",
-   "source": "回归案例",
+   "query": "你今天在群里的话一说完，大家都不吱声了，冷场大王。",
+   "source": "脱敏模拟",
    "why": "冷场情景已删（2026-10-04：私聊是对方先说话，冷场是她自己的感受，不属 behaviors）——这条原本是那个删除的**负例**。\n2026-10-16 加了『被阴阳或调侃时』之后，这句话成了**正例**：'成冷场大王了' 就是在拐着弯损她。\n所以改成期望命中新格。**原来那条『冷场情景别回来』的意图仍然成立**——命中的不是冷场那条。",
    "expect": {
     "behavior": {
@@ -134,8 +139,8 @@
   },
   {
    "id": "b11_shizhiwen",
-   "query": "你昨晚怎么又没开播，说好的补呢",
-   "source": "回归案例",
+   "query": "昨晚说补一场直播，怎么没见你开？",
+   "source": "脱敏模拟",
    "why": "失约被催的第三种说法",
    "expect": {
     "behavior": {
@@ -147,8 +152,8 @@
   },
   {
    "id": "b12_chat",
-   "query": "今天午饭吃的啥",
-   "source": "回归案例",
+   "query": "你中午吃了什么？",
+   "source": "脱敏模拟",
    "why": "日常闲聊 → 2026-10-04 新建的『对方问日常时答一句自己的事』（原来期望不命中）",
    "expect": {
     "behavior": {
@@ -160,8 +165,8 @@
   },
   {
    "id": "b13_laugh",
-   "query": "哈哈哈哈笑死我了",
-   "source": "回归案例",
+   "query": "哈哈，这段太好笑了。",
+   "source": "脱敏模拟",
    "why": "纯情绪 → 不该套行为（对照：这不是需要她表态的场合）",
    "expect": {
     "behavior": {
@@ -171,8 +176,8 @@
   },
   {
    "id": "b14_kua_2",
-   "query": "灰泽满你好会唱啊",
-   "source": "回归案例",
+   "query": "灰泽满，你这歌唱得也太棒了。",
+   "source": "脱敏模拟",
    "why": "被夸的第三种说法（防只认固定句式）",
    "expect": {
     "behavior": {
@@ -184,8 +189,8 @@
   },
   {
    "id": "p1_brag",
-   "query": "你唱得真好听！",
-   "source": "回归案例",
+   "query": "刚刚这段你唱得太好听了。",
+   "source": "脱敏模拟",
    "why": "被夸 → 该套『被夸时把夸奖调小』（原判 brag_deny 措辞组；phrases 已并入 behaviors）",
    "expect": {
     "behavior": {
@@ -197,8 +202,8 @@
   },
   {
    "id": "p2_excuse",
-   "query": "你昨晚为什么没播",
-   "source": "回归案例",
+   "query": "昨晚没开播是怎么回事？",
+   "source": "脱敏模拟",
    "why": "被问不播 → 该套『失约被催时认栽滑跪』（原判 busy_excuse 措辞组；phrases 已并入 behaviors）",
    "expect": {
     "behavior": {
@@ -210,8 +215,8 @@
   },
   {
    "id": "pref1_food",
-   "query": "你喜欢吃什么呀",
-   "source": "标注集",
+   "query": "平常你最爱吃什么？",
+   "source": "脱敏模拟",
    "why": "直接问吃的 → 食物偏好",
    "expect": {
     "preference": {
@@ -223,8 +228,8 @@
   },
   {
    "id": "pref2_animals",
-   "query": "你怕不怕猫",
-   "source": "标注集",
+   "query": "你会害怕猫吗？",
+   "source": "脱敏模拟",
    "why": "猫 → 动物偏好",
    "expect": {
     "preference": {
@@ -236,8 +241,8 @@
   },
   {
    "id": "pref3_pokemon",
-   "query": "你会玩宝可梦吗",
-   "source": "标注集",
+   "query": "你玩不玩宝可梦？",
+   "source": "脱敏模拟",
    "why": "宝可梦 → 游戏偏好",
    "expect": {
     "preference": {
@@ -249,12 +254,12 @@
   },
   {
    "id": "pref4_mooncake",
-   "query": "中秋节了，hzm吃月饼了吗",
-   "source": "标注集",
-   "why": "问吃的 → 食物偏好。（原是 preference 子串法的漏报案例：keywords 里没有'吃'类泛词，靠 pattern `吃(?!(药|瓜…))` 兜住）",
+   "query": "今天过中秋，你吃过月饼了吗？",
+   "source": "脱敏模拟",
+   "why": "问当前吃没吃月饼；food仅有一般饮食偏好，无当日行为记录。可空或仅food，不据偏好编当前事实。",
    "expect": {
     "preference": {
-     "should": [
+     "allowed": [
       "food"
      ]
     }
@@ -262,12 +267,12 @@
   },
   {
    "id": "pref5_mooncake2",
-   "query": "好吧，hzm爱吃月饼吗",
-   "source": "标注集",
-   "why": "问爱吃什么 → 食物偏好（换说法）",
+   "query": "那你喜欢吃月饼吗？",
+   "source": "脱敏模拟",
+   "why": "未记录月饼喜恶；一般food可辅助但非必须，保留原题并以允许范围约束。",
    "expect": {
     "preference": {
-     "should": [
+     "allowed": [
       "food"
      ]
     }
@@ -275,21 +280,41 @@
   },
   {
    "id": "pref6_late",
-   "query": "你熬夜一般干啥",
-   "source": "标注集",
-   "why": "直接问作息 → 作息偏好",
+   "query": "你一般熬夜都在做什么？",
+   "source": "脱敏模拟",
+   "why": "问她熬夜做什么，实际活动见corpus209/342，须有至少一条进入最终可用事实；routine只描述夜猫子等稳定作息，可选。此校准不允许全空或仅作息背景通过；直接问作息的cal_personal_routine仍必须routine。证据与原期望保存在outputs/retrieval_followup_2026-11-26/pref6-co9-review-rationale.md。",
    "expect": {
     "preference": {
-     "should": [
+     "allowed": [
       "routine"
+     ]
+    },
+    "corpus": {
+     "should": [
+      "209",
+      "342"
+     ],
+     "contains": [
+      "熬夜直播",
+      "熬夜看比赛",
+      "熬夜刷手机"
+     ]
+    },
+    "facts": {
+     "should": [
+      "corpus:209",
+      "corpus:342"
+     ],
+     "contains": [
+      "熬夜"
      ]
     }
    }
   },
   {
    "id": "pref7_sleep",
-   "query": "你睡了吗",
-   "source": "标注集",
+   "query": "这会儿还没睡吗？",
+   "source": "脱敏模拟",
    "why": "作息话题 → 作息偏好",
    "expect": {
     "preference": {
@@ -301,27 +326,37 @@
   },
   {
    "id": "pref8_jellyfish",
-   "query": "真理X：/抓水母",
-   "source": "标注集",
-   "why": "水母 → 水母偏好。**边界案例**：这是群聊动作，算不算'提话题'由人裁决",
+   "query": "测试群友：/抓水母",
+   "source": "脱敏模拟",
+   "why": "原题是群游戏动作，补明确群聊上下文并允许可选jellyfish，不强制转讲她的童年；另加直接问她水母偏好的强正例。",
    "borderline": true,
    "expect": {
     "preference": {
-     "should": [
+     "allowed": [
       "jellyfish"
      ]
     }
+   },
+   "history": "群友正在用/抓水母指令玩群聊小游戏。这句是群友的游戏动作，没有点名灰泽满，也没有询问她的喜好。",
+   "is_group": true,
+   "addressed": false,
+   "probe_meta": {
+    "topic": "群聊小游戏",
+    "target": "群聊游戏动作",
+    "speech_act": "game_action",
+    "proposition": "群友触发游戏指令，并非向灰泽满提问喜好",
+    "pragmatic_confidence": 0.95
    }
   },
   {
    "id": "pref9_singer",
-   "query": "满神有没有那种说华流是最吊的，十张专辑封面全是欧洲的流行乐歌手推荐",
-   "source": "标注集",
-   "why": "歌手话题 → 喜欢的歌手。**边界案例**：问的是'推荐别人'不是'你喜欢谁'，但话题确实相关",
+   "query": "能推荐一位你喜欢的华语流行歌手吗？",
+   "source": "脱敏模拟",
+   "why": "复杂歌手线索推荐并非明确询问个人品味；允许singer作参考，但不强制。另加按她口味推荐的强正例。",
    "borderline": true,
    "expect": {
     "preference": {
-     "should": [
+     "allowed": [
       "singer"
      ]
     }
@@ -329,8 +364,8 @@
   },
   {
    "id": "pref11_recommend_song",
-   "query": "小满 给我推荐一首歌",
-   "source": "标注集",
+   "query": "能推荐一首歌给我听吗？",
+   "source": "脱敏模拟",
    "why": "⚠️ **这条的标签曾经三处不一致**（旧 judge_labels.json 写 true、同文件的内置兜底写 false、导出件写否）——合并的动机之一。现取 true（'要推荐=在问她的品味'，且 docs/评测与实验.md §2.3 的判据实验把它算作正例）。**若你判它该是 false，改这条 + 收窄 singer 的 pattern**",
    "expect": {
     "preference": {
@@ -342,8 +377,8 @@
   },
   {
    "id": "c1_wuse",
-   "query": "乌色月是什么呀",
-   "source": "回归案例",
+   "query": "能说说乌色月是什么吗？",
+   "source": "脱敏模拟",
    "why": "该带『写手梦』那条核心记忆",
    "expect": {
     "core_story": {
@@ -355,8 +390,8 @@
   },
   {
    "id": "c2_sanhao",
-   "query": "你以前是三好学生吗",
-   "source": "回归案例",
+   "query": "上学时你当过三好学生吗？",
+   "source": "脱敏模拟",
    "why": "该带『三好学生』那条核心记忆",
    "expect": {
     "core_story": {
@@ -368,8 +403,8 @@
   },
   {
    "id": "co1_nvtongxue",
-   "query": "你和女同学一起上学的事",
-   "source": "标注集",
+   "query": "讲讲你跟女同学结伴上学的那件事。",
+   "source": "脱敏模拟",
    "why": "明确指向她的经历 → 该唤起",
    "expect": {
     "corpus": {
@@ -381,8 +416,8 @@
   },
   {
    "id": "co2_nvshiyou",
-   "query": "你和室友关系怎么样",
-   "source": "标注集",
+   "query": "你和室友平时相处得怎样？",
+   "source": "脱敏模拟",
    "why": "在问她那边的情况 → 该唤起",
    "expect": {
     "corpus": {
@@ -395,8 +430,8 @@
   },
   {
    "id": "co3_neg_time",
-   "query": "9点是你那边",
-   "source": "翻车",
+   "query": "说的是你那边的九点。",
+   "source": "脱敏模拟",
    "why": "他在说时区、不是在问她室友。**泛负例**：corpus/preference/phrase 三路都不该被唤起（原 v3_neg_time 已并入本条）",
    "expect": {
     "corpus": {
@@ -409,8 +444,8 @@
   },
   {
    "id": "co4_neg_weather",
-   "query": "今天天气不错，出去走走吗",
-   "source": "翻车",
+   "query": "今天的天气挺好，要不要出去散步？",
+   "source": "脱敏模拟",
    "why": "聊天气、不是问她。**泛负例**：corpus/preference/phrase 都不该命中，behavior 也不该套（原 b6_neg 已并入本条）。⚠️ 注意 `rainy`（喜欢下雨天）**不该**因为'天气'两个字就命中",
    "expect": {
     "corpus": {
@@ -426,8 +461,8 @@
   },
   {
    "id": "co5_neg_lan",
-   "query": "灰泽满是不是很懒",
-   "source": "翻车",
+   "query": "灰泽满，你平常是不是有点懒？",
+   "source": "脱敏模拟",
    "why": "不是问她某段经历。**泛负例**（corpus/preference）。⚠️ **有意不给 behavior / phrase 加** —— '是不是很懒'是质疑，L3 判『被质疑戳穿时心虚辩解』不算错；而 phrase 的 `caught_deny`（被抓包时的否认）正是跟着这个行为走的措辞。2026-09-29 曾误把 phrase 也钉成不该命中，实测它开火是**对的**，已撤",
    "expect": {
     "corpus": {
@@ -440,8 +475,8 @@
   },
   {
    "id": "co6_shengao",
-   "query": "你多高啊",
-   "source": "翻车",
+   "query": "你的身高是多少？",
+   "source": "脱敏模拟",
    "why": "只有 LLM 判才能捞到的正例（余弦只有 0.443，被阈值挡）。她明明有身高这段经历",
    "expect": {
     "corpus": {
@@ -454,8 +489,8 @@
   },
   {
    "id": "co7_neg_meeting",
-   "query": "明天几点开会",
-   "source": "翻车",
+   "query": "明天的会议定在几点？",
+   "source": "脱敏模拟",
    "why": "句式像'她说过明天几点下课'，但不是一回事。**泛负例**（corpus/preference/phrase）",
    "expect": {
     "corpus": {
@@ -468,8 +503,8 @@
   },
   {
    "id": "co8_neg_cold",
-   "query": "感冒吃什么药",
-   "source": "翻车",
+   "query": "感冒了该买什么药？",
+   "source": "脱敏模拟",
    "why": "他在问药、不是问她感冒过（唤起就是'她会说我也感冒了'那种错）。**泛负例**（corpus/preference/phrase）。⚠️ 这条钉住 `food` 的 pattern 负向断言 `吃(?!(药|瓜|亏|苦|惊|醋|力))`",
    "expect": {
     "corpus": {
@@ -482,8 +517,8 @@
   },
   {
    "id": "co9_male_student",
-   "query": "你不是以前有喜欢的男学霸吗，你直播里说的",
-   "source": "标注集",
+   "query": "你直播提过以前喜欢的那个男学霸吗？",
+   "source": "脱敏模拟",
    "why": "明确指向她的经历 → 该唤起（说不出是哪条，所以只要求该路非空）",
    "expect": {
     "corpus": {
@@ -493,8 +528,8 @@
   },
   {
    "id": "co10_said_in_stream",
-   "query": "你就说过最近直播里",
-   "source": "标注集",
+   "query": "你前几天直播里说过这话。",
+   "source": "脱敏模拟",
    "why": "⚠️ **这条的期望被我改过，请你裁决**：原标注（从旧 judge_labels 继承）是'该唤起'（'明确指向直播内容'），2026-09-29 改成 **不该唤起**。\n理由：这句话**没有任何话题**——'你就说过最近直播里'只说了'你说过'、没说'说过什么'，判据无法判断用户指哪一段（实测：目标 #22 已递到判据面前，判据拒了）。这种情况下唤起任何一条，正是本项目最怕的『**想起错的**』。\n→ 它现在是和 n7 同族的**泛负例**：提到了'直播/说过'，但**没说是哪件事** **不该唤起**。\n⚠️ **若你判它该唤起**（用户就是想让想起某段、只是话说了一半），那需要的不是改这条，而是给'元指代'单开一条通道（比如检测'你直播里说的'→反问用户指哪件），那是链路改动。",
    "expect": {
     "corpus": {
@@ -504,8 +539,8 @@
   },
   {
    "id": "n1_voice",
-   "query": "我要听你的声音",
-   "source": "标注集",
+   "query": "能发条语音让我听听吗？",
+   "source": "脱敏模拟",
    "why": "求语音。**泛负例**：corpus/preference/phrase 都不该命中（有意不覆盖 behavior —— 这类请求算不算'越界'该由人判）",
    "expect": {
     "corpus": {
@@ -518,8 +553,8 @@
   },
   {
    "id": "n2_kiss",
-   "query": "亲一个嘛，亲一个，不亲我就跳了",
-   "source": "标注集",
+   "query": "就亲一下嘛，好不好？",
+   "source": "脱敏模拟",
    "why": "撒娇/越界 —— **只对 corpus/preference 泛负例**。⚠️ **有意不给 behavior / phrase 加**：L3 判『被说低俗或擦边时冷脸挡回』是对的，phrase 的 `speechless`（无语）也是跟着它走的措辞。2026-09-29 曾误钉 phrase，已撤",
    "expect": {
     "corpus": {
@@ -532,8 +567,8 @@
   },
   {
    "id": "n3_sticker",
-   "query": "能再发几个表情包吗满神",
-   "source": "标注集",
+   "query": "可以多发几个表情包吗？",
+   "source": "脱敏模拟",
    "why": "求表情包，与素材无关。**泛负例**（corpus/preference/phrase）",
    "expect": {
     "corpus": {
@@ -546,8 +581,8 @@
   },
   {
    "id": "n4_tech",
-   "query": "你这个声音是怎么调试的这么真实的啊",
-   "source": "标注集",
+   "query": "你的声音为什么这么自然，是怎么调出来的？",
+   "source": "脱敏模拟",
    "why": "⚠️ **你（用户）2026-09-29 的裁决**：这句**是问技术**——它问的是**真实世界的实现细节**（模型/参数/设备），已经**跳出了虚拟情境**；期望的回答是**装傻**，不是被夸。\n现状（未修完）：L3 判成『被夸时把夸奖调小』+ 措辞 `brag_deny` 跟着开火。**已做**：骨架【身份与位置】补了一条 `\"你这个声音怎么调的 / 用的什么模型\" → 装傻`（生成端从此会装傻）。\n**还缺**：行为层没有『装傻』这一类，所以 L3 仍会判『被夸』、`brag_deny` 仍会开火 —— 本用例因此**仍是红的，且是已知缺口**（要修得在 behaviors.json 加一条『被问真实世界技术细节 → 装傻』，那是行为层改动）。",
    "expect": {
     "corpus": {
@@ -560,8 +595,8 @@
   },
   {
    "id": "n5_sleepless",
-   "query": "睡不着好难过",
-   "source": "标注集",
+   "query": "明明很累却睡不着，有点难过。",
+   "source": "脱敏模拟",
    "why": "在倾诉情绪，不是问作息。**泛负例**（只声明被标过的两路 —— phrase 没标过，不凭空加）",
    "expect": {
     "corpus": {
@@ -574,8 +609,8 @@
   },
   {
    "id": "n6_laugh_emotion",
-   "query": "你笑死我了",
-   "source": "标注集",
+   "query": "你这句话把我逗乐了。",
+   "source": "脱敏模拟",
    "why": "纯情绪。**泛负例**（只声明被标过的两路）",
    "expect": {
     "corpus": {
@@ -588,16 +623,16 @@
   },
   {
    "id": "n7_early_sleep",
-   "query": "宝宝我明天要早起我先去睡了",
-   "source": "标注集",
-   "why": "用户在说自己、不是问她 → corpus 不该唤起；但作息话题确实相关 → preference 该命中（`routine`）。**同一条在两路上期望相反，不是矛盾**。**边界案例**：'用户在说自己'时到底算不算提了话题，由人裁决。\n⚠️ 2026-09-29 实测 corpus **确实召回了 #271**（'粉丝问她明天会不会早起…'）。机制**不是钩子**（钩子只负责把条目塞进候选池，从不参与放行）——是**联合门**：`ov(query,陈述)=0.40 ≥ 0.12` 且 `sim=0.505 ≥ 0.48`，两条都刚过线就**直通**，绕过了'是不是在问她'那次 LLM 判。重叠全来自 `明天`/`早起` 这两个一点都不区分的高频词。**已把 `CORPUS_KEYWORD_FLOOR` 0.12→0.5 挡住它**（不丢召回：门没放行的照样进候选池交 LLM 判）。",
+   "query": "明天要早起，我先睡了。",
+   "source": "脱敏模拟",
+   "why": "用户说自己的早睡安排，routine可选；corpus禁止保留。另配明确问她作息的强正例。",
    "borderline": true,
    "expect": {
     "corpus": {
      "should_not_hit": true
     },
     "preference": {
-     "should": [
+     "allowed": [
       "routine"
      ]
     }
@@ -605,8 +640,8 @@
   },
   {
    "id": "n8_miss_you",
-   "query": "我是特别特别想你的意思不是想死",
-   "source": "标注集",
+   "query": "我是在说想念你，不是在说想死。",
+   "source": "脱敏模拟",
    "why": "澄清情绪，不是问她经历",
    "expect": {
     "corpus": {
@@ -616,8 +651,8 @@
   },
   {
    "id": "n9_room_praise",
-   "query": "満神，我感觉你的直播间氛围太好了，就像在恬静的乡下和邻里聊家长里短",
-   "source": "标注集",
+   "query": "你的直播间气氛特别放松，就像邻居坐在一起聊天。",
+   "source": "脱敏模拟",
    "why": "夸奖直播间氛围，不是问她的经历 —— 长得像'她经历过什么'但其实是评价",
    "expect": {
     "corpus": {
@@ -627,8 +662,8 @@
   },
   {
    "id": "b17_capability",
-   "query": "你能看我转发的视频吗",
-   "source": "回归案例",
+   "query": "我把视频转发给你，你看得见吗？",
+   "source": "脱敏模拟",
    "why": "要她做做不到的事 → 『被推着要求时打太极』（2026-10-05 折进来）",
    "expect": {
     "behavior": {
@@ -640,8 +675,8 @@
   },
   {
    "id": "b18_help_study",
-   "query": "你能帮助我的学习吗",
-   "source": "回归案例",
+   "query": "你可以陪我复习功课吗？",
+   "source": "脱敏模拟",
    "why": "同上：要她做做不到的事",
    "expect": {
     "behavior": {
@@ -653,8 +688,8 @@
   },
   {
    "id": "as1_work_name",
-   "query": "你看过空中杀人事件吗",
-   "source": "标注集",
+   "query": "你读过《空中杀人事件》没有？",
+   "source": "脱敏模拟",
    "why": "用户只报作品名（实际说法是'空中杀人事件'）→ 关联边应接上《空中杀人现场》和东野，并把 author 偏好带进来",
    "expect": {
     "associations": {
@@ -672,50 +707,400 @@
   },
   {
    "id": "as2_author_alias",
-   "query": "东野",
-   "source": "标注集",
-   "why": "只报作者的简称（不是偏好关键词里的'东野圭吾'）→ 关联边补上 author 偏好",
+   "query": "你对东野怎么看？",
+   "source": "脱敏模拟",
+   "why": "必须带出author偏好及东野圭吾的最终可用信息，不强制重复association出口。",
    "expect": {
     "associations": {
-     "should": [
-      "东野圭吾"
+     "allowed": [
+      "东野圭吾",
+      "白夜行",
+      "真相"
      ]
     },
     "preference": {
      "should": [
       "author"
      ]
+    },
+    "facts": {
+     "contains": [
+      "东野圭吾"
+     ]
     }
    }
   },
   {
    "id": "as3_kangaroo",
-   "query": "你在澳洲见过袋鼠吗",
-   "source": "标注集",
-   "why": "动物→地点：关联背景给'袋鼠生活在澳洲'，名词库命中袋鼠词条；不得编她的亲身经历",
+   "query": "你本人在澳洲见过活的袋鼠吗？",
+   "source": "脱敏模拟",
+   "why": "本题问她本人是否见过活袋鼠，考的是亲身经历的证据边界。袋鼠在澳洲的常识不能证明她见过或没见过，因此资料可空；若采用关联或词条，仅限袋鼠/澳洲对象。corpus77是闻纪念品袋鼠蛋的事件，必须禁止用于此题。另有明确问袋鼠词义与澳洲关系的强正对照，不用此亲历题强制常识背景。",
    "expect": {
     "associations": {
-     "should": [
-      "袋鼠"
+     "allowed": [
+      "袋鼠",
+      "澳洲"
      ]
     },
     "terms": {
-     "should": [
-      "袋鼠"
+     "allowed": [
+      "袋鼠",
+      "澳洲"
+     ]
+    },
+    "corpus": {
+     "must_not": [
+      "77"
      ]
     }
    }
   },
   {
    "id": "as4_neg_weather",
-   "query": "今天天气怎么样",
-   "source": "标注集",
+   "query": "你那里今天的天气怎样？",
+   "source": "脱敏模拟",
    "why": "反向检查：普通闲聊不能被实体展开误触发",
    "expect": {
     "associations": {
      "should_not_hit": true
     }
    }
+  },
+  {
+   "id": "cx01_medicine_not_food",
+   "query": "我问吃药的注意事项，不是吃饭，也不是问你的饮食喜好。",
+   "source": "语义对照候选",
+   "why": "实际命题是药物服用；吃饭和饮食喜好仅出现在否定范围，不能把同一个‘吃’字当作食物偏好授权。这里不标注任何医疗答案。",
+   "expect": {
+    "preference": {
+     "should_not_hit": true
+    },
+    "corpus": {
+     "should_not_hit": true
+    },
+    "core_story": {
+     "should_not_hit": true
+    }
+   }
+  },
+  {
+   "id": "cx02_meal_food_positive",
+   "query": "今天只聊晚饭，你爱吃椰子鸡还是火锅？",
+   "source": "语义对照候选",
+   "why": "明确询问她的饮食喜好，food 条目直接包含椰子鸡和火锅；不能因为处理药物负例就压掉正常食物正例。",
+   "expect": {
+    "preference": {
+     "should": [
+      "food"
+     ]
+    },
+    "core_story": {
+     "should_not_hit": true
+    }
+   }
+  },
+  {
+   "id": "cx03_idiom_not_animals",
+   "query": "他那句‘猫哭耗子假慈悲’是在讽刺假好心，我只问这句成语什么意思。",
+   "source": "语义对照候选",
+   "why": "猫是成语中的修辞成分，实际讨论假慈悲的意思，不是在问现实猫狗或她的动物偏好。",
+   "expect": {
+    "preference": {
+     "should_not_hit": true
+    },
+    "core_story": {
+     "should_not_hit": true
+    }
+   }
+  },
+  {
+   "id": "cx04_real_animals_positive",
+   "query": "你现实里碰到猫狗会害怕吗，还是只愿意看照片云吸？",
+   "source": "语义对照候选",
+   "why": "明确区分现实接触与看照片，animals 条目正好说明这两种场景下的不同态度；这是动物偏好正例。",
+   "expect": {
+    "preference": {
+     "should": [
+      "animals"
+     ]
+    }
+   }
+  },
+  {
+   "id": "cx05_animal_crossing_specific",
+   "query": "只问《动物森友会》里的岛建与室内装修：你偏爱哪一个？不是泛问游戏，也不是聊现实动物。",
+   "source": "语义对照候选",
+   "why": "实际对象是动物森友会的具体玩法，game_animal提供对应喜好；同词产生的现实动物偏好不应带入本轮。正向命中与禁止animals必须同时成立。",
+   "expect": {
+    "preference": {
+     "should": [
+      "game_animal"
+     ],
+     "must_not": [
+      "animals"
+     ]
+    },
+    "core_story": {
+     "should_not_hit": true
+    }
+   }
+  },
+  {
+   "id": "cx06_quoted_age_not_person",
+   "query": "帮我翻译电影台词‘我今年16岁，你几岁？’，这句是在两个角色之间说的。",
+   "source": "语义对照候选",
+   "why": "引号内的年龄问句发生在电影角色之间，未在询问灰泽满的年龄、同期或童年经历。本评测只能确认无关资料未注入，不能据此声称已测年龄固定答复路由。",
+   "expect": {
+    "terms": {
+     "should_not_hit": true
+    },
+    "preference": {
+     "should_not_hit": true
+    },
+    "corpus": {
+     "should_not_hit": true
+    },
+    "core_story": {
+     "should_not_hit": true
+    }
+   }
+  },
+  {
+   "id": "cx07_casual_no_core_story",
+   "query": "我刚把桌面收拾干净了，终于能坐下来歇会儿。",
+   "source": "语义对照候选",
+   "why": "用户在说自己的日常，没有建立与她的三好学生、考试、上学、作家梦或旧友故事的关联；普通闲聊不应随意展开核心往事。",
+   "expect": {
+    "core_story": {
+     "should_not_hit": true
+    }
+   }
+  },
+  {
+   "id": "cx08_anaphoric_question_box",
+   "query": "那这个你看到了吗？",
+   "history": "用户：我往你的提问箱投了一条匿名问题。\n灰泽满：回头看一眼。",
+   "resolved_query": "我投进提问箱的匿名问题，你看到了吗？",
+   "probe_meta": {
+    "topic": "匿名提问",
+    "target": "投进她提问箱的匿名问题",
+    "speech_act": "question",
+    "proposition": "询问上一轮匿名问题是否被看到",
+    "pragmatic_confidence": 0.95
+   },
+   "source": "语义对照候选",
+   "why": "询问是否已读无需强制术语释义；保留原题和历史，棉花糖可选且core_story仍禁止；另加询问匿名问题叫什么的指代术语强正例。",
+   "expect": {
+    "terms": {
+     "allowed": [
+      "棉花糖"
+     ]
+    },
+    "core_story": {
+     "should_not_hit": true
+    }
+   }
+  },
+  {
+   "id": "cx09_anaphoric_candy_not_term",
+   "query": "那个太甜了，我吃不下。",
+   "history": "用户：我刚买了一袋棉花糖吃。\n灰泽满：甜不甜？",
+   "resolved_query": "刚买的棉花糖糖果太甜了，我吃不下。",
+   "probe_meta": {
+    "topic": "糖果口味",
+    "target": "刚买的棉花糖糖果",
+    "speech_act": "comment",
+    "proposition": "觉得糖果太甜而吃不下",
+    "pragmatic_confidence": 0.95
+   },
+   "source": "语义对照候选",
+   "why": "与 cx08 对照：指代仍清楚，但指的是食物，不能把补全中的棉花糖候选当作匿名提问义项。未把饮食偏好一并钉为负例，因为饮食话题关联可能成立。",
+   "expect": {
+    "terms": {
+     "should_not_hit": true
+    },
+    "core_story": {
+     "should_not_hit": true
+    }
+   }
+  },
+  {
+   "id": "cx10_alias_only_singer_preference",
+   "query": "周董的歌里，你最喜欢哪首？",
+   "source": "语义对照候选",
+   "why": "周董是周杰伦别名；原话没有 singer 的字面关键词。周杰伦实体仅有 has_preference 边而没有可渲染的关系句，仍应沿边召回 singer，再按本轮询问喜好确认适用。不能把空关系背景误当成没有偏好边。",
+   "expect": {
+    "preference": {
+     "should": [
+      "singer"
+     ]
+    },
+    "associations": {
+     "should_not_hit": true
+    },
+    "core_story": {
+     "should_not_hit": true
+    }
+   }
+  },
+  {
+   "id": "cx11_quoted_alias_not_topic",
+   "query": "代码测试里这一行只是字符串‘东野’，不用聊他的书或你的喜好。",
+   "source": "语义对照候选",
+   "why": "东野确实能生成作者候选，但仅作代码测试字符串出现，且明确排除了作者/喜好话题；别名命中不是展开关联和偏好的授权。",
+   "expect": {
+    "preference": {
+     "should_not_hit": true
+    },
+    "associations": {
+     "should_not_hit": true
+    },
+    "core_story": {
+     "should_not_hit": true
+    }
+   }
+  },
+  {
+   "id": "cx12_quoted_cue_not_behavior",
+   "query": "同事又鸽了，‘说好的九点呢’是我刚才质问他的原话，不是在催你。",
+   "source": "语义对照候选",
+   "why": "又鸽和说好的是候选线索，但催问对象是同事而非灰泽满；引用别人的失约不能套成她失约被催。只排除此一模式，不对其他反应公式作过强标注。",
+   "expect": {
+    "behavior": {
+     "must_not": [
+      "失约被催时认栽滑跪"
+     ]
+    },
+    "core_story": {
+     "should_not_hit": true
+    }
+   }
+  },
+  {
+   "id": "cal_jellyfish_preference",
+   "query": "你为什么喜欢水母呀？",
+   "source": "评测校准对照",
+   "why": "直接询问她对水母的喜好及缘由；现有jellyfish条目确实记录喜欢水母和童年缘由，属于必须提供的资料，与群游戏动作构成正反用途对照。",
+   "expect": {
+    "preference": {
+     "should": [
+      "jellyfish"
+     ]
+    }
+   }
+  },
+  {
+   "id": "cal_personal_routine",
+   "query": "你自己的作息一般怎样，是夜猫子还是早睡早起？",
+   "source": "评测校准对照",
+   "why": "明确询问她本人的作息，routine确有夜猫子、早上起不来的资料；与用户告知自己先睡的n7区分主体，保留强正例。",
+   "expect": {
+    "preference": {
+     "should": [
+      "routine"
+     ]
+    }
+   }
+  },
+  {
+   "id": "cal_personal_singer_recommendation",
+   "query": "按你自己最喜欢的歌手，给我推荐一个吧。",
+   "source": "评测校准对照",
+   "why": "明确要求按她自己的口味推荐；singer记录最喜欢周杰伦，必须使用，与复杂条件歌手推荐不强制个人品味形成对照。",
+   "expect": {
+    "preference": {
+     "should": [
+      "singer"
+     ]
+    }
+   }
+  },
+  {
+   "id": "cal_kangaroo_egg_memory",
+   "query": "还记得你朋友买的那个袋鼠蛋吗？你闻到后是什么反应？",
+   "source": "评测校准对照",
+   "why": "明确回忆她闻纪念品袋鼠蛋的真实事件；corpus77正有该事，须保留含袋鼠蛋和臭味反应的信息。它不能反过来证明她见过或没见过活袋鼠。",
+   "expect": {
+    "corpus": {
+     "contains": [
+      "袋鼠蛋"
+     ]
+    },
+    "facts": {
+     "contains": [
+      "袋鼠蛋",
+      "臭"
+     ]
+    }
+   }
+  },
+  {
+   "id": "cal_question_box_name",
+   "query": "刚才说的这种匿名问题，你们一般叫什么？",
+   "history": "用户：我往你的提问箱投了一条匿名问题。\n灰泽满：回头看一眼。",
+   "resolved_query": "投进提问箱的这种匿名问题，在直播里通常叫什么？",
+   "probe_meta": {
+    "topic": "匿名提问的叫法",
+    "target": "投进她提问箱的匿名问题",
+    "speech_act": "question",
+    "proposition": "询问直播语境中匿名问题的名称",
+    "pragmatic_confidence": 0.95
+   },
+   "source": "评测校准对照",
+   "why": "真正询问匿名提问的圈内叫法；历史和补全明确所指，棉花糖词条可直接回答。与只问是否已读的原cx08区分用途，不要求用户复述棉花糖才允许命中。",
+   "expect": {
+    "terms": {
+     "should": [
+      "棉花糖"
+     ]
+    },
+    "facts": {
+     "contains": [
+      "棉花糖",
+      "匿名提问"
+     ]
+    },
+    "core_story": {
+     "should_not_hit": true
+    }
+   }
+  },
+  {
+   "id": "cal_kangaroo_definition",
+   "query": "你们说的袋鼠这个词是什么意思，和澳洲是什么关系？不是问你见没见过。",
+   "source": "评测校准对照",
+   "why": "明确询问袋鼠词义及其与澳洲的关系，实际需要对应定义/关联资料。最终已批准信息须同时覆盖袋鼠与澳洲，可由袋鼠词条或关联背景提供，不强制重复渠道；仅澳洲或空结果都不能通过。corpus77袋鼠蛋既不定义动物也不说明该关系，仍禁止。",
+   "expect": {
+    "terms": {
+     "allowed": [
+      "袋鼠",
+      "澳洲"
+     ]
+    },
+    "associations": {
+     "allowed": [
+      "袋鼠",
+      "澳洲"
+     ]
+    },
+    "corpus": {
+     "must_not": [
+      "77"
+     ]
+    },
+    "facts": {
+     "contains": [
+      "袋鼠",
+      "澳洲"
+     ]
+    }
+   }
   }
- ]
+ ],
+ "_constraints": {
+  "allowed": "可空；非空结果的全部ID必须位于此列表，且与should/contains/must_not等同时成立。allowed=[]只允许空。",
+  "facts": "仅最终已批准/实际渲染的corpus、preference、core_story、terms、association文本；不含未批准候选、预算丢弃项或行为例句。",
+  "contains": "普通来源保留任一备选片段命中的旧语义；facts必须覆盖全部给定片段，可分布在多个已批准来源。",
+  "unavailable": "来源缺失、降级、无效或空正条件不能计作通过。"
+ }
 }

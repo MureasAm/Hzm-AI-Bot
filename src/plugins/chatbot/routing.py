@@ -12,6 +12,9 @@ import datetime
 from .constants import THINKING_DISABLED, LEGENDARY_FILE
 from .config import log_cache_usage, _get_clients, _get_model_name, extract_chat_content
 from .config import aux_clients_or, aux_model  # 辅助链（2026-10-29）
+from .llm_json import parse_json_object
+from .retrieval_context import CONTEXT_GUIDANCE, MATERIAL_SOURCES, RetrievalContext
+from .song_requests import parse_song_request
 from .term_hints import terms_hint_block
 
 _legendary_cache = None
@@ -73,10 +76,12 @@ def legendary_hit(trigger: str, msg: str) -> bool:
     return trigger in (msg or "")
 
 
-async def legendary_confirmed(user_msg: str, prompt_template: str, history: str = "") -> bool:
+async def legendary_confirmed(user_msg: str, prompt_template: str, history: str = "",
+                              context: RetrievalContext | None = None) -> bool:
     """LLM 判断关键词命中的消息是否真是目标梗的语境（双路由第二层，防误触发）。
 
-    关键词命中是低频事件，为它加一次便宜 LLM 判断成本可控；确认失败默认放行（不阻塞）。
+    关键词命中是低频事件，为它加一次便宜 LLM 判断成本可控。
+    共用语境下确认失败走普通生成；旧调用保留默认放行的兼容策略。
     """
     try:
         content = prompt_template
@@ -85,6 +90,9 @@ async def legendary_confirmed(user_msg: str, prompt_template: str, history: str 
         else:
             content = content.replace("{msg}", user_msg)
         content += terms_hint_block(user_msg)
+        if context is not None:
+            content += "\n\n【本轮共用语境】\n" + context.note()
+            content += "\n" + CONTEXT_GUIDANCE
         deepseek_client, _ = aux_clients_or(_get_clients)
         resp = await deepseek_client.chat.completions.create(
             model=aux_model(_get_model_name()),
@@ -95,11 +103,15 @@ async def legendary_confirmed(user_msg: str, prompt_template: str, history: str 
         )
         log_cache_usage(resp, "梗确认")
         c = extract_chat_content(resp)
-        # 确认模板要求只答"是/否"：以"是"开头且不是"不是/是不是"这类否定/疑问才放行
+        if context is not None:
+            # 问号保留：疑问或回显选项不构成肯定确认。
+            return c.strip().rstrip("。.!！").strip() == "是"
+        # 旧调用保留原来的前缀解析，兼容原确认策略。
         return c.startswith("是") and not c.startswith("不是") and not c.startswith("是不是")
     except Exception as e:
-        print(f"⚠️ 梗确认失败（默认放行）: {e}")
-        return True
+        strategy = "走普通生成" if context is not None else "默认放行"
+        print(f"⚠️ 梗确认失败（{strategy}）: {e}")
+        return context is None
 
 
 # ==================== 🎭 L3 意图分类（LLM 判意图，不再用 embedding 猜） ====================
@@ -112,27 +124,31 @@ async def legendary_confirmed(user_msg: str, prompt_template: str, history: str 
 #   · behavior 回答"该怎么做"（11 条）
 # 而措辞原本走向量检索，实测 100% 开火（trigger 是 6~13 字的**类别标签**，不是句子，
 # 余弦根本分不开）——用检索工具干分类的活。并进来 = 零额外调用 + 判据统一。
-BEHAVIOR_CLASSIFY_PROMPT = """你是{role_name}的意图分类器。判断用户刚发的这条消息落入哪些「已知情境」。只有明确匹配才选，拿不准一律不放（宁可不触发，不误触发）。
+_BEHAVIOR_CLASSIFY_BODY = """你是{role_name}的意图分类器。判断用户刚发的这条消息落入哪些「已知情境」。只有明确匹配才选，拿不准一律不放（宁可不触发，不误触发）。
 
 【行为】用户这条消息触发哪个行为场景？**最多选一个**（它决定{role_name}该怎么做）：
 {behavior_defs}
 
 行为判定要点：
 - 只看用户这条消息本身的内容和语气，结合最近对话判断语境。
+- 先确认谁在说话、评价谁、要求谁做什么，再按数据trigger绑定行为的主体与互动对象。
+  对方在与灰泽满交谈，不等于灰泽满在与第三人互动。需要同期、前辈或熟人的trigger，
+  必须有明确提及或可由最近对话追溯的对应人物；不能凭熟悉语气补出未出现的第三人。
 - **判据以每条 trigger 的描述为准**，下面是容易判错的地方，别再按关键词硬映射：
 - 「被夸」：用户在夸她或认可她本人（声音/表现/才能/用心），**不是随口道贺**。
   ⚠️ 「生日快乐」「祝你开心」这类纯祝福、以及「我考上了」这类用户自己的好消息，都不要判成被夸。
 - 「被质疑戳穿 / 失约被催」：用户在质问、戳穿、翻旧账、传她没说过的话，或催她没做到的事。
   如果消息里**既有催问又有质疑**，按哪个更重选一个（拿不准就不选）。
 - 「被说低俗或擦边时冷脸挡回」：内容带**低俗/擦边/黄段子/XP性质**，或用户**要她说一句带颜色的话**
-  （用户会这么说：'给我们造个黄桃吧''说句骚话'）。求交往、喊老公老婆、要啵啵这类**不含色情内容**，不算这一格。
+  （虚构示例：'来个擦边段子'）。求交往、喊老公老婆、要啵啵这类**不含色情内容**，不算这一格。
 - 「被起哄编故事加码」与「低俗擦边」的**区别在内容的性质，不在谁在起哄**：
   · 内容是**色情/擦边** → 低俗那条（她冷脸挡回）
-  · 内容是**荒诞编造、往她身上安离谱的假事**（说她怀孕了、说她昨晚没在家、把她口误往歪处带）→ 起哄编故事那条（她顺着玩）
+  · 内容是**荒诞编造、往她身上安离谱的假事**（假说她偷偷养了条龙、把她的口误编成离谱故事）→ 起哄编故事那条（她顺着玩）
   两者应对**相反**，判错就很假，拿不准时按「内容是不是色情」来分。
 - 「被真心对待」：用户**很认真地**感谢她、说在意她、关心她的情绪、深夜惦记她——是真心，不是玩笑。
   随口一句「谢谢」、普通寒暄不算。
-- 普通闲聊、提问、寒暄、表情、玩梗、单纯道贺、用户聊自己的事 → null。
+- 普通闲聊或玩梗也可能符合某条trigger，按当前提供的数据判断，不以消息形式一概排除。
+- 没有匹配的数据trigger才返回null，不要为了选行为编造参与者或互动关系。
 - 拿不准 → null。
 
 ★ 另外判一件事：**这是不是「连续第几轮在要同一件事」**（same_request）。
@@ -162,18 +178,71 @@ BEHAVIOR_CLASSIFY_PROMPT = """你是{role_name}的意图分类器。判断用户
 最近对话：
 {history}
 
-用户消息：{user_msg}
+用户消息：{user_msg}"""
 
-只输出 JSON：{{"behavior": "<行为name>" 或 null, "same_request": {{"what": 「在要什么」, "count": 连续轮数}}, "reminder": <提醒对象或 null>}}"""
+_LEGACY_OUTPUT_CONTRACT = """只输出 JSON：{{"behavior": "<行为name>" 或 null, "same_request": {{"what": 「在要什么」, "count": 连续轮数}}, "reminder": <提醒对象或 null>}}"""
+BEHAVIOR_CLASSIFY_PROMPT = _BEHAVIOR_CLASSIFY_BODY + "\n\n" + _LEGACY_OUTPUT_CONTRACT
+
+
+_ANSWER_SCOPES = frozenset({"conversation", "general_task"})
+
+RESPONSE_TASK_PROMPT = """【本轮任务与回答范围】
+不依赖候选内容，只根据用户原话和最近对话，判断本轮实际要问、聊或处理什么，以及互动对象是谁。
+task用一句话说明实际任务，scope只取conversation或general_task；输出结构见末尾唯一合同，不输出推理过程。
+task保留主体、否定和引用边界，不回答问题、不猜库里有什么，也不判断资料存在哪个来源。
+- conversation：默认范围。角色日常、个人事实、用户历史、自然联想或普通聊天均用它；
+  未知对象或含义不清时也用conversation，不可只凭知识问句的形态断定是通用任务。
+- general_task：只有明确是通用知识建议、操作求助或文本处理，且完成它不需要角色本人或当前用户的个人背景时才选。
+  用户要求结合个人事实或历史时不能选；不要因候选经历同话题而把通用任务改成讨论她的过去。
+范围不等于必须注入资料，具体材料会在下一步分别核对。行为判定与任务判定独立。"""
+
+
+def _context_output_contract(song_text: str) -> str:
+    schema = {"behavior": None, "same_request": {"what": "", "count": 1}, "reminder": None,
+              "task": "一句话说明本轮实际任务", "scope": "conversation"}
+    if song_text:
+        schema["song_request"] = None
+    return ("【唯一输出合同】\n" + json.dumps(schema, ensure_ascii=False)
+            + "\n以上字段全部必须出现；behavior只能填提供的行为name或null，scope只能填conversation或general_task。"
+              "按前述判据填写各字段，只输出一个完整JSON对象，不要代码围栏、解释或推理过程。")
+
+
+def _parse_l3_fields(parsed: dict, names: set, now: datetime.datetime, *, contextual: bool,
+                     song_text: str) -> dict:
+    raw_behavior = parsed.get("behavior")
+    if isinstance(raw_behavior, str) and raw_behavior.strip() == "null":
+        raw_behavior = None
+    behavior = str(raw_behavior or "").strip()
+    valid_behavior = "behavior" in parsed and (
+        raw_behavior is None or (isinstance(raw_behavior, str) and behavior in names))
+    result = {"behavior": behavior if behavior in names else "",
+              "same_request": _parse_same_request(parsed.get("same_request")),
+              "reminder": _parse_reminder(parsed.get("reminder"), now)}
+    if contextual:
+        raw_task, raw_scope = parsed.get("task"), parsed.get("scope")
+        task = raw_task.strip() if isinstance(raw_task, str) else ""
+        scope = raw_scope.strip() if isinstance(raw_scope, str) else ""
+        valid_task = bool(task) and scope in _ANSWER_SCOPES
+        result.update(
+            behavior=behavior if valid_behavior and behavior in names else "",
+            classification_ok=valid_behavior,
+            task=task if valid_task else "", scope=scope if valid_task else "",
+            needs=sorted(MATERIAL_SOURCES) if valid_task else [], needs_ok=valid_task,
+        )
+    if song_text:
+        result["song_request"] = parse_song_request(parsed.get("song_request"), song_text)
+    return result
 
 
 
 async def classify_l3(deepseek_client, user_msg: str, history_text: str,
-                      behaviors: list, now: datetime.datetime | None = None) -> dict:
+                      behaviors: list, now: datetime.datetime | None = None, *,
+                      context: RetrievalContext | None = None, song_text: str = "") -> dict:
     """一次调用判出：行为名（0/1 个）+ 连续索要轮数 + 可选定时提醒。
 
     返回 {"behavior": str, "same_request": {...}, "reminder": {...}|None}；
     **失败/拿不准返回空**（不触发任何东西）。返回的名字必须是数据里的真值（防模型编造）。
+    传入共用语境时额外返回 task、scope 及展开后的 needs/needs_ok；行为与任务分别校验。
 
     ⚠️ 判据措辞是本模块最要紧的东西（改词=改行为，实测过判据稍动结果就从 0% 跳到 74%）。
 
@@ -186,6 +255,9 @@ async def classify_l3(deepseek_client, user_msg: str, history_text: str,
     """
     now = now or datetime.datetime.now().astimezone()
     empty = {"behavior": "", "same_request": {"what": "", "count": 1}, "reminder": None}
+    if context is not None:
+        empty["classification_ok"] = False
+        empty.update(needs=[], needs_ok=False, task="", scope="")
     if not user_msg:
         return empty
 
@@ -202,39 +274,80 @@ async def classify_l3(deepseek_client, user_msg: str, history_text: str,
                 line += f"\n    例：{u}"
         defs.append(line)
 
-    prompt = BEHAVIOR_CLASSIFY_PROMPT.format(
+    template = _BEHAVIOR_CLASSIFY_BODY if context is not None else BEHAVIOR_CLASSIFY_PROMPT
+    prompt = template.format(
         behavior_defs="\n".join(defs) or "（无）",
         history=history_text or "（无）", user_msg=user_msg,
         role_name="灰泽满", now=now.isoformat(timespec="minutes"),
     )
     prompt += terms_hint_block(user_msg)
-    try:
-        resp = await deepseek_client.chat.completions.create(
-            model=_get_model_name(),
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0,
-            # ⚠️ 别调小：same_request + reminder 字段会让输出变长，40 token 会把 JSON 截断
-            # （实测 raw = '…"same_request": {"what": "要她说带颜色的话（造黄桃）' 断在这儿）
-            # → json.loads 报 "Expecting ',' delimiter"，而**每轮都调**，影响所有消息。
-            # GLM-5.3-Flash 强制思考时再留余量。
-            max_tokens=420,
-            **THINKING_DISABLED,
+    if context is not None:
+        prompt += "\n\n【本轮共用语境】\n" + context.note()
+        prompt += "\n" + CONTEXT_GUIDANCE
+        prompt += "\n\n" + RESPONSE_TASK_PROMPT
+    if song_text:
+        prompt += (
+            '\n\n【点歌判定】在同一个 JSON 添加 "song_request"。'
+            '只判断下面引号内的用户本人正文有没有当下请灰泽满唱或发歌。'
+            '上文仅用于识别指代及回答“想听哪首/要发完整版吗”这种追问；引用、转述、称赞、'
+            '问会不会唱、只说想听她唱歌、聊别人的歌、将来的邀约、取消或否定都返回 null。'
+            '如果同批前面点歌、后面撤销，按撤销。\n'
+            '有邀请时填 {"mode": "clip", "title": ""}，'
+            'title 写用户点的歌名原文（可以据用户明确认领的近轮选项回填），没点名留空。'
+            '说唱/哼、给两句、挑一首：clip；只有明确要求整首时填 full，是否点歌名都一样；'
+            '“刚才那首发完整版”“完整版呢”指刚发的唱段：recent_full；'
+            '“换一首”：another；要求从某时刻/某句开始或同首再来一段：other_part。'
+            '紧接在她明确询问“要发某首完整版吗”之后答应：full，并填那首歌名。'
+            '完整版默认也是语音条。只有用户本人本批明确提出要音频文件时，才在 full 或 recent_full 中加 "as_file": true。'
+            '\n用户本人正文：' + json.dumps(song_text, ensure_ascii=False)
         )
-        log_cache_usage(resp, "行为分类")
-        content = extract_chat_content(resp)
-        if "```json" in content:
-            content = content.split("```json")[1].split("```")[0].strip()
-        elif "```" in content:
-            content = content.split("```")[1].split("```")[0].strip()
-        parsed = json.loads(_repair_llm_json(content))
-        names = {b.get("name") for b in (behaviors or [])}
-        behavior = str(parsed.get("behavior") or "").strip()
-        return {"behavior": behavior if behavior in names else "",
-                "same_request": _parse_same_request(parsed.get("same_request")),
-                "reminder": _parse_reminder(parsed.get("reminder"), now)}
-    except Exception as e:
-        print(f"⚠️ L3 意图分类失败（降级不触发）: {e}")
-        return empty
+    if context is not None:
+        prompt += "\n\n" + _context_output_contract(song_text)
+    original_prompt = prompt
+    result = empty.copy()
+    seen_fields = set()
+    names = {b.get("name") for b in (behaviors or [])}
+    for attempt in range(2 if context is not None else 1):
+        try:
+            resp = await deepseek_client.chat.completions.create(
+                model=_get_model_name(),
+                messages=[{"role": "user", "content": prompt}],
+                **({"response_format": {"type": "json_object"}} if context is not None else {}),
+                temperature=0, max_tokens=420, **THINKING_DISABLED,
+            )
+        except Exception as error:
+            # HTTP/权限/传输错误由客户端原有降级链处理，不触发格式补救。
+            print(f"⚠️ L3 意图分类失败（保留已确认结果）: {error}")
+            return result
+        log_cache_usage(resp, "行为分类" if attempt == 0 else "行为分类格式补救")
+        try:
+            content = extract_chat_content(resp)
+            parsed = parse_json_object(_repair_llm_json(content))
+            incoming = _parse_l3_fields(parsed, names, now, contextual=context is not None,
+                                       song_text=song_text)
+        except (ValueError, TypeError, KeyError, RuntimeError, AttributeError, IndexError) as error:
+            reason = f"不是完整JSON对象：{type(error).__name__}"
+        else:
+            if context is None:
+                return incoming
+            if incoming["classification_ok"] and not result["classification_ok"]:
+                result.update(behavior=incoming["behavior"], classification_ok=True)
+            if incoming["needs_ok"] and not result["needs_ok"]:
+                for key in ("task", "scope", "needs", "needs_ok"):
+                    result[key] = incoming[key]
+            for key in ("same_request", "reminder", "song_request"):
+                if key in parsed and key in incoming and key not in seen_fields:
+                    result[key] = incoming[key]
+                    seen_fields.add(key)
+            if incoming["needs_ok"]:
+                return result
+            reason = "缺少非空字符串task或合法scope"
+        if context is not None and attempt == 0:
+            locked = {"behavior": result["behavior"] or None} if result["classification_ok"] else {}
+            prompt = (original_prompt + "\n\n【一次格式补救】上一轮" + reason
+                      + "。根据相同原话和上下文补齐唯一输出合同，只输出完整JSON，不要解释。"
+                      + "已确认字段保持不变：" + json.dumps(locked, ensure_ascii=False))
+    return result
 
 
 def _repair_llm_json(text: str) -> str:

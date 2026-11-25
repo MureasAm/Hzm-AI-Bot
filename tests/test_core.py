@@ -235,15 +235,15 @@ class TestNameOpener:
     """名字开头判据：只认"这条回复是不是拿用户的名字起手"，别的口癖一概不碰。"""
 
     def test_detects_name_at_start(self):
-        assert reply_style.starts_with_name("草草子哥，你说啥", "草草子哥")
-        assert reply_style.starts_with_name("（心虚）草草子哥……", "草草子哥")
+        assert reply_style.starts_with_name("星屿哥，你说啥", "星屿哥")
+        assert reply_style.starts_with_name("（心虚）星屿哥……", "星屿哥")
 
     def test_name_not_at_start_is_fine(self):
-        assert reply_style.starts_with_name("你说啥呢草草子哥", "草草子哥") is False
-        assert reply_style.starts_with_name("行行行", "草草子哥") is False
+        assert reply_style.starts_with_name("你说啥呢星屿哥", "星屿哥") is False
+        assert reply_style.starts_with_name("行行行", "星屿哥") is False
 
     def test_empty_name_never_fires(self):
-        assert reply_style.starts_with_name("草草子哥，你说啥", "") is False
+        assert reply_style.starts_with_name("星屿哥，你说啥", "") is False
 
     def test_strip_wrappers_gets_bare_name(self):
         """把 V2 里那些整句值剥成裸名字——**剥不干净守卫就会静默失效**。
@@ -257,7 +257,7 @@ class TestNameOpener:
             "用户自称四时小路": "四时小路",
             "用户自称阿梓": "阿梓",
             "用户要求被称为“爸爸”": "爸爸",
-            "用户希望被称呼为草草子，不叫hikami": "草草子",
+            "用户希望被称呼为星屿，不叫lumen_example": "星屿",
             "许流於": "许流於",          # 裸名字：原样返回
             "LG": "LG",
             "绿冻": "绿冻",
@@ -589,8 +589,11 @@ class TestHistoryGapNote:
         msgs = core.build_message_list(
             "灰宝在吗", [], [],
             nickname_hint="【称呼提示】用户这一轮叫你「灰宝」。",
+            recall_context="【原话回查】历史引文",
         )
         assert any(m["content"].startswith("【称呼提示】") for m in msgs)
+        assert {"role": "system", "content": "【原话回查】历史引文"} in msgs[-4:-1]
+        assert msgs[-1] == {"role": "user", "content": "灰宝在吗"}
 
     def test_user_transcript_overrides_trailing_vision_block(self, monkeypatch):
         """私聊 batch 用按顺序拼好的 transcript；不要再把图片描述追加成尾部块。"""
@@ -608,7 +611,7 @@ class TestLongReplyPreserved:
     """长回答不再被重写（2026-11-05 删除长度守卫）。
 
     踩坑：旧守卫超过 40 字就带提醒"短一半"重生成，把用户明确要的长回答**整段丢掉**，
-    真实聊天里表现为"我要说了→其实什么都没说"（905860780 实测：52 token 的段落被
+    真实聊天里表现为"我要说了→其实什么都没说"（旧路径可能把 52 token 的段落被
     重写成 15 token 的预告）。现在 max_tokens=400 只提供物理空间，长短由模型判断。
     """
 
@@ -820,10 +823,11 @@ class TestGroupEventAge:
 
         monkeypatch.setattr(core, "probe_session", fake_probe)
 
-        async def _no_intent(*a, **k):   # classify_l3 是 await 的
-            return {"behavior": "", "phrases": []}
+        async def fake_retrieval(*args, **kwargs):
+            return {"fused_items": [], "preference_items": [], "core_stories": []}
 
-        monkeypatch.setattr(core, "classify_l3", _no_intent)
+        # 群事件年龄取决于组装时刻，检索等待会让 60 秒的事件跨过 90 秒阈值。
+        monkeypatch.setattr(core, "gather_retrieval", fake_retrieval)
 
         captured = {}
 
@@ -833,9 +837,6 @@ class TestGroupEventAge:
 
         monkeypatch.setattr(core, "generate_reply", fake_reply)
         monkeypatch.setattr(core, "append_user_history", lambda *a, **k: None)
-
-        async def _noop(*a, **k):
-            pass
 
         await core.handle_chat("12345", "群里有啥好玩的", is_group=True)
 
@@ -1491,10 +1492,11 @@ class TestAssociationWiring:
             # 返回"纯情绪"扩充句 → gather_retrieval 直接跳过检索（最小 harness，不调外部）
             return ("用户发了个无语的表情", {"entities": ["东野圭吾"]})
 
-        def fake_resolve(text, extra=None):
-            seen["text"] = text
-            seen["extra"] = extra
-            return {"entities": [], "note": "", "preference_ids": []}
+        async def fake_retrieval(text, resolved, history, *clients, context=None, **kwargs):
+            seen["text"] = context.raw_text
+            seen["extra"] = list(context.entities)
+            return {"fused_items": [], "preference_items": [], "core_stories": [],
+                    "denied_terms": set(), "approved_terms": set()}
 
         async def fake_reply(messages):
             return "在呢"
@@ -1507,7 +1509,7 @@ class TestAssociationWiring:
 
         monkeypatch.setenv("MEMORY_V2_INJECT", "0")
         monkeypatch.setattr(core, "probe_session", fake_probe)
-        monkeypatch.setattr(core, "resolve_associations", fake_resolve)
+        monkeypatch.setattr(core, "gather_retrieval", fake_retrieval)
         monkeypatch.setattr(core, "generate_reply", fake_reply)
         monkeypatch.setattr(core, "get_user_history", lambda uid: [])
         monkeypatch.setattr(core, "get_last_turn_gap_seconds", lambda uid: None)
@@ -1588,7 +1590,18 @@ class TestLegendaryMemory:
         async def _noop(*a, **k):
             pass
 
+        async def fake_probe(uid, message, *args, **kwargs):
+            return message, {}
+
+        async def fake_confirm(*args, **kwargs):
+            return True
+
         monkeypatch.setattr(core, "append_user_history", fake_append)
+        monkeypatch.setattr(core, "_get_clients", lambda: (None, None))
+        monkeypatch.setattr(core, "aux_clients_or", lambda fallback: (None, None))
+        monkeypatch.setattr(core, "probe_session", fake_probe)
+        monkeypatch.setattr(core, "legendary_confirmed", fake_confirm)
+        monkeypatch.setattr(core, "spawn", lambda coro: coro.close())
 
         trigger = next(iter(core.LEGENDARY_REPLIES))  # 取一个真实梗
         await core.handle_chat("u", trigger)
@@ -1649,6 +1662,11 @@ class TestMemoryStoresCleanedReply:
 
         assert "\n" not in captured["reply"], "记忆里不该再有换行"
         assert captured["reply"].count("（") <= 1, "记忆里不该再有多个括号"
+
+        captured.clear()
+        result = await core.handle_chat("u", "可惜🤭", defer_memory=True)
+        assert captured == {}
+        assert result.memory_context["user_text"] == "可惜🤭"
 
 
 class TestClassifyBehavior:
@@ -1779,6 +1797,33 @@ class TestMemoryV2ShadowTask:
 
         monkeypatch.setattr(core, "_get_clients", fail_clients)
         assert await core.update_memory_v2_shadow_task("u", "😭", "咋了", "scope-a") == []
+
+    async def test_short_nicknames_record_use_and_only_related_reply(self, tmp_path, monkeypatch):
+        store = core.memory_v2.ShadowMemoryStore(
+            state_file=tmp_path / "memory_v2_shadow.json",
+            audit_file=tmp_path / "memory_v2_audit.jsonl",
+        )
+        monkeypatch.setattr(core, "_MEMORY_V2_STORE", store)
+        monkeypatch.setattr(core.memory_v2, "shadow_enabled", lambda: True)
+        monkeypatch.setenv("MEMORY_EXTRACT_GATE", "1")
+        client_initializations = []
+
+        def unexpected_clients():
+            client_initializations.append(True)
+            raise AssertionError("短称呼不应初始化模型客户端")
+
+        monkeypatch.setattr(core, "_get_clients", unexpected_clients)
+
+        await core.update_memory_v2_shadow_task("u", "姐姐", "今天让你叫一次姐姐。", "scope-a")
+        await core.update_memory_v2_shadow_task("u", "妈妈", "这么晚了可以叫滴滴。", "scope-a")
+
+        assert client_initializations == []
+        prior_names = store.nickname_hint("u", "我以前叫过你什么？")
+        assert "姐姐" in prior_names and "妈妈" in prior_names
+        sister = store.nickname_hint("u", "姐姐在吗")
+        assert "今天让你叫一次姐姐" in sister and "仅当时" in sister
+        mother = store.nickname_hint("u", "妈妈在吗")
+        assert "妈妈" in mother and "滴滴" not in mother and "同意" not in mother
 
 
 class TestEmotionOnlyQuery:

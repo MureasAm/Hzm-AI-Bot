@@ -17,6 +17,7 @@ import pytest
 
 from src.plugins.chatbot import proactive
 from src.plugins.chatbot import core
+from src.plugins.chatbot import reply_evidence
 from src.plugins.chatbot.proactive import compose_proactive, proactive_enabled
 from src.plugins.chatbot.retrieval import RetrievalItem
 
@@ -485,6 +486,7 @@ class _FakeBot:
 
     async def send_private_msg(self, user_id, message):
         self.sent.append((user_id, message))
+        return {"message_id": len(self.sent)}
 
 
 class TestDeliverProactiveVoice:
@@ -507,6 +509,9 @@ class TestDeliverProactiveVoice:
         assert calls and calls[0][2].find("十八点") >= 0
         assert len(bot.sent) == 1
         assert [seg.type for seg in bot.sent[0][1]] == ["image"]
+        [turn] = reply_evidence.recall_turns("123", role="assistant")
+        assert turn["reply"] == voice._tts_text(calls[0][2])
+        assert turn["parts"][0]["modality"] == "voice"
 
     async def test_voice_failure_falls_back_to_text_with_images(self, monkeypatch):
         from src.plugins.chatbot import voice
@@ -543,6 +548,9 @@ class TestDeliverProactiveVoice:
         mode = await proactive.deliver_proactive(bot, 123, "原文通知", voice=False)
         assert mode == "text"
         assert [seg.type for seg in bot.sent[0][1]] == ["text"]
+        [turn] = reply_evidence.recall_turns("123", role="assistant")
+        assert turn["reply"] == "原文通知"
+        assert turn["parts"][0]["message_id"] == "1"
 
 
 class TestImageMemoryNote:
@@ -629,11 +637,21 @@ class TestBroadcastProactive:
         monkeypatch.setattr(voice, "synthesize_voice", fake_synth)
         monkeypatch.setattr(voice, "send_voice_file", fake_send_file)
         monkeypatch.setattr(proactive, "append_bot_message", lambda *a: None)
-        bot = _FakeBot()
+        class PartiallyFailingBot(_FakeBot):
+            async def send_private_msg(self, user_id, message):
+                if user_id == "3":
+                    raise RuntimeError("QQ 发送失败")
+                return await super().send_private_msg(user_id, message)
+
+        bot = PartiallyFailingBot()
         stats = await proactive.broadcast_proactive(
-            bot, [1, 2], "今晚播", voice=True)
-        assert stats["text"] == 2 and stats["voice"] == 0
+            bot, [1, 2, 3], "今晚播", voice=True)
+        assert stats["text"] == 2 and stats["voice"] == 0 and stats["failed"] == 1
         assert len(bot.sent) == 2
+        for user_id in ("1", "2"):
+            [turn] = reply_evidence.recall_turns(user_id, role="assistant")
+            assert turn["reply"] == "今晚播" and turn["parts"][0]["modality"] == "text"
+        assert reply_evidence.recall_turns("3", role="assistant") == []
 
     async def test_unspeakable_text_skips_synthesis(self, monkeypatch):
         from src.plugins.chatbot import voice

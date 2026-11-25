@@ -26,10 +26,12 @@ def test_today_and_perception():
     assert "daily" in _kinds("我早上吃了鸡蛋")
     assert "daily" in _kinds("我今天干嘛了")
     assert "perception" in _kinds("现在几点了")
+    assert "perception" in _kinds("群友：[有人@了灰泽满] 北京时间几点钟啊？")
 
 
 def test_no_false_positive():
-    for msg in ("我好想你", "晚安", "我每天跑步", "我喜欢的颜色是蓝色", "冷静一下"):
+    for msg in ("我好想你", "晚安", "我每天跑步", "我喜欢的颜色是蓝色", "冷静一下",
+                "明天几点开播？", "昨天几点了？", "现在几点开播？"):
         assert nt.requests_for(msg) == [], msg
 
 

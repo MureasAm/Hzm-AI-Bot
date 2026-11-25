@@ -2,6 +2,7 @@
 import asyncio
 import inspect
 import time
+from datetime import datetime, timezone
 
 import pytest
 
@@ -79,6 +80,65 @@ class TestSenderName:
 
 
 class TestFlush:
+    async def test_private_memory_keeps_acknowledged_prefix_when_send_fails(self, monkeypatch):
+        win = cw._UserWindow("u1")
+        win.pending = [("u1", "这次能答应吗", [])]
+        win.pending_meta = [{"ts": 123.0, "message_id": "incoming-1", "quoted_message_id": "quoted-1"}]
+        sent, recorded, extracted = [], [], []
+        extraction_done = asyncio.Event()
+
+        async def fake_handle(uid, text, **kwargs):
+            assert kwargs["defer_memory"] is True
+            assert kwargs["quoted_message_ids"] == ("quoted-1",)
+            reply = core.Reply("今天可以。以后也一直可以。")
+            reply.memory_context = {"user_text": text, "session_id": "scope-a"}
+            return reply
+
+        async def fake_summary(msgs):
+            return ""
+
+        async def fake_send(win, content):
+            sent.append(content)
+            if len(sent) == 2:
+                raise RuntimeError("second part failed")
+            return "outgoing-1"
+
+        def fake_record(uid, turn_id, part_index, text, **kwargs):
+            recorded.append((uid, turn_id, part_index, text, kwargs))
+            return True
+
+        async def fake_extract(uid, message, reply, session, **kwargs):
+            assert kwargs["delivery_verified"] is True
+            extracted.append((uid, message, reply, session, kwargs["source_turn_id"]))
+            extraction_done.set()
+
+        monkeypatch.setattr(cw, "handle_chat", fake_handle)
+        monkeypatch.setattr(cw, "summarize_batch", fake_summary)
+        monkeypatch.setattr(cw, "_send", fake_send)
+        monkeypatch.setattr(cw, "should_voice", lambda *a, **k: False)
+        monkeypatch.setattr(cw, "split_reply", lambda reply: ["今天可以", "以后也一直可以"])
+        monkeypatch.setattr(cw, "split_delay", lambda part: 0)
+        monkeypatch.setattr(cw, "SPLIT_REPLY_ENABLED", True)
+        monkeypatch.setattr(cw.reply_evidence, "record_part", fake_record)
+        monkeypatch.setattr(cw, "update_memory_v2_shadow_task", fake_extract)
+
+        with pytest.raises(RuntimeError, match="second part failed"):
+            await cw._flush(win)
+        await asyncio.wait_for(extraction_done.wait(), timeout=1)
+
+        assert sent == ["今天可以", "以后也一直可以"]
+        [(uid, turn_id, part_index, text, metadata)] = recorded
+        assert turn_id and (uid, part_index, text) == ("u1", 0, "今天可以")
+        assert metadata["message_id"] == "outgoing-1"
+        assert not metadata["incoming"]
+        [received] = cw.reply_evidence.recall_turns("u1", turn_ids=[turn_id], role="user")
+        assert received["incoming"] == [
+            {"message_id": "incoming-1", "t": 123.0, "text": "这次能答应吗"},
+        ]
+        assert cw.get_user_history("u1") == ["用户：这次能答应吗", "灰泽满：今天可以"]
+        assert extracted == [("u1", "这次能答应吗", "今天可以", "scope-a", turn_id)]
+        assert win.pending == []
+
     async def test_flush_combines_and_splits(self, monkeypatch):
         win = cw._UserWindow("u1")
         win.pending = [("u1", "在吗", []), ("u1", "天气咋样", [])]
@@ -115,6 +175,43 @@ class TestFlush:
         assert captured["vision"] == ""
         assert captured["summary"] == "用户在问候并问天气"
         assert sent == ["灰泽满今天嗓子特别不舒服……", "明天就想早点下播休息一下"]  # 拆分 + 去句号
+
+    async def test_private_batch_prefixes_each_event_once_without_changing_raw_text(self, monkeypatch):
+        win = cw._UserWindow("u1")
+        win.pending = [
+            ("u1", "我刚下班\n给你看", []),
+            ("u1", "", [("http://a", "fa"), ("http://b", "fb")]),
+        ]
+        win.pending_meta = [
+            {"ts": datetime(2026, 11, 25, 15, 59, 58, tzinfo=timezone.utc).timestamp()},
+            {"ts": datetime(2026, 11, 25, 16, 0, 2, tzinfo=timezone.utc).timestamp()},
+        ]
+        captured = {}
+
+        async def fake_handle(uid, text, *, user_transcript, timed_user_transcript="", **kwargs):
+            captured.update(text=text, raw=user_transcript, timed=timed_user_transcript)
+            return ""
+
+        async def fake_summarize(messages):
+            captured["summary_input"] = messages
+            return ""
+
+        async def fake_describe(bot, url, file):
+            return {"http://a": "一张猫", "http://b": "一张狗"}[url]
+
+        monkeypatch.setattr(cw, "handle_chat", fake_handle)
+        monkeypatch.setattr(cw, "summarize_batch", fake_summarize)
+        monkeypatch.setattr(cw, "_describe_image_src", fake_describe)
+
+        await cw._flush(win)
+
+        assert captured["text"] == "我刚下班\n给你看"
+        assert captured["raw"] == "我刚下班\n给你看\n[图片：一张猫]\n[图片：一张狗]"
+        assert captured["summary_input"] == [("我刚下班\n给你看", ""), ("", "一张猫；一张狗")]
+        assert captured["timed"] == (
+            "[北京时间 11月25日 23:59] 我刚下班\n给你看\n"
+            "[北京时间 11月26日 00:00] [图片：一张猫]\n[图片：一张狗]"
+        )
 
     async def test_flush_reads_image_at_reply_time(self, monkeypatch):
         win = cw._UserWindow("u2")
@@ -421,13 +518,49 @@ class TestVoiceSurvivesInterrupt:
 
     async def test_cancel_during_synthesis_still_delivers_voice(self, monkeypatch):
         win, sent, voice_done, started = await self._setup(monkeypatch)
+        allow_send, extraction_done = asyncio.Event(), asyncio.Event()
+        evidence, extracted = [], []
+
+        async def fake_handle(uid, text, **kwargs):
+            reply = core.Reply("hzm（想了一下）今晚可以这样叫")
+            reply.memory_context = {"user_text": text, "session_id": "scope-a"}
+            return reply
+
+        async def delayed_voice(bot, target_id, is_private, reply):
+            started.set()
+            await allow_send.wait()
+            voice_done.append(reply)
+            return True
+
+        def fake_record(uid, turn_id, part_index, text, **kwargs):
+            evidence.append((turn_id, part_index, text, kwargs["modality"]))
+            return True
+
+        async def fake_extract(uid, message, reply, scope, **kwargs):
+            assert kwargs["delivery_verified"] is True
+            extracted.append((reply, kwargs["source_turn_id"]))
+            extraction_done.set()
+
+        monkeypatch.setattr(cw, "handle_chat", fake_handle)
+        monkeypatch.setattr(cw, "send_voice", delayed_voice)
+        monkeypatch.setattr(cw.reply_evidence, "record_part", fake_record)
+        monkeypatch.setattr(cw, "update_memory_v2_shadow_task", fake_extract)
+
         task = asyncio.create_task(cw._flush(win))
         await started.wait()          # 合成已开始
         task.cancel()                 # 用户此时插话
         with pytest.raises(asyncio.CancelledError):
             await task
-        await asyncio.sleep(0.15)     # 让 shield 的内层跑完
-        assert voice_done, "语音已经合成好了，插话取消不该让它发不出去（用户会什么都收不到）"
+        assert cw.get_user_history("u9") == []
+        assert evidence == [] and extracted == []
+        allow_send.set()
+        await asyncio.wait_for(extraction_done.wait(), timeout=1)
+        assert voice_done and sent == []
+        [(turn_id, part_index, spoken, modality)] = evidence
+        assert turn_id and (part_index, spoken, modality) == (0, "灰泽满今晚可以这样叫", "voice")
+        assert extracted == [(spoken, turn_id)]
+        assert cw.get_user_history("u9") == ["用户：在吗", f"灰泽满：{spoken}"]
+        assert core.get_user_history_entries("u9")[-1]["modality"] == "voice"
 
     async def test_superseded_before_synthesis_skips_voice(self, monkeypatch):
         """起跑后已被新消息取代 → 不占 GPU 合成（合成完也送不出去）。"""

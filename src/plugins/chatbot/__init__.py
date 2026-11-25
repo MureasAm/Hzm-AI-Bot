@@ -15,9 +15,9 @@
 """
 import asyncio
 import ast
+import mimetypes
 import re
 import time
-from pathlib import Path
 
 from nonebot import get_driver, on_message, on_request, on_type
 from nonebot.adapters.onebot.v11 import (
@@ -226,6 +226,20 @@ _QUOTE_SEG_WHAT = {
 # （NapCat 对卡片类消息有时给 `json`/`file`/`video` 段——不在 _extract_forward_text 的
 #  识别范围内，于是正文为空、又没有图，整条消息就一声不响地没了）
 _UNKNOWN_SEG_HINT = dict(_QUOTE_SEG_WHAT, json="一张卡片（可能是分享/转发卡片）")
+
+
+def _audio_attachment_name(segment) -> str:
+    """从文件段取音频文件名。"""
+    if segment.type != "file":
+        return ""
+    name = segment.data.get("name") or segment.data.get("file_name") or segment.data.get("file")
+    if not isinstance(name, str):
+        return ""
+    name = name.strip()
+    if not name.isprintable() or any(sep in name for sep in ("/", "\\")):
+        return ""
+    media_type, _ = mimetypes.guess_type(name)
+    return name[:200] if media_type and media_type.startswith("audio/") else ""
 
 
 def _extract_quote_text(event, forward_detail: str = "") -> str:
@@ -526,8 +540,18 @@ async def _extract_forward_text(event, bot) -> str:
 
 @chat.handle()
 async def _handle_chat(bot: Bot, event: Event):
+    authored_order = time.monotonic_ns()
+    user_id = event.get_user_id()
+    self_id = str(getattr(event, "self_id", None) or getattr(bot, "self_id", None) or "")
+    sender_id = getattr(getattr(event, "sender", None), "user_id", None)
+    # 私聊回报可能在 user_id 里携带会话对端，sender 才是消息作者。
+    if self_id and self_id in (str(user_id), str(sender_id)):
+        return
+
+    event_time = float(getattr(event, "time", 0) or time.time())
     msg = event.get_message()
     user_msg = msg.extract_plain_text().strip()
+    authored_text = user_msg
     image_sources = _extract_image_sources(msg)
     face_text = _extract_face_text(msg)
 
@@ -563,17 +587,19 @@ async def _handle_chat(bot: Bot, event: Event):
     # 所以她永远不知道"这样"指什么，只能回一句"调成哪样啊"。
     # 现在给个占位提示：她至少知道"对方发了个我解析不出来的东西"，可以反问。
     if not user_msg and not image_sources:
-        unknown = [seg.type for seg in msg
+        unknown = [seg for seg in msg
                    if seg.type not in ("text", "at", "reply", "image", "face")]
-        if unknown:
-            what = "、".join(dict.fromkeys(_UNKNOWN_SEG_HINT.get(t, f"{t} 段") for t in unknown))
-            print(f"[收到消息] ⚠️ 只含未识别的段 {unknown} → 注入占位提示（否则这条会静默消失）")
+        if len(unknown) == 1 and (audio_name := _audio_attachment_name(unknown[0])):
+            user_msg = f"[对方发来音频文件「{audio_name}」，未读取音频内容]"
+        elif unknown:
+            types = [seg.type for seg in unknown]
+            what = "、".join(dict.fromkeys(_UNKNOWN_SEG_HINT.get(t, f"{t} 段") for t in types))
+            print(f"[收到消息] ⚠️ 只含未识别的段 {types} → 注入占位提示（否则这条会静默消失）")
             user_msg = f"[对方发来{what}，但内容没能解析出来——看不懂就问他发了什么]"
 
     if not user_msg and not image_sources:
         return  # 真正空消息（无文字无图片无表情），不回复
 
-    user_id = event.get_user_id()
     target_id = str(user_id if is_private else getattr(event, "group_id", ""))
     print(f"[收到消息] user={user_id}, msg={user_msg[:40]!r}, "
           f"img={len(image_sources)}张, "
@@ -584,5 +610,8 @@ async def _handle_chat(bot: Bot, event: Event):
     # 读秒窗口（方案B）：攒批 + 静默后统一回复（含读图/归纳/分批发送）
     # target_id=会话标识（私聊=user_id，群聊=group_id），群聊按群攒批实现多人对话
     chat_window.enqueue(target_id, user_id, user_msg, image_sources, bot, is_private,
-                        ts=float(getattr(event, "time", 0) or time.time()),
-                        message_id=str(getattr(event, "message_id", "") or ""))
+                        ts=event_time,
+                        message_id=str(getattr(event, "message_id", "") or ""),
+                        authored_text=authored_text, authored_order=authored_order,
+                        quoted_message_id=str(getattr(getattr(event, "reply", None), "message_id", "") or "")
+                        if is_private else "")

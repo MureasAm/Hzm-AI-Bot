@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """v3 frame：时间拆分、预取消息、相处方式不含事实。"""
 import json
+from datetime import datetime
 
 from src.plugins.chatbot import context_probe, core, memory_v2
 
@@ -125,7 +126,7 @@ def test_state_card_includes_family_habits_and_recent(tmp_path):
     p = tmp_path / "state.json"
     p.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
     store = memory_v2.ShadowMemoryStore(state_file=p)
-    card = store.build_state_card("u")
+    card = store.build_state_card("u", now=datetime(2026, 11, 19, 10))
     assert "家人：有个妹妹在读高中" in card
     assert "习惯：他每天早上" in card
     assert "近况：今天买的新游戏开服了" in card

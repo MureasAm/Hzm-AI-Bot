@@ -2,7 +2,7 @@
 """记忆库卫生：去重、补 key、修掉一次性状态占着习惯槽的坏数据。
 
 只做**确定性**动作，不调模型：
-  1. 同一个 (kind, key) 有多条活着的记录 -> 只留最新，其余标 superseded；
+  1. 同一个单值 (kind, key) 有多条活着的记录 -> 只留最新，其余标 superseded；
   2. 裸 `habit` 按内容改成具体 `habit_*`，并补结构化字段；
   3. 两个已知坏槽：215 的「睡前要摸摸」被「已经洗完澡躺床上了」顶掉；
   4. 215 的旧 `morning_running` 与 `habit_morning_run` 重复。
@@ -57,7 +57,7 @@ def _single_slot(m: dict) -> bool:
     key = str(m.get("key") or "")
     if kind in {"interaction_preference", "request", "commitment"}:
         return True
-    return (kind == "fact" and (key in mv._SINGLE_VALUED_FACT_KEYS
+    return (kind == "fact" and key != "her_nickname" and (key in mv._SINGLE_VALUED_FACT_KEYS
                                 or key.startswith("habit_")
                                 or m.get("temporal_scope") == "current"))
 
@@ -102,31 +102,6 @@ def repair(state: dict, *, now: datetime | None = None) -> dict:
             changes.append({"user": uid, "action": "bare_habit_renamed",
                             "old_key": "habit", "new_key": new_key,
                             "old_id": old_id, "new_id": m["id"], "revived": revived})
-
-        # 2) 已知坏槽：215 的睡前摸摸被一次性状态顶掉
-        if uid == "2151983431":
-            for m in memories:
-                key = str(m.get("key") or "")
-                if key != "habit_user_bedtime_comfort_seeking":
-                    continue
-                value = str(m.get("value") or "")
-                if value.strip() == "已经洗完澡躺床上了" and _alive(m):
-                    m["status"] = "superseded"
-                    m["invalidated_at"] = now_iso
-                    changes.append({"user": uid, "action": "stale_one_off_superseded",
-                                    "key": key, "value": value})
-                elif "索要摸摸" in value and m.get("status") == "superseded":
-                    m["status"] = "confirmed"
-                    m.pop("invalidated_at", None)
-                    changes.append({"user": uid, "action": "habit_restored",
-                                    "key": key, "value": value})
-            for m in memories:
-                if (str(m.get("key") or "") == "morning_running"
-                        and _alive(m) and str(m.get("value") or "").startswith("每天早上")):
-                    m["status"] = "superseded"
-                    m["invalidated_at"] = now_iso
-                    changes.append({"user": uid, "action": "duplicate_habit_fact_superseded",
-                                    "key": "morning_running", "value": m.get("value")})
 
         # 3) 同 (kind,key) 多条 -> 只留最新
         groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
