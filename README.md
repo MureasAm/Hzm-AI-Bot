@@ -28,7 +28,7 @@
 ## 核心搭建方式
 
 - **骨架 + 注入块。** `persona/core/system_prompt.txt` 是每轮常驻的骨架；`persona/injection/` 是 **24 个注入块**，一块一个文件夹，块里的 `block.json` 写着段头、文案、来源和注入时机。另有 **15 条情景行为**，命中才注入。
-- **注入 v3：稳定卡 + 当前状态。** 稳定卡是「关于她」的长期事实（称呼、身份、地点、关系、相处方式）；【当前状态】是动态段（时间、天气、直播、话题、历史、情绪），固定放在最后——稳定段靠前是为了护住前缀缓存。每个块在 `injection_registry.py` 里登记一种 policy：`always` / `context` / `conditional` / `tool` / `guard`。
+- **注入 v3：稳定卡 + 当前状态（设置 `INJECTION_V3=1` 启用）。** 稳定卡是「关于她」的长期事实（称呼、身份、地点、关系、相处方式）；【当前状态】是动态段（时间、天气、直播、话题、历史、情绪），固定放在最后——稳定段靠前是为了护住前缀缓存。每个块在 `injection_registry.py` 里登记一种 policy：`always` / `context` / `conditional` / `tool` / `guard`。
 - **检索。** 两路 RRF 融合 + 两路直达；语料 414 条、术语 36 条、偏好 23 条、核心故事 5 条。按任务选判据：归类用 LLM，能说出口的词用子串，说法不可枚举才上向量。
 - **四层记忆 + 事件库。** 短期（每条带「多久前」）/ 会话（话题 + 情绪，按话题老化）/ 群 / 长期。长期记忆是**类型化条目**（事实 / 互动偏好 / 承诺），每条带证据、时间域和隐私闸门，支持作废；另有用户事件库与每日记忆。
 - **感知与联动。** 时间天气、直播状态、看图、语音合成、B 站/微博监听 → 主动发言。
@@ -78,13 +78,15 @@ pip install -e ".[dev]"
 pip install openai            # pyproject 暂未声明，需单独安装
 ```
 
-前置：Python 3.10+、QQ 账号 + NapCatQQ、主链与辅助链的 API Key、智谱 API Key（embedding）、视觉 API Key（可独立配置）。
+前置：Python 3.10+、QQ 账号、可用的 NapCatQQ（OneBot v11）环境、主链 API Key 和智谱 API Key（embedding）。辅助链可单独配置；未配置时共用主链。视觉可用独立端点和密钥，不是纯文字启动的前置条件。
+
+> [NapCatQQ 原仓库](https://github.com/NapNeko/NapCatQQ)已宣布告一段落，[原发布页](https://github.com/NapNeko/NapCatQQ/releases)不再提供安装包（2026-11-25 核对）。已有环境可沿用已验证的版本；新装不应依赖该页面，也不要把未验证的第三方包视作官方替代。
 
 仓库没有 `.env.example`，需要自己创建 `.env.prod`。至少填 `OPENAI_API_BASE` / `OPENAI_API_KEY` / `OPENAI_MODEL` / `ZHIPU_API_KEY`；视觉、天气、B 站、微博、邮件、语音按需配置，变量名见 `src/plugins/chatbot/config.py`。
 
 启动 NapCat 并登录 → `python bot.py`。改代码或人格数据后要重启 bot（有进程内缓存）。
 
-测试：`.venv\Scripts\python.exe -m pytest -q`（1492 个）。
+测试：`.venv\Scripts\python.exe -m pytest -q`。当前测试收集数和复核方式见 [地图 §10](docs/地图.md#10-数字来源复核用-全仓数字的权威在这一节)。
 
 ## 人格蒸馏流水线
 Tips：人格蒸馏的处理主要在前期，目前还在稳定功能与提高质量的过程中，主要需要增加的数据是Corpus和Behaviors内容的增加。
