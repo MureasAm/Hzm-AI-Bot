@@ -6,9 +6,11 @@
 "新邮件提醒"会实时推送），以及发掉线/恢复告警。
 
 配置写在 .env.prod（gitignore 里，安全）：
-    SMTP_USER=2891616516@qq.com
-    SMTP_AUTH_CODE=<QQ邮箱授权码>   # 必填。mail.qq.com 网页版：设置→账号→
-                                    # 开启 SMTP 服务→生成授权码（16位，不是QQ密码）
+    # SMTP_USER 和 SMTP_AUTH_CODE 必填。SMTP_TO 省略时默认发回发件人。
+    # 授权码是 QQ 邮箱开启 SMTP 服务后生成的授权码，不是 QQ 密码。
+    SMTP_USER=your-address@example.com
+    SMTP_AUTH_CODE=<QQ邮箱授权码>
+    # SMTP_TO=recipient@example.com
 
 用法（供 watchdog 等脚本调用）：
     from notifier import send_email
@@ -34,7 +36,6 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = PROJECT_ROOT / ".env.prod"
 SMTP_HOST = "smtp.qq.com"
 SMTP_PORT = 465
-DEFAULT_FROM = "2891616516@qq.com"
 
 
 def _load_env() -> dict:
@@ -52,7 +53,7 @@ def _load_env() -> dict:
 
 def _config() -> dict:
     env = _load_env()
-    user = env.get("SMTP_USER") or DEFAULT_FROM
+    user = env.get("SMTP_USER", "")
     return {
         "user": user,
         "code": env.get("SMTP_AUTH_CODE", ""),
@@ -67,6 +68,9 @@ def send_email(subject: str, body: str, attachments: list[str] | None = None) ->
     本机若走代理才连得上外网，注意 smtp.qq.com 是国内服务，一般可直连。
     """
     cfg = _config()
+    if not cfg["user"]:
+        print("❌ SMTP_USER 未配置（请在 .env.prod 填写发件人的 QQ 邮箱）")
+        return False
     if not cfg["code"]:
         print("❌ SMTP_AUTH_CODE 未配置（.env.prod 里加 SMTP_AUTH_CODE=你的授权码）")
         return False

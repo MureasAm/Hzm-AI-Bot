@@ -1112,7 +1112,7 @@ class TestInjectionTraceWrite:
 
 
 class TestMetaSilence:
-    """未点名群聊批次的“元回复”识别（2026-10-20 群 901907410 实测）。"""
+    """识别回复中误用的内部点名标记。"""
 
     def test_detects_known_meta_replies(self):
         for t in ("没点灰泽满，灰泽满才不管。",

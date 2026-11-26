@@ -46,8 +46,7 @@ class TestNoQuote:
 class TestQuoteNeverSilentlyDropped:
     """引用的内容取不到时**不能静默丢掉**——她会答非所问。
 
-    实测（2026-09-29 群 901907410）：豆子引用一条消息问她"能不能把灰泽满调成这样"，
-    引用内容没进来，她只能回"调成哪样啊"。
+    用虚构的引用检查：没有纯文本时仍保留媒体类型。
     """
 
     def test_forward_card_quote_is_labelled(self):
