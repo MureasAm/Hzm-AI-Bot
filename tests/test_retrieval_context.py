@@ -399,3 +399,195 @@ async def test_review_must_cover_every_selected_item_and_keep_original_indices()
     selected = await select_materials(client, RetrievalContext('你去过哪些城市'), candidates,
                                       model='fake', require_evidence=True)
     assert selected.available and selected.selected == frozenset({('corpus', 'shanghai')})
+
+
+@pytest.mark.parametrize('purpose', ['answer', 'past_example', 'correction', None])
+async def test_corpus_use_survives_review_with_legacy_missing_purpose_compatible(purpose):
+    source = '她此前说自己只是临时装作认识那位作家，并不是真的熟识。'
+    proof = {'index': 1, 'fact': '她此前只是装作认识那位作家', 'quote': '只是临时装作认识那位作家',
+             'relation': 'direct'}
+    if purpose is not None:
+        proof['purpose'] = purpose
+    client = Client(json.dumps({'keep': [1], 'evidence': [proof]}))
+    selected = await select_materials(client, RetrievalContext('你之前不是认识那位作家吗'), [
+        MaterialCandidate('corpus', 'writer', source)], model='fake', require_evidence=True)
+    expected = purpose or 'past_example'
+    assert selected.available and selected.selected == frozenset({('corpus', 'writer')})
+    assert selected.evidence[('corpus', 'writer')]['purpose'] == expected
+    review = json.loads(client.calls[1]['messages'][-1]['content'])
+    assert review['待核对事实'][0]['purpose'] == expected
+    assert selected.attempts == len(client.calls) == 2
+
+
+@pytest.mark.parametrize('purpose', [None, '', 'background', 'DIRECT', True, 1, []])
+async def test_invalid_explicit_corpus_purpose_cannot_authorize_evidence(purpose):
+    client = Client(json.dumps({'keep': [1], 'evidence': [{
+        'index': 1, 'fact': '她曾搭夜车旅行', 'quote': '她曾搭夜车旅行',
+        'relation': 'direct', 'purpose': purpose}]}))
+    selected = await select_materials(client, RetrievalContext('你以前夜里旅行过吗'), [
+        MaterialCandidate('corpus', 'trip', '她曾搭夜车旅行。')], model='fake', require_evidence=True)
+    assert not selected.available and not selected.selected
+    assert selected.attempts == len(client.calls) == 2
+
+
+async def test_structured_understanding_is_shared_with_selection_and_fact_review():
+    from src.plugins.chatbot.turn_understanding import TurnFocus, TurnUnderstanding, GroundedParticipant
+    understanding = TurnUnderstanding(TurnFocus.CHARACTER, '角色过去的说法', '核对是否只是借口',
+        ('不确认真实熟识',), ('她认识那位作家',), (GroundedParticipant('小林', '小林说'),))
+    ctx = RetrievalContext('小林说你认识那位作家，这是真的？', history='角色：那只是临时借口。',
+                           understanding=understanding)
+    client = Client(json.dumps({'keep': [1], 'evidence': [{'index': 1,
+        'fact': '她此前说那只是借口', 'quote': '那只是借口', 'relation': 'direct', 'purpose': 'correction'}]}))
+    selected = await select_materials(client, ctx, [
+        MaterialCandidate('corpus', 'excuse', '她此前解释那只是借口，不是真熟识。')],
+        model='fake', require_evidence=True)
+    assert selected.available and selected.selected
+    expected = {'focus': 'character', 'focus_text': '角色过去的说法', 'request': '核对是否只是借口',
+                'exclusions': ['不确认真实熟识'], 'premises': ['她认识那位作家'],
+                'third_parties': [{'name': '小林', 'evidence': '小林说'}]}
+    assert json.loads(ctx.note())['understanding'] == expected
+    first = json.loads(client.calls[0]['messages'][-1]['content'])
+    second = json.loads(client.calls[1]['messages'][-1]['content'])
+    assert first['本轮语境']['understanding'] == second['understanding'] == expected
+    assert RetrievalContext('旧调用', '补全', '历史').query == '补全'
+    assert RetrievalContext.from_probe('旧探测').understanding is None
+
+
+def test_typed_frame_is_only_interpretation_when_old_probe_has_conflicting_actor():
+    from src.plugins.chatbot.turn_understanding import TurnFocus, TurnUnderstanding, GroundedParticipant
+    frame = TurnUnderstanding(TurnFocus.THIRD_PARTY, '小林', '帮用户祝小林生日快乐',
+        ('不是角色本人生日',), (), (GroundedParticipant('小林', '给小林过生日'),))
+    context = RetrievalContext('给小林过生日，帮我写句祝福', resolved_text='生日祝福的词面补全',
+        history='用户：小林是我的朋友。', topic='旧角色生日', target='旧目标是角色',
+        speech_act='旧判定向角色祝福', scene='旧场景角色生日', proposition='旧命题角色今天生日',
+        pragmatic_note='旧解释应回应用户祝福', confidence=.99, entities=('小林',),
+        is_group=True, addressed=False, needs=('term',), response_scope='conversation',
+        response_task='旧任务给角色庆生', understanding=frame)
+    note = json.loads(context.note())
+    assert not {'话题', '指向对象', '言语行为', '场景', '字面命题', '辅助解释', '解释置信度'} & note.keys()
+    assert '旧' not in context.note()
+    assert note['understanding']['focus'] == 'third_party'
+    assert note['understanding']['focus_text'] == '小林'
+    assert note['原话'] == '给小林过生日，帮我写句祝福'
+    assert note['指代补全'] == '生日祝福的词面补全'
+    assert note['最近对话'] == '用户：小林是我的朋友。'
+    assert note['实体'] == ['小林'] and note['群聊'] and not note['点名她']
+    assert note['用户发言'] and note['回答范围参考'] == 'conversation'
+    assert note['允许参与确认的来源'] == ['term']
+    assert context.query == '生日祝福的词面补全'
+
+
+def test_without_typed_frame_old_probe_note_remains_compatible():
+    context = RetrievalContext('原话', '补全', '历史', topic='话题', target='对象',
+        speech_act='言语', scene='场景', proposition='命题', pragmatic_note='解释', confidence=.8,
+        response_task='旧任务')
+    note = json.loads(context.note())
+    assert {key: note[key] for key in ('话题', '指向对象', '言语行为', '场景', '字面命题', '辅助解释', '解释置信度')} == {
+        '话题': '话题', '指向对象': '对象', '言语行为': '言语', '场景': '场景', '字面命题': '命题', '辅助解释': '解释', '解释置信度': .8}
+    assert note['独立任务理解'] == '旧任务' and note['understanding'] is None
+
+
+async def test_partial_evidence_survives_empty_repair_but_still_requires_semantic_review():
+    first = {'keep': [1, 2], 'evidence': [
+        {'index': 1, 'fact': '她曾养猫', 'quote': '她曾养猫', 'relation': 'direct', 'purpose': 'past_example'},
+        {'index': 2, 'fact': '她曾学钢琴', 'quote': '她曾养猫', 'relation': 'direct', 'purpose': 'answer'}]}
+    client = ResponseSequence([json.dumps(first), '{"keep":[],"evidence":[]}',
+        '{"checks":[{"index":1,"entailed":true,"answers":true}]}'])
+    selected = await select_materials(client, RetrievalContext('说说你小时候做过的事'), [
+        MaterialCandidate('corpus', 'cat', '她曾养猫。'),
+        MaterialCandidate('corpus', 'piano', '她曾学钢琴。')], model='fake', require_evidence=True)
+    assert selected.available and selected.selected == frozenset({('corpus', 'cat')})
+    assert selected.evidence[('corpus', 'cat')]['fact'] == '她曾养猫'
+    assert selected.attempts == len(client.calls) == 3
+    review = json.loads(client.calls[2]['messages'][-1]['content'])
+    assert [row['index'] for row in review['待核对事实']] == [1]
+
+
+async def test_repair_merges_new_evidence_under_original_limit_without_rewriting_retained_proof():
+    first = {'keep': [1, 2], 'evidence': [
+        {'index': 1, 'fact': '她曾养猫', 'quote': '她曾养猫', 'relation': 'direct'},
+        {'index': 2, 'fact': '她曾学钢琴', 'quote': '她曾养猫', 'relation': 'direct'}]}
+    repaired = {'keep': [1, 2, 3], 'evidence': [
+        {'index': 1, 'fact': '她也曾养狗', 'quote': '她也曾养狗', 'relation': 'direct'},
+        {'index': 2, 'fact': '她曾学钢琴', 'quote': '她曾学钢琴', 'relation': 'direct'},
+        {'index': 3, 'fact': '她去过北京', 'quote': '她去过北京', 'relation': 'direct'}]}
+    client = ResponseSequence([json.dumps(first), json.dumps(repaired),
+        '{"checks":[{"index":1,"entailed":true,"answers":true},{"index":2,"entailed":true,"answers":true}]}'])
+    selected = await select_materials(client, RetrievalContext('说说你过去做过的事'), [
+        MaterialCandidate('corpus', 'pets', '她曾养猫。她也曾养狗。'),
+        MaterialCandidate('corpus', 'piano', '她曾学钢琴。'),
+        MaterialCandidate('corpus', 'travel', '她去过北京。')], model='fake', require_evidence=True)
+    assert selected.available and selected.selected == frozenset({('corpus', 'pets'), ('corpus', 'piano')})
+    assert selected.evidence[('corpus', 'pets')]['fact'] == '她曾养猫'
+    assert selected.evidence[('corpus', 'pets')]['quote'] == '她曾养猫'
+    assert selected.attempts == len(client.calls) == 3
+    review = json.loads(client.calls[2]['messages'][-1]['content'])
+    assert [row['index'] for row in review['待核对事实']] == [1, 2]
+
+
+async def test_retained_genuine_quote_is_not_authorization_when_fact_review_rejects_it():
+    first = {'keep': [1, 2], 'evidence': [
+        {'index': 1, 'fact': '她从未独自旅行', 'quote': '她曾与朋友旅行', 'relation': 'direct'},
+        {'index': 2, 'fact': '她曾养猫', 'quote': '她曾与朋友旅行', 'relation': 'direct'}]}
+    client = ResponseSequence([json.dumps(first), '{"keep":[],"evidence":[]}',
+        '{"checks":[{"index":1,"entailed":false,"answers":true}]}'])
+    selected = await select_materials(client, RetrievalContext('你自己旅行过吗'), [
+        MaterialCandidate('corpus', 'travel', '她曾与朋友旅行。'),
+        MaterialCandidate('corpus', 'cat', '她曾养猫。')], model='fake', require_evidence=True)
+    assert selected.available and not selected.selected and not selected.evidence
+    assert selected.verification == {('corpus', 'travel'): {'entailed': False, 'answers': True}}
+    assert selected.attempts == len(client.calls) == 3
+
+
+@pytest.mark.parametrize('repair', ['{"keep":[]', '{"keep":"1"}',
+                                   '{"keep":[],"evidence":{}}', RuntimeError('HTTP failed')])
+async def test_invalid_repair_or_http_error_closes_even_valid_retained_evidence(repair):
+    first = {'keep': [1, 2], 'evidence': [
+        {'index': 1, 'fact': '她曾养猫', 'quote': '她曾养猫', 'relation': 'direct'},
+        {'index': 2, 'fact': '她曾学钢琴', 'quote': '别处的原文', 'relation': 'direct'}]}
+    client = ResponseSequence([json.dumps(first), repair])
+    selected = await select_materials(client, RetrievalContext('说说以前的事'), [
+        MaterialCandidate('corpus', 'cat', '她曾养猫。'),
+        MaterialCandidate('corpus', 'piano', '她曾学钢琴。')], model='fake', require_evidence=True)
+    assert not selected.available and not selected.selected and not selected.evidence
+    assert selected.attempts == len(client.calls) == 2
+
+
+@pytest.mark.parametrize('invalid', ['duplicate', 'unlocatable', 'non_object'])
+async def test_globally_ambiguous_rows_never_create_stash_from_a_good_neighbor(invalid):
+    first = {'keep': [1, 2], 'evidence': [
+        {'index': 1, 'fact': '她曾养猫', 'quote': '她曾养猫', 'relation': 'direct'},
+        {'index': 2, 'fact': '她曾学钢琴', 'quote': '她曾学钢琴', 'relation': 'direct'}]}
+    if invalid == 'duplicate':
+        first['evidence'].append({'index': 2, 'fact': '她没学过钢琴', 'quote': '她曾学钢琴', 'relation': 'direct'})
+    elif invalid == 'unlocatable':
+        first['evidence'].append({'index': True, 'fact': '未知', 'quote': '未知', 'relation': 'direct'})
+    else:
+        first['evidence'].append('not an evidence object')
+    client = ResponseSequence([json.dumps(first), '{"keep":[],"evidence":[]}'])
+    selected = await select_materials(client, RetrievalContext('说说以前的事'), [
+        MaterialCandidate('corpus', 'cat', '她曾养猫。'),
+        MaterialCandidate('corpus', 'piano', '她曾学钢琴。')], model='fake', require_evidence=True)
+    assert selected.available and not selected.selected and not selected.evidence
+    assert selected.attempts == len(client.calls) == 2
+
+
+async def test_unparseable_top_level_cannot_salvage_an_inner_fact_or_add_review_call():
+    client = ResponseSequence(['{"keep":[1],"evidence":[{"index":1}', '{"keep":[]}'])
+    selected = await select_materials(client, RetrievalContext('你养过猫吗'), [
+        MaterialCandidate('corpus', 'cat', '她曾养猫。')], model='fake', require_evidence=True)
+    assert selected.available and not selected.selected and selected.attempts == len(client.calls) == 2
+
+
+async def test_partial_stash_uses_first_proof_when_candidate_key_repeats():
+    first = {'keep': [1, 2, 3], 'evidence': [
+        {'index': 1, 'fact': '她曾养猫', 'quote': '她曾养猫', 'relation': 'direct'},
+        {'index': 2, 'fact': '她曾养狗', 'quote': '她曾养狗', 'relation': 'direct'},
+        {'index': 3, 'fact': '她曾学钢琴', 'quote': '别处原文', 'relation': 'direct'}]}
+    client = ResponseSequence([json.dumps(first), '{"keep":[]}',
+        '{"checks":[{"index":1,"entailed":true,"answers":true}]}'])
+    selected = await select_materials(client, RetrievalContext('说说以前的事'), [
+        MaterialCandidate('corpus', 'pets', '她曾养猫。'),
+        MaterialCandidate('corpus', 'pets', '她曾养狗。'),
+        MaterialCandidate('corpus', 'piano', '她曾学钢琴。')], model='fake', require_evidence=True)
+    assert selected.available and selected.evidence[('corpus', 'pets')]['quote'] == '她曾养猫'

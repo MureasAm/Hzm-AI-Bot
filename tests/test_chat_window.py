@@ -86,8 +86,11 @@ class TestFlush:
         win.pending_meta = [{"ts": 123.0, "message_id": "incoming-1", "quoted_message_id": "quoted-1"}]
         sent, recorded, extracted = [], [], []
         extraction_done = asyncio.Event()
+        generation_started = None
 
         async def fake_handle(uid, text, **kwargs):
+            nonlocal generation_started
+            generation_started = datetime.now()
             assert kwargs["defer_memory"] is True
             assert kwargs["quoted_message_ids"] == ("quoted-1",)
             reply = core.Reply("今天可以。以后也一直可以。")
@@ -109,6 +112,7 @@ class TestFlush:
 
         async def fake_extract(uid, message, reply, session, **kwargs):
             assert kwargs["delivery_verified"] is True
+            assert kwargs["preference_observed_at"] <= generation_started
             extracted.append((uid, message, reply, session, kwargs["source_turn_id"]))
             extraction_done.set()
 

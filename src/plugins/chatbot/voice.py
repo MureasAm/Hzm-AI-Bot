@@ -17,6 +17,7 @@ import os
 import re
 import wave
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import httpx
 
@@ -25,7 +26,7 @@ from nonebot.adapters.onebot.v11 import MessageSegment
 from .constants import (
     SOVITS_URL, SOVITS_REF_DIR, VOICE_CACHE_DIR, VOICE_MIN_LEN, VOICE_MAX_LEN,
 )
-from .config import get_voice_enabled
+from .config import get_flag, get_voice_enabled
 
 # 不可语音化的"内心戏/动作"括号（TTS 表达不了 → 这些回复走文字）
 _INNER_VOICE_PARENS = ("小声", "心虚", "捂脸", "揉眼睛", "叹气", "皱眉", "低头", "脸红")
@@ -239,9 +240,10 @@ def _tts_text(reply: str) -> str:
     # （这些框住的是要念的内容，不能连内容一起丢）。
     t = re.sub(r"[《》〈〉「」『』“”‘’\"']", "", t)
     # 剩下 TTS 念不出来的（ASCII 符号/颜文字/emoji/书名号残渣）一律丢。
-    t = re.sub(r"[^一-鿿A-Za-z0-9，。？！、：；…～~]", "", t)
-    t = re.sub(r"\s+", "", t)
-    return t.strip()
+    t = re.sub(r"[^一-鿿A-Za-z0-9，。？！、：；…～~\s]", "", t)
+    t = re.sub(r"\s+", " ", t)
+    # 保留 API key 一类词间空格，避免英语前端收到粘成一串的单词。
+    return re.sub(r"(?<![A-Za-z0-9]) | (?![A-Za-z0-9])", "", t)
 
 
 # 参考音频：情绪档（可选，粗粒度；细粒度如"小声/心虚"做不到走文字）。
@@ -323,6 +325,7 @@ _ACTIVE_RMS_FLOOR = 800.0    # 绝对下限（整体音量都很小时，别把�
 _ACTIVE_RMS_REL = 0.05       # 相对本文件峰值
 _SILENCE_WIN_SEC = 0.05      # 能量统计窗秒数
 _SILENCE_MARGIN_SEC = 0.05   # 裁完留的边距，防咬掉字头字尾
+_QUIET_TAIL_SEC = 0.2        # 保留紧接人声的轻尾音，最多再留 200 ms
 # 句中"空"超过 _GAP_SEC 就是合成故障（不是她停顿），压到 _GAP_KEEP_SEC。
 # 正常换气不到 1 秒、省略号停顿也就 1 秒出头，3 秒以上只有坏合成才会出现。
 _GAP_SEC = 3.0
@@ -381,7 +384,8 @@ def _wav_duration(wav_path: Path) -> float:
 def _clean_wav(wav_path: Path) -> tuple[float, float]:
     """就地清理刚合成的 wav，并回报质量：**裁掉首尾静音 + 压掉句中超长空洞**。
 
-    返回清理后 (有效语音秒数, 总秒数)。格式不符 / 整段无声 → 原样不动（宁可发原件，
+    返回 (有效语音秒数, 不含额外尾音保护区的时长)。额外边距不计入完整度判定。
+    格式不符 / 整段无声 → 原样不动（宁可发原件，
     也不能把语音裁没）；解析失败返回 (0.0, 原总长)。
 
     坏合成有两种形态，这里一起治：
@@ -417,7 +421,16 @@ def _clean_wav(wav_path: Path) -> tuple[float, float]:
                 keeps.append((cur, gap_lo + half))
                 cur = gap_hi - half
             i = j
-        keeps.append((cur, min(len(a), wins[last][1] + margin)))
+        active_end = wins[last][1]
+        tail_end = active_end
+        tail_windows = int(_QUIET_TAIL_SEC / _SILENCE_WIN_SEC)
+        for idx in range(last + 1, min(len(wins), last + 1 + tail_windows)):
+            if vals[idx] == 0:
+                break
+            tail_end = wins[idx][1]
+        end = min(len(a), tail_end + margin)
+        extra_tail = end - min(len(a), active_end + margin)
+        keeps.append((cur, end))
         cleaned = array.array("h")
         for lo, hi in keeps:
             cleaned += a[lo:hi]
@@ -429,7 +442,7 @@ def _clean_wav(wav_path: Path) -> tuple[float, float]:
             w.setframerate(rate)
             w.writeframes(cleaned.tobytes())
         os.replace(tmp, wav_path)
-        return sum(1 for v in loud if v) * _SILENCE_WIN_SEC, len(cleaned) / rate
+        return sum(1 for v in loud if v) * _SILENCE_WIN_SEC, (len(cleaned) - extra_tail) / rate
     except Exception:
         return 0.0, _wav_duration(wav_path)   # 裁不动就发原件，别把语音裁没了
 
@@ -515,11 +528,13 @@ def _too_short(total: float, expect: float) -> bool:
     return expect > 0 and total < expect * _MIN_TOTAL_RATIO
 
 
+def _has_plausible_duration(total: float, expect: float) -> bool:
+    return 0 < total <= _bloat_limit(expect) and not _too_short(total, expect)
+
+
 def _is_acceptable(sec: float, total: float, expect: float, n_chars: int) -> bool:
     """这条合成结果能不能用：**没被撑爆（空洞）且没被砍掉半句（截断）**。"""
-    if total <= 0:
-        return False
-    if total > _bloat_limit(expect):
+    if not _has_plausible_duration(total, expect):
         return False
     return n_chars < _CHECK_MIN_CHARS or sec >= expect * _MIN_SPEECH_RATIO
 
@@ -552,29 +567,30 @@ async def _synthesize(reply_text: str, deadline: float | None = None) -> str | N
     text = _tts_text(reply_text)
     if not text:
         return None
-    # 缓存键**必须带上参考**（2026-10-30）：以前只按文本 md5，换参考后旧音频会被原样复用，
-    # 换了等于没换。短句参考用独立前缀，老缓存（长参考生成的那 7,400 条）继续有效，
-    # 只有短句会各生成一份。
+    # 短句参考用独立前缀。旧 WAV 已裁掉的轻尾音无法恢复，新目录按需重合成。
     pool = _ref_pool(reply_text)
     ref_path = pool[0] if pool else None
     h = hashlib.md5(text.encode("utf-8")).hexdigest()
     stem = "voice_short" if ref_path is not None and ref_path.stem == "ref_short" else "voice"
-    cached = VOICE_CACHE_DIR / f"{stem}_{h}.wav"
+    use_turbo = get_flag("SOVITS_PROFILE", "v5-turbo") != "v2"
+    cache_dir = VOICE_CACHE_DIR / "v5-turbo" if use_turbo else VOICE_CACHE_DIR
+    cached = cache_dir / "tail-v2" / f"{stem}_{h}.wav"
     expect = _expect_seconds(text)
     if cached.exists():
         # 缓存读回**必须复检**：不然历史坏条子（空洞/截断，3400+ 个文件里的那些）
         # 会被永久复用。复检顺手清一遍（幂等），不合格就重合成、覆盖它。
         sec, total = _clean_wav(cached)
         if (_is_acceptable(sec, total, expect, len(text))
-                and _peak_amplitude(cached) >= _SILENT_PEAK
-                and not _too_short(total, expect)):
+                and _peak_amplitude(cached) >= _SILENT_PEAK):
             return str(cached)
-        print(f"[语音] 缓存不合格（{cached.name}）：有效{sec:.1f}s/总{total:.1f}s vs "
+        print(f"[语音] 缓存不合格（{cached.name}）：有效{sec:.1f}s/判定{total:.1f}s vs "
               f"期望{expect:.1f}s，重新合成")
     if ref_path is None:
         print(f"⚠️ 参考音频缺失: {SOVITS_REF_DIR} 下没有 .wav（放 ref_voice.wav 即可起步）")
         return None
     text_lang = _text_lang(text)
+    # Turbo 会给不足四字的起始分句补前置句号。原读法失败后，保留语气词并和下文连读。
+    retry_text = re.sub(r"^([嗯恩诶欸呃唔哦啊]{1,3})[？！]+(?=[一-鿿])", r"\1", text) if use_turbo else text
     loop = asyncio.get_running_loop()
     best: tuple[float, bytes, float, float] | None = None   # (质量分, 字节, 有效秒, 总秒)
     # 短句多试几次（2026-10-30 实测）：模型对短句是**双峰**的——同一个文本反复合成，
@@ -599,32 +615,37 @@ async def _synthesize(reply_text: str, deadline: float | None = None) -> str | N
             # trust_env=False：本地 TTS 必须直连 127.0.0.1，不能吃系统/环境代理。
             # 2026-11-01 实测：trust_env 默认 True 时请求被代理链断成
             # RemoteProtocolError（Server disconnected）；同一请求 false → 200 + wav。
+            payload = {
+                "text": retry_text if attempt else text, "text_lang": text_lang,
+                "ref_audio_path": str(cur_ref),
+                "prompt_text": prompt_text, "prompt_lang": "zh",
+                "top_k": 5, "top_p": 0.85, "temperature": temperature,
+                "speed_factor": 1.0, "media_type": "wav",
+                # 整句合成不分段：api 默认 cut5 分段会吞句子（复现：28字句丢"就放纵了一下"）
+                "text_split_method": "cut0",
+            }
+            if use_turbo:
+                payload.update(sample_steps=4, cfg_rate=0.0, use_cuda_graph=False, use_flash_attention=False)
             async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
-                resp = await client.post(SOVITS_URL, json={
-                    "text": text, "text_lang": text_lang,
-                    "ref_audio_path": str(cur_ref),
-                    "prompt_text": prompt_text, "prompt_lang": "zh",
-                    "top_k": 5, "top_p": 0.85, "temperature": temperature,
-                    "speed_factor": 1.0, "media_type": "wav",
-                    # 整句合成不分段：api 默认 cut5 分段会吞句子（复现：28字句丢"就放纵了一下"）
-                    "text_split_method": "cut0",
-                })
+                resp = await client.post(SOVITS_URL, json=payload)
             if resp.status_code == 200 and resp.content:
-                VOICE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-                cached.write_bytes(resp.content)
-                sec, total = _clean_wav(cached)   # 裁首尾静音 + 压句中空洞，并回报质量
-                peak = _peak_amplitude(cached)
+                cached.parent.mkdir(parents=True, exist_ok=True)
+                with TemporaryDirectory(dir=cached.parent) as scratch:
+                    candidate = Path(scratch) / "candidate.wav"
+                    candidate.write_bytes(resp.content)
+                    sec, total = _clean_wav(candidate)
+                    peak = _peak_amplitude(candidate)
+                    if peak >= _SILENT_PEAK and _is_acceptable(sec, total, expect, len(text)):
+                        os.replace(candidate, cached)
+                        return str(cached)
+                    if peak >= _SILENT_PEAK and _has_plausible_duration(total, expect):
+                        score = _quality_score(sec, total, expect)
+                        if best is None or score > best[0]:
+                            best = (score, candidate.read_bytes(), sec, total)
                 if peak >= 0 and peak < _SILENT_PEAK:
                     print(f"[语音] 第{attempt+1}次 静音（峰值{peak}，有效{sec:.2f}s），重试")
                     continue
-                score = _quality_score(sec, total, expect)
-                if best is None or score > best[0]:
-                    best = (score, cached.read_bytes(), sec, total)
-                if _is_acceptable(sec, total, expect, len(text)):
-                    break
-                # ⚠️ 这里必须看**两半**：只看 sec 会让"总长被空洞撑爆"的结果提前收工，
-                # 重试从来没真正发生过（2026-10-11 修的就是这个）。
-                print(f"[语音] 第{attempt+1}次 有效{sec:.1f}s/总{total:.1f}s vs 期望{expect:.1f}s，"
+                print(f"[语音] 第{attempt+1}次 有效{sec:.1f}s/判定{total:.1f}s vs 期望{expect:.1f}s，"
                       f"疑似截断或空洞，重试")
             else:
                 print(f"⚠️ TTS 合成非200: {resp.status_code}")
@@ -633,20 +654,12 @@ async def _synthesize(reply_text: str, deadline: float | None = None) -> str | N
     if best is None:
         return None
     _, best_bytes, best_sec, best_total = best
-    if _too_short(best_total, expect):
-        # "有声音但听不懂"（只念了半句/念成别的词）比发文字更糟——用户听不出她在说什么。
-        print(f"⚠️ 多次合成都太短（总{best_total:.1f}s < 期望{expect:.1f}s 的"
-              f"{_MIN_TOTAL_RATIO:.0%}），改发文字")
-        return None
-    if best_total > _bloat_limit(expect):
-        # 60 秒的怪音比不发更糟（用户听到的"单字拖长/整段拖"就是这个）。
-        # 宁可退回文字：信息不丢，只是少了语气。
-        print(f"⚠️ 多次合成都超长（总{best_total:.1f}s > 上限{_bloat_limit(expect):.1f}s），改发文字")
-        return None
-    if not _is_acceptable(best_sec, best_total, expect, len(text)):
-        print(f"⚠️ 多次合成仍不达标（有效{best_sec:.1f}s/总{best_total:.1f}s vs 期望{expect:.1f}s），"
-              f"发最不烂的一次")
-    cached.write_bytes(best_bytes)
+    print(f"⚠️ 多次合成仍不达标（有效{best_sec:.1f}s/判定{best_total:.1f}s vs 期望{expect:.1f}s），"
+          f"使用有效语音最长的一次")
+    with TemporaryDirectory(dir=cached.parent) as scratch:
+        candidate = Path(scratch) / "candidate.wav"
+        candidate.write_bytes(best_bytes)
+        os.replace(candidate, cached)
     return str(cached)
 
 

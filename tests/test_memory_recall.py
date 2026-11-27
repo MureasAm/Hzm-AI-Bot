@@ -226,3 +226,81 @@ def test_topicless_recall_returns_the_last_utterance(tmp_path):
     assert reply_evidence.record_part("111", "latest", 0, "下次一起看电影。")
     result = memory_recall.build_recall_context(store, "111", "你上次说的话是什么？")
     assert "下次一起看电影" in result
+
+
+def test_historical_address_queries_respect_who_called_whom(tmp_path):
+    store = _store(tmp_path)
+    user_text, reply = "姐姐，早上好。", "小岚，早安。"
+    assert reply_evidence.record_part(
+        "111", "address", 0, reply, user_text=user_text,
+        incoming=[{"t": 1, "text": user_text}],
+    )
+
+    question = "你之前是怎么称呼我的？"
+    assert memory_recall.needs_recall(question)
+    result = memory_recall.build_recall_context(store, "111", question, nicknames=["姐姐"])
+    assert reply in result and "QQ 已确认发送" in result
+    assert user_text not in result
+
+    question = "我之前是怎么叫你的？"
+    assert memory_recall.needs_recall(question)
+    result = memory_recall.build_recall_context(store, "111", question)
+    assert user_text in result and "QQ 用户消息" in result
+    assert reply not in result
+
+
+def test_alias_identity_uses_only_matching_private_address_evidence(tmp_path):
+    store = _store(tmp_path)
+    user_text, reply = "我可以叫你宝宝吗？", "在这里叫我宝宝可以。"
+    nickname = {"kind": "fact", "key": "her_nickname", "value": "宝宝",
+                "explicit": True, "confidence": 1}
+    source = {"session_id": "session-a", "turn_id": "first-address", "user_text": user_text,
+              "assistant_text": reply}
+    assert store.ingest("111", [nickname], source=source)
+    assert reply_evidence.record_part("111", "first-address", 0, reply, user_text=user_text)
+    assert reply_evidence.record_part("111", "another-topic", 0, "这是聊宝宝巴士。")
+    assert reply_evidence.record_part("222", "first-address", 0, "别人的宝宝是另一位。")
+
+    # 保留旧版本误写的反向称呼，验证回查同样经过来源校验。
+    state = json.loads(store.state_file.read_text(encoding="utf-8"))
+    state["users"]["111"]["memories"].append({
+        "key": "preferred_name", "kind": "fact", "value": "宝宝", "status": "confirmed",
+        "source": {"role": "user", "excerpt": user_text, "turn_id": "another-topic"},
+    })
+    store.state_file.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+
+    for question in ("宝宝是谁？", "宝宝是指hzm嘛"):
+        result = memory_recall.build_recall_context(store, "111", question)
+        assert reply in result and "用户对灰泽满的历史称呼" in result
+        assert "宝宝巴士" not in result and "别人的宝宝" not in result
+        assert "对用户的姓名或称呼记录" not in result
+    assert not memory_recall.build_recall_context(store, "222", "宝宝是谁？")
+
+    user_address = "以后叫我宝宝。"
+    assert store.ingest(
+        "111", [{**nickname, "key": "preferred_name"}],
+        source={**source, "user_text": user_address, "turn_id": "reverse-address"},
+    )
+    assert reply_evidence.record_part("111", "reverse-address", 0, "好的，宝宝。", user_text=user_address)
+    result = memory_recall.build_recall_context(store, "111", "宝宝是谁？")
+    assert "用户对灰泽满的历史称呼" in result and "对用户的姓名或称呼记录" in result
+    assert "同一个词可用于多个对象" in result
+
+
+def test_unknown_alias_only_recalls_with_a_specific_qq_reference(tmp_path, monkeypatch):
+    store = _store(tmp_path)
+    assert reply_evidence.record_part("111", "named", 0, "这里说的饭团是我。",
+                                       message_id="1011")
+    assert reply_evidence.record_part("111", "named", 1, "这是同一轮的第二句。",
+                                       message_id="1012")
+    result = memory_recall.build_recall_context(
+        store, "111", "饭团是指hzm嘛", reference_ids=["1011"],
+    )
+    assert "这里说的饭团是我" in result and "同一轮的第二句" not in result
+
+    def unexpected_recall(*args, **kwargs):
+        raise AssertionError("未绑定称呼证据的身份问句不应检索原话档案")
+
+    monkeypatch.setattr(reply_evidence, "recall_turns", unexpected_recall)
+    assert not memory_recall.build_recall_context(store, "111", "饭团是谁？")
+    assert not memory_recall.build_recall_context(store, "111", "爱因斯坦是谁？")

@@ -34,6 +34,21 @@ def test_facts_are_described_as_all_required_information():
     assert "澳洲" in description and "袋鼠" in description
 
 
+def test_understanding_constraints_are_described_without_becoming_missing_expectations():
+    description = problem_cases.describe_expect({"understanding": {
+        "focus": "character", "exclusions_contains": [["亲身经历", "见过"]],
+        "premises_contains": ["男学霸"], "third_parties_empty": True}})
+    assert all(text in description for text in ("character", "亲身经历", "男学霸", "third_parties"))
+    assert "为空" in description and "没有期望" not in description
+
+
+def test_allowed_understanding_focus_is_described_as_a_bounded_set():
+    description = problem_cases.describe_expect({"understanding": {
+        "focus_allowed": ["user", "general"]}})
+    assert "user" in description and "general" in description and "主体" in description
+    assert "没有期望" not in description
+
+
 def test_optional_or_forbidden_only_cases_do_not_turn_into_binary_negatives(monkeypatch, tmp_path):
     cases = [
         {"query": "optional", "expect": {"preference": {"allowed": ["food"]}}},
@@ -42,6 +57,7 @@ def test_optional_or_forbidden_only_cases_do_not_turn_into_binary_negatives(monk
         {"query": "required", "expect": {"preference": {"should": ["food"], "allowed": ["food"]}}},
         {"query": "empty", "expect": {"preference": {"should_not_hit": True}}},
         {"query": "facts-only", "expect": {"facts": {"contains": ["东野圭吾"]}}},
+        {"query": "understanding-only", "expect": {"understanding": {"focus": "character"}}},
     ]
     path = tmp_path / "cases.json"
     path.write_text(json.dumps({"cases": cases}, ensure_ascii=False), encoding="utf-8")
@@ -50,3 +66,4 @@ def test_optional_or_forbidden_only_cases_do_not_turn_into_binary_negatives(monk
     assert {case["q"]: case["want"] for case in tasks["preference"]["cases"]} == {
         "required": True, "empty": False}
     assert all(case["q"] != "facts-only" for task in tasks.values() for case in task["cases"])
+    assert all(case["q"] != "understanding-only" for task in tasks.values() for case in task["cases"])

@@ -1,4 +1,5 @@
 import json
+from itertools import permutations
 from datetime import datetime, timedelta
 
 import pytest
@@ -140,16 +141,194 @@ def test_explicit_interaction_preference_confirms_immediately(store, clock):
     assert accepted[0]["status"] == "confirmed"
 
 
+def _record_banter_preference(store, now, value, *, explicit, user, session="session-a",
+                              observed_at=None, turn_id="", action="upsert"):
+    return store.ingest(
+        "u1", [{"kind": "interaction_preference", "key": "banter_tolerance",
+                "value": value, "explicit": explicit, "confidence": 0.95, "action": action}],
+        source={**_source(session, observed_at or now, user=user), "turn_id": turn_id}, now=now,
+    )
+
+
+@pytest.mark.parametrize("had_candidate", [True, False], ids=["old-candidate", "new-candidate"])
+def test_explicit_preference_blocks_conflicting_inferred_confirmation(store, clock, had_candidate):
+    if had_candidate:
+        _record_banter_preference(store, clock, "high", explicit=False, user="哈哈，嘴挺毒")
+    correction = clock + timedelta(minutes=1)
+    _record_banter_preference(
+        store, correction, "low", explicit=True, user="以后少互怼，别挤兑我",
+    )
+    observations = [("session-b", "你也太损了哈哈"), ("session-c", "这句话好损")]
+    if not had_candidate:
+        observations.append(("session-c", "又损我哈哈"))
+    for index, (session, user) in enumerate(observations, start=1):
+        _record_banter_preference(
+            store, correction + timedelta(minutes=index), "high", explicit=False,
+            user=user, session=session,
+        )
+
+    memories = store.snapshot("u1")["memories"]
+    assert [memory["value"] for memory in memories if memory["status"] == "confirmed"] == ["low"]
+    if had_candidate:
+        assert next(memory for memory in memories if memory["value"] == "high")["status"] == "superseded"
+
+
+def test_latest_explicit_preference_changes_effective_style(store, clock):
+    _record_banter_preference(store, clock, "low", explicit=True, user="以后少互怼")
+    later = clock + timedelta(days=1)
+    _record_banter_preference(store, later, "high", explicit=True, user="以后平时可以多互怼")
+
+    for context in (store.build_state_card("u1", now=later),
+                    store.build_preference_context("u1", "聊聊天吧", now=later)):
+        assert "普通闲聊可以更强地互怼" in context
+        assert "减少针对用户的互怼和挤兑" not in context
+
+
+def test_explicit_preference_uses_turn_order_when_extraction_finishes_out_of_order(store, clock):
+    latest = clock + timedelta(minutes=1)
+    _record_banter_preference(store, latest, "low", explicit=True, user="以后少互怼")
+    delayed_write = latest + timedelta(seconds=5)
+    _record_banter_preference(
+        store, delayed_write, "high", explicit=True, user="以后平时可以多互怼",
+        observed_at=clock,
+    )
+
+    context = store.build_state_card("u1", now=delayed_write)
+
+    assert "减少针对用户的互怼和挤兑" in context
+    assert "普通闲聊可以更强地互怼" not in context
+
+
+def test_matching_inference_preserves_explicit_preference_history_source(store, clock):
+    direction = "以后平时可以多互怼"
+    _record_banter_preference(
+        store, clock, "high", explicit=True, user=direction, turn_id="explicit-banter",
+    )
+    later = clock + timedelta(days=1)
+    _record_banter_preference(
+        store, later, "high", explicit=False, user="你也太损了哈哈", turn_id="inferred-banter",
+    )
+
+    [reference] = store.history_references("u1", "互怼", limit=1, now=later)
+
+    assert (reference["turn_id"], reference["excerpt"], reference["observed_at"]) == (
+        "explicit-banter", direction, clock.isoformat(),
+    )
+    assert reference["explicit"]
+
+
+def test_explicit_preference_retraction_requires_user_direction_and_blocks_stale_writes(store, clock):
+    _record_banter_preference(store, clock, "low", explicit=True, user="以后少互怼")
+    later = clock + timedelta(minutes=2)
+    _record_banter_preference(
+        store, later, "low", explicit=False, user="哈哈，我刚才在开玩笑", action="retract",
+    )
+    assert "减少针对用户的互怼和挤兑" in store.build_state_card("u1", now=later)
+
+    withdrawal = later + timedelta(minutes=1)
+    _record_banter_preference(
+        store, withdrawal, "low", explicit=True, user="忘掉我说以后少互怼的偏好", action="retract",
+    )
+    assert store.build_state_card("u1", now=withdrawal) == ""
+
+    delayed_write = withdrawal + timedelta(minutes=1)
+    _record_banter_preference(
+        store, delayed_write, "low", explicit=True, user="以后还是少互怼吧",
+        observed_at=clock + timedelta(minutes=1),
+    )
+    assert store.build_state_card("u1", now=delayed_write) == ""
+
+
+def test_exact_preference_retraction_blocks_unseen_value_without_clearing_other_value(store, clock):
+    withdrawal = clock + timedelta(minutes=2)
+    _record_banter_preference(
+        store, withdrawal, "high", explicit=True, user="忘掉我说平时可以多互怼的偏好",
+        action="retract",
+    )
+    _record_banter_preference(
+        store, withdrawal + timedelta(seconds=30), "low", explicit=True, user="以后少互怼",
+        observed_at=clock + timedelta(minutes=1),
+    )
+    delayed_write = withdrawal + timedelta(minutes=1)
+    _record_banter_preference(
+        store, delayed_write, "high", explicit=True, user="平时可以多互怼",
+        observed_at=clock,
+    )
+
+    context = store.build_state_card("u1", now=delayed_write)
+
+    assert "减少针对用户的互怼和挤兑" in context
+    assert "普通闲聊可以更强地互怼" not in context
+
+
+@pytest.mark.parametrize("write_order", list(permutations(range(3))))
+def test_withdrawing_replacement_preference_does_not_restore_replaced_value(store, clock, write_order):
+    turns = [
+        ("high", "平时可以多互怼", "upsert"),
+        ("low", "以后少互怼", "upsert"),
+        ("low", "忘掉我说以后少互怼的偏好", "retract"),
+    ]
+    for index, turn in enumerate(write_order, start=3):
+        value, user, action = turns[turn]
+        _record_banter_preference(
+            store, clock + timedelta(minutes=index), value, explicit=True, user=user,
+            action=action, observed_at=clock + timedelta(minutes=turn),
+        )
+
+    assert store.build_state_card("u1", now=clock + timedelta(minutes=6)) == ""
+
+
+@pytest.fixture
+def legacy_preference_conflict(store, clock):
+    common = {"kind": "interaction_preference", "key": "banter_tolerance", "status": "confirmed"}
+    older = (clock - timedelta(days=1)).isoformat()
+    store.state_file.write_text(json.dumps({
+        "schema_version": 2,
+        "users": {"u1": {"memories": [
+            {**common, "value": "high", "explicit": False, "last_observed_at": clock.isoformat(),
+             "source": {"role": "user", "excerpt": "哈哈还互怼", "turn_id": "inferred-banter",
+                        "observed_at": clock.isoformat()}},
+            {**common, "value": "low", "explicit": True, "last_observed_at": older,
+             "source": {"role": "user", "excerpt": "以后少互怼", "turn_id": "explicit-banter",
+                        "observed_at": older}},
+        ]}},
+    }), encoding="utf-8")
+    return store
+
+
+@pytest.mark.parametrize("renderer", ["build_state_card", "build_preference_context"])
+def test_explicit_preference_wins_when_loading_legacy_conflicts(legacy_preference_conflict, clock, renderer):
+    context = getattr(legacy_preference_conflict, renderer)("u1", query="聊聊天吧", now=clock)
+
+    assert "减少针对用户的互怼和挤兑" in context
+    assert "普通闲聊可以更强地互怼" not in context
+
+
+def test_legacy_preference_history_labels_conflicting_inference_superseded(legacy_preference_conflict, clock):
+    entries = legacy_preference_conflict.history_references("u1", "互怼", now=clock)
+
+    assert {entry["turn_id"]: entry["status"] for entry in entries} == {
+        "explicit-banter": "current",
+        "inferred-banter": "superseded",
+    }
+
+
 @pytest.mark.parametrize(
     ("key", "value"),
     [(key, value) for key, values in memory_v2._PREFERENCE_VALUES.items()
      for value in sorted(values)],
 )
 def test_state_card_renders_each_accepted_preference_as_behavior(store, clock, key, value):
+    address_sources = {
+        "nickname": "以后叫我橙子",
+        "casual": "以后直接叫我你",
+        "plain": "以后别叫我宝宝",
+    }
+    source = _source(now=clock, user=address_sources[value]) if key == "address_style" else _source(now=clock)
     accepted = store.ingest(
         "u1", [{"kind": "interaction_preference", "key": key, "value": value,
                 "explicit": True, "confidence": 0.9}],
-        source=_source(now=clock), now=clock,
+        source=source, now=clock,
     )
 
     assert len(accepted) == 1 and accepted[0]["status"] == "confirmed"
@@ -724,7 +903,7 @@ def test_preferred_name_requires_explicit_request(store, clock):
 def test_preferred_name_rejects_fan_identity_and_sentences(store, clock):
     for value, user_text in [
         ("绿冻", "我是绿冻"),
-        ("用户希望被称呼为星屿", "你叫我星屿可以吗"),
+        ("用户希望被称呼为草草子", "你叫我草草子可以吗"),
     ]:
         accepted = store.ingest(
             "u1",
@@ -872,7 +1051,7 @@ class TestPreferenceDimensions:
                  "explicit": True, "confidence": 0.9}
                 for key, value in self.NEW_DIMENSIONS
             ],
-            source=_source(now=clock),
+            source=_source(now=clock, user="以后别叫我宝宝，回复短一点，别再聊这个话题"),
             now=clock,
         )
 
@@ -1196,9 +1375,11 @@ class TestShadowExtraction:
             assistant_text="知道了",
             session_id="session-a",
             observed_at=clock,
+            preference_observed_at=clock - timedelta(seconds=5),
         )
 
         assert accepted[0]["status"] == "confirmed"
+        assert accepted[0]["source"]["observed_at"] == (clock - timedelta(seconds=5)).isoformat()
         assert captured["temperature"] == 0.1
         assert captured["max_tokens"] >= 400
         assert captured["extra_body"]["thinking"]["type"] == "disabled"
@@ -1250,12 +1431,12 @@ def test_empty_ingest_still_creates_new_user(store, clock):
 
 
 class TestFactRelevanceHygiene:
-    """扩写句的泛词不能给无关事实蹭分。"""
+    """使用虚构数据验证边界行为。"""
 
     MORNING = {"kind": "fact", "key": "morning_running",
                "value": "每天早上要去跑早操（校园跑），学校要求的"}
     TIME_DIFF = {"kind": "fact", "key": "time_diff",
-                 "value": "与灰泽满时差约3小时"}
+                 "value": "与灰泽满时差约3小时（用户当地21点多时）"}
     GAOKAO = {"kind": "fact", "key": "gaokao_regret", "value": "从高考完一直怪自己没考好"}
 
     def test_expanded_query_matches_routine_only(self):
@@ -1472,7 +1653,7 @@ class TestHabitHint:
 
 
 def test_address_terms_requires_explicit_request(store, clock):
-    """用户用故事里的角色误称称呼机器人，不能当用户自己的称呼。"""
+    """使用虚构数据验证边界行为。"""
     rejected = store.ingest(
         "u1",
         [{"kind": "fact", "key": "address_terms", "value": "区泽满",
@@ -1519,7 +1700,7 @@ def test_canonical_name_keys_still_accept_normal_values(store, clock):
     for key, value, text in [
         ("real_name", "胡洋", "本名是胡洋"),
         ("online_name", "千纸鸢", "网名是千纸鸢"),
-        ("preferred_name", "小温", "以后叫我小温"),
+        ("preferred_name", "纸鸢", "以后叫我纸鸢"),
     ]:
         accepted = store.ingest(
             "u1",
@@ -1535,3 +1716,110 @@ def test_prompt_warns_name_direction():
     prompt = memory_v2.MEMORY_V2_EXTRACT_PROMPT
     assert "区泽满" in prompt
     assert "绝不能" in prompt
+
+
+def test_name_facts_require_the_exact_alias_and_authored_owner(store, clock):
+    for key, value, user in (
+        ("preferred_name", "姐姐", "我可以叫你姐姐吗？"),
+        ("preferred_name", "姐姐", "姐姐，早\n我叫小明"),
+        ("preferred_name", "姐姐", "我朋友说：「以后叫我姐姐。」"),
+        ("preferred_name", "姐姐", "如果你叫我姐姐的话，不许笑。"),
+        ("preferred_name", "阿猫", "以后叫我阿狗。"),
+        ("real_name", "阿梨", "她的名字叫阿梨。"),
+        ("real_name", "阿梨", "以后叫我阿梨。"),
+        ("online_name", "阿黎", "本名是阿黎。"),
+        ("preferred_name", "小鱼", "我叫小鱼？"),
+        ("real_name", "小鱼", "我的本名是小鱼？"),
+        ("online_name", "小鱼", "网名是小鱼吗"),
+    ):
+        assert not store.ingest(
+            "u1", [{"kind": "fact", "key": key, "value": value, "explicit": True, "confidence": 0.98}],
+            source=_source(now=clock, user=user), now=clock,
+        ), user
+    assert not store.ingest(
+        "u1", [{"kind": "fact", "key": "preferred_name", "value": "姐姐",
+                "explicit": True, "confidence": 0.98}],
+        source={**_source(now=clock, user="以后你叫我姐姐。"), "authored_text": ""}, now=clock,
+    )
+    assert store.ingest(
+        "u1", [{"kind": "fact", "key": "preferred_name", "value": "姐姐",
+                "explicit": True, "confidence": 0.98}],
+        source=_source(now=clock, user="你能叫我姐姐吗？"), now=clock,
+    )
+
+
+def test_partner_facts_and_address_requests_require_authored_support(store, clock):
+    for kind, key, value, user in (
+        ("fact", "relationship_mate_name", "宝宝", "想我家宝宝了"),
+        ("fact", "relationship_mate_name", "老婆", "想我老婆了"),
+        ("fact", "family_partner", "有对象，昵称宝宝，属于用户自己的亲密关系（非灰泽满）", "这是我对象\n我家宝宝"),
+        ("fact", "family_partner", "有对象，昵称宝宝", "我有对象。"),
+        ("fact", "relationship_mate_name", "小夏", "朋友说：「我对象叫小夏。」"),
+        ("request", "request_address", "他希望以后叫他姐姐", "可以叫你姐姐吗？"),
+        ("request", "request_address", "他希望以后叫他姐姐", "以后叫我妹妹。"),
+        ("request", "request_address", "他希望以后多叫他的名字", "朋友说：以后多叫我的名字。"),
+        ("interaction_preference", "address_style", "nickname", "我想叫你宝宝。"),
+    ):
+        assert not store.ingest(
+            "u1", [{"kind": kind, "key": key, "value": value, "explicit": True, "confidence": 0.98}],
+            source=_source(now=clock, user=user), now=clock,
+        ), user
+    for kind, key, value, user in (
+        ("fact", "relationship_mate_name", "小夏", "我对象叫小夏。"),
+        ("fact", "family_partner", "有女朋友", "我有女朋友。"),
+        ("request", "request_address", "他希望以后叫他姐姐", "以后叫我姐姐。"),
+        ("request", "request_address", "他希望以后多叫他的名字", "以后多叫我的名字。"),
+    ):
+        assert store.ingest(
+            "u1", [{"kind": kind, "key": key, "value": value, "explicit": True, "confidence": 0.98}],
+            source=_source(now=clock, user=user), now=clock,
+        ), user
+
+
+def test_old_ungrounded_names_and_partner_claims_are_hidden_without_rewrite(store, clock):
+    legacy = [
+        ("fact", "preferred_name", "姐姐", "我可以叫你姐姐吗？", "timeless"),
+        ("fact", "real_name", "阿青", "我的名字是阿青。", "timeless"),
+        ("fact", "nickname", "阿花", "我以前叫阿花。", "timeless"),
+        ("fact", "relationship_mate_name", "宝宝", "想我家宝宝了", "timeless"),
+        ("fact", "family_partner", "有对象，昵称宝宝", "这是我对象", "timeless"),
+        ("request", "request_address", "他希望以后叫他姐姐", "我想叫你姐姐。", "timeless"),
+        ("fact", "family_partner", "有女朋友", "我有女朋友。", "timeless"),
+    ]
+    memories = [
+        {"kind": kind, "key": key, "value": value, "temporal_scope": scope, "status": "confirmed",
+         "explicit": True, "source": {"role": "user", "excerpt": user}}
+        for kind, key, value, user, scope in legacy
+    ]
+    store.state_file.write_text(json.dumps({"users": {"u1": {"memories": memories}}}, ensure_ascii=False),
+                                encoding="utf-8")
+    original = store.state_file.read_bytes()
+    card = store.build_state_card("u1", now=clock)
+    assert "阿青" in card and "有女朋友" in card
+    assert "姐姐" not in card and "阿花" not in card and "宝宝" not in card
+    assert not store.build_request_context("u1", now=clock)
+    assert [row["value"] for row in store.usable_address_records("u1")] == ["阿青"]
+    assert not store.history_references("u1", "宝宝", now=clock)
+    assert store.history_references("u1", "阿花", now=clock)[0]["status"] == "past"
+    assert store.state_file.read_bytes() == original
+
+
+async def test_proposed_role_and_current_alias_definition_keep_owner(store, clock):
+    user = "那雨纪当我ママ，灰泽满当我姐姐这样可以嘛"
+    reply = "姐姐可以，这个灰泽满认"
+    items = store.nickname_observations("u1", user, reply, now=clock)
+    [proposal] = items
+    assert proposal["value"] == "姐姐"
+    assert proposal["nickname_response"] == {"stance": "accepted", "scope": "unspecified", "quote": reply}
+    assert store.ingest("u1", items, source=_source(now=clock, user=user, reply=reply), now=clock)
+
+    correction = "嗯嗯，姐姐就是我的宝宝"
+    [alias] = await extract_and_ingest(
+        client=None, model="test", store=store, user_id="u1",
+        user_text="[引用朋友：「妹妹也是宝宝」]\n" + correction, authored_text=correction,
+        assistant_text="明白了。", session_id="session-a", observed_at=clock,
+    )
+    assert alias["value"] == "宝宝" and "nickname_response" not in alias
+    assert alias["source"]["authored_excerpt"] == correction and "引用朋友" in alias["source"]["excerpt"]
+    assert "宝宝" in store.nickname_hint("u1", "宝宝，晚安", now=clock)
+    assert "称呼：宝宝" not in store.build_state_card("u1", now=clock)

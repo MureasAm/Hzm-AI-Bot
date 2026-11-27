@@ -369,7 +369,11 @@ class TestMergedCasesFile:
         for c in doc["cases"]:
             assert c["expect"], f"{c['id']} 没有任何期望"
             for route, cond in c["expect"].items():
-                assert set(cond) <= {"should", "should_not_hit", "contains", "should_fire", "must_not", "allowed"}, \
+                supported = ({"focus", "focus_allowed", "focus_text_contains", "request_contains", "exclusions_contains",
+                              "premises_contains", "third_parties_contains", "exclusions_empty",
+                              "premises_empty", "third_parties_empty"} if route == "understanding" else
+                             {"should", "should_not_hit", "contains", "should_fire", "must_not", "allowed"})
+                assert set(cond) <= supported, \
                     f"{c['id']}/{route} 写法不认识：{cond}"
 
     def test_同一路不能说既该中又不该中(self, doc):

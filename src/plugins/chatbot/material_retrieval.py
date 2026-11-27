@@ -1,8 +1,9 @@
 """按原有方式召回候选，再用同一份本轮语境选择各路真正适用的材料。"""
 import asyncio
 
-from .corpus_judge import CORPUS_JUDGE_PROMPT, judge_enabled
+from .corpus_judge import judge_enabled
 from .persona import load_terms
+from .material_usage import MaterialUse, render_material_use
 from .retrieval import (
     load_preferences, match_entities, resolve_associations, retrieve_corpus_candidates,
     retrieve_core_stories, retrieve_preferences,
@@ -14,21 +15,24 @@ from .term_hints import term_candidates
 
 
 _CORPUS_POLICY = (
-    # 保留事实判据，输出合同由共享选择器按证据模式统一添加。
-    CORPUS_JUDGE_PROMPT.split("只输出 JSON：", 1)[0].format(
-        query="下方本轮语境的原话、最近对话和独立任务理解", candidates="下方候选材料")
-    + "\n\n" + CONTEXT_GUIDANCE
-    + "\n\n【任务优先】先根据共用语境确定本轮实际任务；候选经历不能反过来改写用户意图。"
-      "独立任务理解只作参考，仍以原话和最近对话为证据。"
+    "你为角色对话选择她本人的既有事实或经历，不生成回答。\n" + CONTEXT_GUIDANCE
+    + "\n本轮语境与独立任务理解先于候选；不得因候选同话题就改写用户的任务。"
+      "根据下方唯一用途合同选择，没有适用材料可以为空。"
 )
 
 
-def _joined_relations(groups, budget=300):
+def _joined_relations(groups, budget=300, *, hit_ids=None):
     parts = []
     for group in groups:
+        used = False
         for sentence in group.get("note", "").split("；"):
-            if sentence and sentence not in parts and len("；".join(parts + [sentence])) <= budget:
+            if sentence and sentence in parts:
+                used = True
+            elif sentence and len("；".join(parts + [sentence])) <= budget:
                 parts.append(sentence)
+                used = True
+        if used and hit_ids is not None and group["id"] not in hit_ids:
+            hit_ids.append(group["id"])
     return "；".join(parts)
 
 
@@ -88,6 +92,28 @@ async def retrieve_contextual_materials(context: RetrievalContext, query_vector,
         return (source, str(item_id)) in selection.selected
 
     accepted_groups = [group for group in groups if allowed("association", group["id"])]
+    association_uses = {group["id"]: MaterialUse("association", group["id"], "background")
+                        for group in accepted_groups}
+    # 与生成出口相同地去重短注，并计入每条短注到正文之间的换行。
+    relation_notes = list(dict.fromkeys(render_material_use(use) for use in association_uses.values()))
+    relation_body_budget = max(0, 300 - sum(len(note) + 1 for note in relation_notes))
+    association_use_ids = []
+    association_context = _joined_relations(accepted_groups, budget=relation_body_budget,
+                                             hit_ids=association_use_ids)
+    material_uses = []
+    for candidate in candidates:
+        if not allowed(candidate.source, candidate.item_id):
+            continue
+        if candidate.source == "association":
+            if candidate.item_id in association_use_ids:
+                material_uses.append(association_uses[candidate.item_id])
+            continue
+        proof = selection.evidence.get((candidate.source, candidate.item_id), {})
+        purpose = (proof.get("purpose", "past_example") if candidate.source == "corpus" else
+                   {"core_story": "past_example", "term": "definition", "behavior": "interaction"}
+                   .get(candidate.source, "background"))
+        material_uses.append(MaterialUse(candidate.source, candidate.item_id, purpose,
+                                         fact=proof.get("fact", ""), quote=proof.get("quote", "")))
     approved_terms = {term["keyword"] for term in terms if allowed("term", term["keyword"])}
     all_terms = {str(term.get("keyword")) for term in load_terms() if term.get("keyword")}
     trace = {"available": selection.available, "needs": context.needs,
@@ -109,9 +135,12 @@ async def retrieve_contextual_materials(context: RetrievalContext, query_vector,
         "behavior_items": ([behavior_candidate] if behavior_candidate and allowed("behavior", behavior_candidate.item_id) else []),
         "denied_terms": all_terms - approved_terms,
         "approved_terms": approved_terms,
-        "association_context": _joined_relations(accepted_groups),
-        "association_entities": list(dict.fromkeys(entity for group in accepted_groups for entity in group.get("entities") or [])),
+        "association_context": association_context,
+        "association_use_ids": association_use_ids,
+        "association_entities": list(dict.fromkeys(entity for group in accepted_groups
+            if group["id"] in association_use_ids for entity in group.get("entities") or [])),
         "wiki_entities": [entity for entity in wiki if allowed("wiki", entity)],
         "entity_mentions": selection.entity_mentions,
         "selection_trace": trace,
+        "material_uses": material_uses,
     }

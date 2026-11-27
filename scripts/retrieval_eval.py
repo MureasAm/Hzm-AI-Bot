@@ -21,6 +21,9 @@ phrase 相关的期望已从用例集里清掉——它恒为空，留着是假�
     {"must_not": [ids]}      禁止具体条目；可单独使用，也可与上述条件同时要求成立
     {"allowed": [ids]}       可为空；若有条目，只能来自所列范围，不自动要求命中
 facts 只汇总最终已确认并实际可用的事实材料，不含候选、预算丢弃项、行为风格例句或模型最终回复。
+corpus 若附有用途短注，事实检查仍只读取 extra.source_text 原材料。
+understanding 独立检查共享本轮理解：focus 为主体枚举；*_contains 的必要短语组间 AND、组内 OR；
+*_empty:true 要求对应排除项/预设/第三人为空。只验证必要字段，不是完整语义证明，也不重复调用 L3。
 ⚠️ 别把"现在返回的东西"钉成 should —— 那是把现状当真理，是反过来的循环论证。
 
 不运行会话探测、用户记忆、回复生成或发送，不修改机器人状态。
@@ -31,6 +34,7 @@ import argparse
 import asyncio
 import json
 import sys
+from dataclasses import asdict, is_dataclass
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -82,6 +86,10 @@ def _ids_of(items, is_dict_style: bool):
 
 
 def _text_of(item) -> str:
+    if getattr(item, "source", None) == "corpus":
+        extra = getattr(item, "extra", {})
+        if isinstance(extra, dict) and "source_text" in extra:
+            return str(extra["source_text"] or "")
     return str((item.get("text") if isinstance(item, dict) else getattr(item, "text", "")) or "")
 
 
@@ -101,6 +109,67 @@ def _valid_condition(cond) -> bool:
     return all(cond[key] is True for key in ("should_fire", "should_not_hit") if key in cond)
 
 
+def _check_understanding(cond, value) -> tuple[bool, str, bool]:
+    """枚举精确匹配；必要短语外层 AND / 内层 OR，不证明完整语义。"""
+    focuses = {"character", "user", "third_party", "shared", "general", "unclear"}
+    text_fields = {"focus_text", "request", "exclusions", "premises", "third_parties"}
+    contains = {f"{field}_contains" for field in text_fields}
+    empties = {f"{field}_empty" for field in ("exclusions", "premises", "third_parties")}
+    if (not isinstance(cond, dict) or not cond or set(cond) - (contains | empties | {"focus", "focus_allowed"})
+            or ("focus" in cond and (not isinstance(cond["focus"], str)
+                                     or cond["focus"] not in focuses))
+            or ("focus_allowed" in cond and (not isinstance(cond["focus_allowed"], list)
+                or not cond["focus_allowed"]
+                or any(not isinstance(focus, str) or focus not in focuses for focus in cond["focus_allowed"])))):
+        return False, "理解条件无效或不受支持", True
+    for key, groups in cond.items():
+        if key in empties and groups is not True:
+            return False, "理解空值条件必须显式为true", True
+        if key in contains:
+            if not isinstance(groups, list) or not groups:
+                return False, "理解文本覆盖条件不能为空", True
+            for group in groups:
+                words = [group] if isinstance(group, str) else group
+                if (not isinstance(words, list) or not words
+                        or any(not isinstance(word, str) or not word.strip() for word in words)):
+                    return False, "理解文本覆盖须为短语或非空备选短语组", True
+    if not isinstance(value, dict):
+        return False, "独立任务理解缺失，不能按空结果判定", True
+    outcomes, details = [], []
+    for key, expected in cond.items():
+        field = "focus" if key == "focus_allowed" else key.removesuffix("_contains").removesuffix("_empty")
+        if field not in value:
+            return False, f"独立任务理解缺少{field}字段", True
+        actual = value[field]
+        if key in ("focus", "focus_allowed"):
+            outcomes.append(actual in expected if key == "focus_allowed" else actual == expected)
+            details.append(f"主体期望{expected} 实际{actual}")
+            continue
+        if field == "third_parties":
+            if (not isinstance(actual, (list, tuple))
+                    or any(not isinstance(person, dict) or not isinstance(person.get("name"), str)
+                           or not person["name"].strip() for person in actual)):
+                return False, "独立任务理解third_parties须为有名字的参与人列表", True
+            # 引文可以提到其他人，不能拿引文里的名字替代实际识别出的参与人。
+            text = "\n".join(person["name"] for person in actual)
+        elif isinstance(actual, (list, tuple)) and all(isinstance(part, str) for part in actual):
+            text = "\n".join(actual)
+        elif isinstance(actual, str):
+            text = actual
+        else:
+            return False, f"独立任务理解{field}格式无效", True
+        if key in empties:
+            ok = not text.strip()
+            details.append(f"{field}须为空 实际{actual}")
+        else:
+            groups = [[group] if isinstance(group, str) else group for group in expected]
+            hits = [any(word in text for word in group) for group in groups]
+            ok = all(hits)
+            details.append(f"{field}必要短语组{expected} 覆盖{hits} 实际{actual}")
+        outcomes.append(ok)
+    return all(outcomes), "；".join(details), False
+
+
 def check_case(case: dict, got: dict) -> dict:
     """按期望判定一条 case。got: source -> 检索返回项列表。"""
     expect = case.get("expect", {})
@@ -111,6 +180,12 @@ def check_case(case: dict, got: dict) -> dict:
     passed = True
     checks = []
     for source, cond in expect.items():
+        if source == "understanding":
+            ok, detail, missing = _check_understanding(cond, got.get(source))
+            passed = passed and ok
+            checks.append({"source": source, "ok": ok, "cond": cond,
+                           "detail": detail, "missing": missing})
+            continue
         items = got.get(source, [])
         missing = source not in got or got[source] is None
         dict_style = source in ("preference", "core_story", "associations", "terms", "facts")
@@ -163,7 +238,12 @@ def _summarize_got(got: dict, top: int = 3) -> dict:
     """压缩各 source 命中项（id + 分数），供 --verbose 打印。"""
     out = {}
     for source, items in got.items():
-        if source in ("preference", "core_story", "associations", "terms", "facts"):
+        if source == "understanding":
+            out[source] = items
+        elif source == "material_uses":
+            out[source] = [(item.get("source"), item.get("item_id"), item.get("purpose"))
+                           for item in items]
+        elif source in ("preference", "core_story", "associations", "terms", "facts"):
             out[source] = [(str(i.get("id", "")), round(i.get("score", 0), 3)) for i in items[:top]]
         elif source == "corpus":
             out[source] = [(it.item_id, round(it.score, 3), it.text[:18]) for it in items[:top]]
@@ -214,6 +294,12 @@ async def snapshot(query: str, client, ds_client, behaviors, *, history: str = "
         "associations": [{"id": e, "score": 1.0} for e in result.get("association_entities") or []],
         "terms": [{"id": kw, "score": 1.0} for kw in term_hits],
     }
+    understanding = getattr(result.get("context"), "understanding", None)
+    if callable(getattr(understanding, "to_dict", None)):
+        got["understanding"] = understanding.to_dict()
+    else:
+        got["understanding"] = (asdict(understanding) if is_dataclass(understanding)
+                                else understanding if isinstance(understanding, dict) else None)
     facts = [{"id": f"{source}:{item.get('id') if isinstance(item, dict) else item.item_id}",
               "source": source, "text": _text_of(item)}
              for source in ("corpus", "preference", "core_story")
@@ -222,6 +308,17 @@ async def snapshot(query: str, client, ds_client, behaviors, *, history: str = "
         if text:
             facts.append({"id": source, "source": source, "text": text})
     got["facts"] = facts
+    surviving = {(source, item_id)
+                 for source in ("corpus", "behavior", "preference", "core_story")
+                 for item_id in _ids_of(got[source], source in ("preference", "core_story"))}
+    surviving.update(("term", term) for term in term_hits)
+    surviving.update(("association", str(item_id)) for item_id in result.get("association_use_ids") or [])
+    got["material_uses"] = []
+    for use in result.get("material_uses") or []:
+        record = asdict(use) if is_dataclass(use) else use
+        if (isinstance(record, dict)
+                and (record.get("source"), str(record.get("item_id"))) in surviving):
+            got["material_uses"].append(record)
     return got, l3
 
 
@@ -233,7 +330,11 @@ def format_snapshot(got: dict, l3: dict, full_text: bool = False) -> list:
     if l3.get("behavior"):
         lines.append(f"行为 L3 判定：{l3['behavior']}")
     for source, items in got.items():
-        if not items:
+        if source == "understanding":
+            lines.append(f"understanding: {json.dumps(items, ensure_ascii=False)}")
+        elif source == "material_uses":
+            lines.append(f"material_uses: {json.dumps(items, ensure_ascii=False)}")
+        elif not items:
             lines.append(f"{source:>12}: （空）")
         elif source in ("preference", "core_story", "associations", "terms", "facts"):
             lines.append(f"{source:>12}: " + "、".join(
@@ -298,6 +399,8 @@ async def run(cases, verbose: bool, only_id: str = None, *, output: Path | str |
         verdict["degraded_reasons"] = reasons
         verdict["diagnostics"] = {k: v for k, v in l3.items() if k.startswith("_")}
         verdict["approved_facts"] = got.get("facts")
+        verdict["understanding"] = got.get("understanding")
+        verdict["material_uses"] = got.get("material_uses") or []
         verdict["passed"] = verdict["passed"] and not degraded
         results.append(verdict)
 

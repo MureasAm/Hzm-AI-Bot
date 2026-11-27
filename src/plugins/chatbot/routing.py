@@ -16,6 +16,7 @@ from .llm_json import parse_json_object
 from .retrieval_context import CONTEXT_GUIDANCE, MATERIAL_SOURCES, RetrievalContext
 from .song_requests import parse_song_request
 from .term_hints import terms_hint_block
+from .turn_understanding import parse_understanding
 
 _legendary_cache = None
 
@@ -140,10 +141,10 @@ _BEHAVIOR_CLASSIFY_BODY = """你是{role_name}的意图分类器。判断用户�
 - 「被质疑戳穿 / 失约被催」：用户在质问、戳穿、翻旧账、传她没说过的话，或催她没做到的事。
   如果消息里**既有催问又有质疑**，按哪个更重选一个（拿不准就不选）。
 - 「被说低俗或擦边时冷脸挡回」：内容带**低俗/擦边/黄段子/XP性质**，或用户**要她说一句带颜色的话**
-  （虚构示例：'来个擦边段子'）。求交往、喊老公老婆、要啵啵这类**不含色情内容**，不算这一格。
+  （用户会这么说：'给我们造个黄桃吧''说句骚话'）。求交往、喊老公老婆、要啵啵这类**不含色情内容**，不算这一格。
 - 「被起哄编故事加码」与「低俗擦边」的**区别在内容的性质，不在谁在起哄**：
   · 内容是**色情/擦边** → 低俗那条（她冷脸挡回）
-  · 内容是**荒诞编造、往她身上安离谱的假事**（假说她偷偷养了条龙、把她的口误编成离谱故事）→ 起哄编故事那条（她顺着玩）
+  · 内容是**荒诞编造、往她身上安离谱的假事**（说她怀孕了、说她昨晚没在家、把她口误往歪处带）→ 起哄编故事那条（她顺着玩）
   两者应对**相反**，判错就很假，拿不准时按「内容是不是色情」来分。
 - 「被真心对待」：用户**很认真地**感谢她、说在意她、关心她的情绪、深夜惦记她——是真心，不是玩笑。
   随口一句「谢谢」、普通寒暄不算。
@@ -185,6 +186,14 @@ _ANSWER_SCOPES = frozenset({"conversation", "general_task"})
 
 RESPONSE_TASK_PROMPT = """【本轮任务与回答范围】
 不依赖候选内容，只根据用户原话和最近对话，判断本轮实际要问、聊或处理什么，以及互动对象是谁。
+先绑定人物，再写实际需求：understanding.focus只能是character/user/third_party/shared/general/unclear；
+focus_text简述实际焦点和人物，request写本轮真正要回应什么，exclusions列仅被排除的用途，
+premises列待核实前提；疑问、假设或用户转述的前提不能当作既成事实，task也不能把它们写成事实。
+否定只约束被排除的用途，不能扩成对整个话题的禁止；排除亲历不等于排除概念或词义解释。
+third_parties只列角色与当前用户之外实际提到的人；name使用原话称呼，evidence必须是原话或历史中
+包含该称呼的一段连续原文，不能拼接、补出名字或把当前交谈双方当第三人；没有就[]。
+focus_text至多160字，request至多320字；exclusions/premises各至多6条、每条160字；
+third_parties至多6人、name至多64字、evidence至多240字。
 task用一句话说明实际任务，scope只取conversation或general_task；输出结构见末尾唯一合同，不输出推理过程。
 task保留主体、否定和引用边界，不回答问题、不猜库里有什么，也不判断资料存在哪个来源。
 - conversation：默认范围。角色日常、个人事实、用户历史、自然联想或普通聊天均用它；
@@ -196,7 +205,10 @@ task保留主体、否定和引用边界，不回答问题、不猜库里有什�
 
 def _context_output_contract(song_text: str) -> str:
     schema = {"behavior": None, "same_request": {"what": "", "count": 1}, "reminder": None,
-              "task": "一句话说明本轮实际任务", "scope": "conversation"}
+              "task": "一句话说明本轮实际任务", "scope": "conversation",
+              "understanding": {"focus": "unclear", "focus_text": "本轮实际焦点和人物",
+                                "request": "本轮实际需求", "exclusions": [],
+                                "premises": [], "third_parties": []}}
     if song_text:
         schema["song_request"] = None
     return ("【唯一输出合同】\n" + json.dumps(schema, ensure_ascii=False)
@@ -205,7 +217,7 @@ def _context_output_contract(song_text: str) -> str:
 
 
 def _parse_l3_fields(parsed: dict, names: set, now: datetime.datetime, *, contextual: bool,
-                     song_text: str) -> dict:
+                     song_text: str, raw_text: str = "", history: str = "") -> dict:
     raw_behavior = parsed.get("behavior")
     if isinstance(raw_behavior, str) and raw_behavior.strip() == "null":
         raw_behavior = None
@@ -220,16 +232,26 @@ def _parse_l3_fields(parsed: dict, names: set, now: datetime.datetime, *, contex
         task = raw_task.strip() if isinstance(raw_task, str) else ""
         scope = raw_scope.strip() if isinstance(raw_scope, str) else ""
         valid_task = bool(task) and scope in _ANSWER_SCOPES
+        understanding = parse_understanding(parsed.get("understanding"), raw_text, history)
         result.update(
             behavior=behavior if valid_behavior and behavior in names else "",
             classification_ok=valid_behavior,
             task=task if valid_task else "", scope=scope if valid_task else "",
             needs=sorted(MATERIAL_SOURCES) if valid_task else [], needs_ok=valid_task,
+            understanding=understanding, understanding_ok=understanding is not None,
         )
     if song_text:
         result["song_request"] = parse_song_request(parsed.get("song_request"), song_text)
     return result
 
+
+def _ground_behavior(result: dict, requires_third_party: set) -> dict:
+    """A denied relation scene is an explicit null, so keyword fallback stays closed."""
+    if result["behavior"] in requires_third_party:
+        understanding = result.get("understanding")
+        if understanding is None or not understanding.third_parties:
+            result["behavior"] = ""
+    return result
 
 
 async def classify_l3(deepseek_client, user_msg: str, history_text: str,
@@ -247,14 +269,14 @@ async def classify_l3(deepseek_client, user_msg: str, history_text: str,
        输出的 `phrases` 字段、`phrase_groups` 参数、`PHRASE_SECTION` 全部拆掉。
        留着死字段只会浪费 token、并给 JSON 输出添乱（踩过：加字段后 40 token 截断过 JSON）。
        现在 `history_text` 由调用方传**带时间标签**的版本（`[昨天 17:11｜28小时前] 用户：…`），
-       same_request 靠它判断"是不是同一场对话内的连续索要"；reminder 也靠它把分轮表达的
-       任务、时段和钟点合并为一个请求。
+       same_request 靠它判断"是不是同一场对话内的连续索要"；reminder 也用它合并不同轮次的提醒任务与钟点。
     """
     now = now or datetime.datetime.now().astimezone()
     empty = {"behavior": "", "same_request": {"what": "", "count": 1}, "reminder": None}
     if context is not None:
         empty["classification_ok"] = False
-        empty.update(needs=[], needs_ok=False, task="", scope="")
+        empty.update(needs=[], needs_ok=False, task="", scope="",
+                     understanding=None, understanding_ok=False)
     if not user_msg:
         return empty
 
@@ -263,6 +285,8 @@ async def classify_l3(deepseek_client, user_msg: str, history_text: str,
         if not b.get("name"):
             continue
         line = f"- {b['name']}：{b.get('trigger', '')}"
+        if context is not None and b.get("requires_third_party") is True:
+            line += "（前提：understanding.third_parties中有原话或历史依据的第三人）"
         # 行为定义带真实粉丝话样例：领域黑话光靠 trigger 描述 LLM 认不出，
         # 给真实样例当参照（素材驱动），分类更准。
         for s in b.get("samples", [])[:2]:
@@ -304,24 +328,26 @@ async def classify_l3(deepseek_client, user_msg: str, history_text: str,
     result = empty.copy()
     seen_fields = set()
     names = {b.get("name") for b in (behaviors or [])}
+    required_participants = {b.get("name") for b in (behaviors or [])
+                             if b.get("requires_third_party") is True}
     for attempt in range(2 if context is not None else 1):
         try:
             resp = await deepseek_client.chat.completions.create(
                 model=_get_model_name(),
                 messages=[{"role": "user", "content": prompt}],
                 **({"response_format": {"type": "json_object"}} if context is not None else {}),
-                temperature=0, max_tokens=420, **THINKING_DISABLED,
+                temperature=0, max_tokens=900 if context is not None else 420, **THINKING_DISABLED,
             )
         except Exception as error:
             # HTTP/权限/传输错误由客户端原有降级链处理，不触发格式补救。
             print(f"⚠️ L3 意图分类失败（保留已确认结果）: {error}")
-            return result
+            return _ground_behavior(result, required_participants) if context is not None else result
         log_cache_usage(resp, "行为分类" if attempt == 0 else "行为分类格式补救")
         try:
             content = extract_chat_content(resp)
             parsed = parse_json_object(_repair_llm_json(content))
             incoming = _parse_l3_fields(parsed, names, now, contextual=context is not None,
-                                       song_text=song_text)
+                                       song_text=song_text, raw_text=user_msg, history=history_text)
         except (ValueError, TypeError, KeyError, RuntimeError, AttributeError, IndexError) as error:
             reason = f"不是完整JSON对象：{type(error).__name__}"
         else:
@@ -332,19 +358,23 @@ async def classify_l3(deepseek_client, user_msg: str, history_text: str,
             if incoming["needs_ok"] and not result["needs_ok"]:
                 for key in ("task", "scope", "needs", "needs_ok"):
                     result[key] = incoming[key]
+            if incoming["understanding_ok"] and not result["understanding_ok"]:
+                result.update(understanding=incoming["understanding"], understanding_ok=True)
             for key in ("same_request", "reminder", "song_request"):
                 if key in parsed and key in incoming and key not in seen_fields:
                     result[key] = incoming[key]
                     seen_fields.add(key)
-            if incoming["needs_ok"]:
-                return result
-            reason = "缺少非空字符串task或合法scope"
+            invalid_understanding = "understanding" in parsed and not incoming["understanding_ok"]
+            if incoming["needs_ok"] and not invalid_understanding:
+                return _ground_behavior(result, required_participants)
+            reason = ("understanding结构或第三人原文依据无效" if invalid_understanding else
+                      "缺少非空字符串task或合法scope")
         if context is not None and attempt == 0:
             locked = {"behavior": result["behavior"] or None} if result["classification_ok"] else {}
             prompt = (original_prompt + "\n\n【一次格式补救】上一轮" + reason
                       + "。根据相同原话和上下文补齐唯一输出合同，只输出完整JSON，不要解释。"
                       + "已确认字段保持不变：" + json.dumps(locked, ensure_ascii=False))
-    return result
+    return _ground_behavior(result, required_participants) if context is not None else result
 
 
 def _repair_llm_json(text: str) -> str:

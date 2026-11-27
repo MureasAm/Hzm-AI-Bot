@@ -590,6 +590,22 @@ class TestHistoryGapNote:
         assert {"role": "system", "content": "【原话回查】历史引文"} in msgs[-4:-1]
         assert msgs[-1] == {"role": "user", "content": "灰宝在吗"}
 
+    def test_address_direction_uses_authored_text_before_the_user_turn(self, monkeypatch):
+        monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
+        quote = "[引用灰泽满自己说的：「姐姐喜欢我吗」]"
+        messages = core.build_message_list(
+            quote + " 那姐姐我想你啦", [], [],
+            user_transcript=quote + " 那姐姐我想你啦",
+            authored_text="那姐姐我想你啦",
+        )
+        directions = [m["content"] for m in messages if m["content"].startswith("【本轮说话方向】")]
+        assert len(directions) == 1 and "用户想念灰泽满" in directions[0]
+        assert "是否喜欢用户" not in directions[0]
+        assert messages[-1]["content"].startswith(quote)
+        assert not any(m["content"].startswith("【本轮说话方向】") for m in core.build_message_list(
+            "我想你啦", [], [], is_group=True,
+        ))
+
     def test_user_transcript_overrides_trailing_vision_block(self, monkeypatch):
         """私聊 batch 用按顺序拼好的 transcript；不要再把图片描述追加成尾部块。"""
         monkeypatch.setattr(core.context_probe, "get_now_context", lambda city="": "【当前时间】测试")
@@ -606,8 +622,7 @@ class TestLongReplyPreserved:
     """长回答不再被重写（2026-11-05 删除长度守卫）。
 
     踩坑：旧守卫超过 40 字就带提醒"短一半"重生成，把用户明确要的长回答**整段丢掉**，
-    真实聊天里表现为"我要说了→其实什么都没说"（旧路径可能把 52 token 的段落被
-    重写成 15 token 的预告）。现在 max_tokens=400 只提供物理空间，长短由模型判断。
+    max_tokens=400 提供回复空间，不按固定字数截断。
     """
 
     async def _run(self, monkeypatch, replies):
@@ -1112,7 +1127,7 @@ class TestInjectionTraceWrite:
 
 
 class TestMetaSilence:
-    """识别回复中误用的内部点名标记。"""
+    """识别未点名群聊批次里泄漏的内部决策措辞。"""
 
     def test_detects_known_meta_replies(self):
         for t in ("没点灰泽满，灰泽满才不管。",

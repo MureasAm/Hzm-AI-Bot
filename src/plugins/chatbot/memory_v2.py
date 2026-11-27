@@ -13,8 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 
-from . import injection as inj
-from . import daily_memory
+from . import addressing, daily_memory, injection as inj
 import os
 import re
 import threading
@@ -64,7 +63,8 @@ _ALWAYS_ON_FACT_KEYS = {
 # 上面那批里**天然只有一个值**的（名字/地点/时区/职业）——同一 key 的新值必须顶掉旧的。
 # ⚠️ 不能直接用 `_ALWAYS_ON_FACT_KEYS` 当顶替名单：`identity` / `background` 会有多条
 #    （"是学生" + "在澳洲留学"），顶替会真丢信息（踩过）。
-# 不能只靠 temporal_scope：模型可能把称呼标成 timeless，仍须按单值键去重。
+# ⚠️ 也不能只靠 `temporal_scope == "current"` 判顶替：模型常把 `preferred_name` 标成
+#    普通长期事实会累积，但首选称呼只保留当前值，避免重复注入。
 _SINGLE_VALUED_FACT_KEYS = {
     "preferred_name", "name", "nickname", "location", "city", "timezone", "occupation",
 }
@@ -72,18 +72,57 @@ _SINGLE_VALUED_FACT_KEYS = {
 # "我是绿冻"（粉丝身份）、"用户希望被称呼为X"（整句）都当成 preferred_name。
 # 名字必须是**用户明确要求她这样称呼**，且 value 本身像名字。
 _NAME_KEYS = {"preferred_name", "name", "nickname", "nickname_called",
-              "address_terms", "real_name", "online_name"}
-_NAME_REQUEST_RE = re.compile(
-    r"叫我|称呼我|喊我|管我叫|名字叫|名字是|我叫|本名|真名|网名|曾用名|"
-    r"外号|以前叫|ID是|以后叫|可以叫|首选叫", re.IGNORECASE)
+              "address_terms", "real_name", "online_name", "online_id"}
 _NAME_VALUE_OK_RE = re.compile(r"^[一-鿿A-Za-z0-9_\-·、]{1,12}$")
 _NAME_VALUE_BAD_WORDS = ("用户", "希望", "称呼", "自称", "或者", "不叫")
+_NAME_QUOTES = "「」『』“”‘’\"'"
+_NAME_CLAUSE = re.compile(r"[，,。！？!?；;\n]")
+_NAME_CLAUSE_WITH_END = re.compile(r"[，,；;\n]|(?<=[。！？!?])")
+_REAL_NAME_PREFIX = re.compile(r"^(?:(?:我(?:的)?(?:本名|真名|名字|真实姓名)|本名|真名|真实姓名)"
+                               r"(?:是|叫|为)|我(?:以前|现在|原来)?叫)\s*")
+_ONLINE_NAME_PREFIX = re.compile(r"^(?:我(?:的)?)?(?:网名|曾用网名|曾用名|ID|用户名|账号名)(?:是|叫|为)\s*", re.I)
+_NAME_HISTORICAL = re.compile(r"^(?:以前我|我(?:以前|原来|从前))叫")
+_NAME_HINT_PREFIX = re.compile(r"^(?:嗯+|哦+|对了|其实|好吧|那)\s*")
+_NAME_SUFFIX = re.compile(r"\s*(?:就好|就行|即可|就可以(?:了)?|好了|就对了|也行|可以)?(?:吧|啦|啊|呢|嘛|吗|呀)?$")
+_GENERIC_ADDRESS = r"(?:我的?)?(?:名字|昵称|外号)"
+_ADDRESS_CUE = r"(?:叫叫|叫|喊喊|喊|称呼)"
+_ADDRESS_MODIFIER = r"(?:以后|今后|平时|平常|这回|这次|本场|你|请|希望你|想让你|能不能|能|可不可以|可以|会不会|要|就|直接|偶尔|常常|经常|多多|多|少|不用|不要|别|只)"
+_USER_ADDRESS_CLAUSE = re.compile(
+    rf"^(?:我)?(?:{_ADDRESS_MODIFIER})*{_ADDRESS_CUE}我(?:为)?\s*(?P<term>[^。！？!?]+)"
+)
+_USER_GENERIC_ADDRESS = re.compile(
+    rf"^(?:(?:我想|希望|以后|今后|你|请|直接|多|少|别|不要|不用|平时|经常|偶尔))*"
+    rf"(?:用我(?:的)?(?:名字|昵称|外号)(?:来)?{_ADDRESS_CUE}我|{_ADDRESS_CUE}{_GENERIC_ADDRESS})"
+)
+_ADDRESS_VALUE_PREFIX = re.compile(
+    rf"^(?:他|用户)?(?:希望|要求|想让|希望灰泽满|灰泽满|今后|以后|本场|这次|每天|平时|"
+    rf"多|少|别|不要|不用|直接|请|你|尽量|一直|经常|偶尔)*{_ADDRESS_CUE}(?:他|用户|我)(?:为)?\s*"
+)
+_ADDRESS_GENERIC_SUMMARY = re.compile(r"^(?:他|用户|我)?[^，,。！？!?]{0,30}(?:叫|喊|称呼)"
+                                     r"(?:他|用户|我)?(?:的)?(?:几次)?(?:名字|昵称|外号)$")
+_PARTNER_KEY = re.compile(
+    r"^(?:relationship|family)_(?:mate|partner|spouse|boyfriend|girlfriend|wife|husband)(?:_[a-z0-9_]+)?$"
+)
+_PARTNER_ROLE = r"(?:男朋友|女朋友|伴侣|对象|配偶|丈夫|妻子|老婆|老公|爱人|男友|女友)"
+_PARTNER_NAME = re.compile(
+    rf"^我(?:的)?(?P<role>{_PARTNER_ROLE})(?:的)?(?:(?:名字|本名|外号|昵称)(?:是|叫|为)|名叫|叫)"
+    rf"\s*(?P<name>[\w·.\-「」『』“”\"']{{1,28}})$"
+)
+_PARTNER_STATUS = re.compile(
+    rf"^(?:我|他|用户)?(?:现在|目前|已经|刚)?(?P<state>没有|没|有|交了|谈了)"
+    rf"(?:一个|位)?(?P<role>{_PARTNER_ROLE})(?:了)?$"
+)
+_PARTNER_ACTIVITY = re.compile(rf"^我(?:和|跟)(?:我(?:的)?)?{_PARTNER_ROLE}.*(?:在一起|结婚|领证|分手)")
 # 她自己的名字/常见变体：**绝不能**被当成"用户的称呼/本名/网名"。
-# 别人对机器人的误称不构成用户自己的名字。
-_HER_NAME_TOKENS = ("灰泽满", "灰泽", "泽满", "小满", "满姐", "满神", "灰宝", "hazel")
+# 把角色别名与用户自身的姓名分开，避免角色反过来用自己的别名叫对方。
+_HER_NAME_TOKENS = ("灰泽满", "灰泽", "泽满", "小满", "满姐", "满神", "灰宝", "hazel",
+                    "满区", "灰灰", "灰老先生", "hzm")
 _COMMON_HER_ADDRESSES = ("姐姐", "妈妈", *_HER_NAME_TOKENS)
 _NICKNAME_TOKEN = re.compile(r"[\w.·-]{1,24}")
 _NICKNAME_NAMING = r"(?:(?:叫|喊|称呼)(?:过)?你(?:为)?|管你叫)"
+_NICKNAME_WHEN = r"(?:今天|这次|以后|以前|现在|之前|曾经|上次)"
+_NICKNAME_USER_PREFIX = rf"(?:{_NICKNAME_WHEN})*(?:我)?(?:(?:{_NICKNAME_WHEN}|就|想|想要|要|可不可以|可以|能不能|能))*"
+_NICKNAME_HER_ROLE = r"(?:灰泽满|小满|你|hzm)(?:来)?(?:当|做)我(?:的)?"
 _NICKNAME_LIST_QUERY = re.compile(
     rf"(?:以前|之前|上次|平时|曾经|记得|叫过|喊过|常叫).*?(?:{_NICKNAME_NAMING}|叫过|喊过).*?(?:什么|啥|哪些)"
     rf"|(?:我|还记得).*?{_NICKNAME_NAMING}(?:什么|啥|哪些)"
@@ -95,8 +134,18 @@ _NICKNAME_ALLOW = re.compile(
     r"(?<![不没别])(?:可以|同意|答应|允许|准许|让你|准你)[^。！？；，、]{0,8}(?:叫|喊|称呼)"
     r"|(?:叫|喊)[^。！？；，、]{0,8}(?<![不没])可以"
 )
-_NICKNAME_QUOTED_SPEECH = re.compile(r"\[引用[^\n]*?说的：「.*?」[^\]]*\]|(?:说|问|写|原话是)[“「『].*?[”」』]", re.S)
 _NICKNAME_TIME_LIMIT = re.compile(r"一次|一声|这次|这一次|这一回|这轮|今天|今晚|这回|暂时|现在")
+_NICKNAME_SCOPE_LIMIT = re.compile(r"仅限|只限|只在|只能在|只准|只许|私聊|我们俩之间")
+_NICKNAME_REPORTED_DECISION = re.compile(
+    r"^(?!(?:我|灰泽满|小满|hzm)(?:刚才|刚刚|之前|刚|就)?(?:说|问|答复))"
+    r"[\w]{1,16}?(?:说|问|答复)(?=$|[：:「『“\"\s]|(?:不)?(?:可以|能|同意|答应|别))",
+    re.I,
+)
+_NICKNAME_REVERSED_DECISION = re.compile(
+    rf"^(?:我|他|她)(?:也|{_NICKNAME_WHEN}|之后|刚才|从前|本来|想|要)*"
+    r"(?:可以|能|不能|不可以|别)?(?:叫|喊|称呼)(?!我)"
+    r"|(?:让|准)(?:我|他|她)(?:叫|喊|称呼)"
+)
 _NICKNAME_CORRECTION = re.compile(r"别记|不要记|忘掉|忘记|删除|撤回|从没|从未|没叫过|记错|叫错")
 _MAX_NICKNAME_QUOTE = 90
 
@@ -120,7 +169,7 @@ _PREFERENCE_VALUES = {
     "reply_length": {"short", "medium", "long"},
     "topic_preference": {"engage", "avoid"},
 }
-# 固定互动仪式的值不是枚举，而是自由文本「场景：内容」。
+# 自由文本的相处方式键：值为「场景：内容」，适用于固定仪式和习惯。
 # key 用 `ritual` 或 `ritual_<场景>`（如 ritual_goodnight）：每个场景一个槽，
 # 同一场景的新值顶掉旧值，不同场景互不影响。
 def _is_ritual_key(key: str) -> bool:
@@ -198,9 +247,26 @@ MEMORY_V2_EXTRACT_PROMPT = """你是灰泽满私聊机器人的记忆候选提�
         名字 `real_name` ／ 网名 `online_name` ／ 称呼 `address_terms`
         住地 `location` ／ 身份 `identity` ／ 健康 `health` ／ 家人 `family` ／ 工作学习 `work`
         关系 `relationship` ／ 喜好 `interest` ／ 习惯 `habit` ／ 过往事件 `past_event`
-   · **习惯类（habit_*）合写频率和原因**：如「每周三次做护眼操，因为工作经常看屏幕」。
-   · **不同习惯及频率分开记**：如「每天做拉伸」和「每周三次快走」不要合并。
-   · **习惯类（habit_*）合写频率和原因**：如「每周三次做护眼操，因为工作经常看屏幕」。
+   · **习惯类（`habit_*`）要把「频率 + 原因」一起写进去**：不是"早上要跑步"，
+     而是"每天早上要去跑早操（学校要求）"。（2026-10-17 实测：只记了前者的半截，
+     她连着几天都在问"你起这么早干嘛去"——用户已经说过好几遍是学校要求的。）
+   · ⚠️ **同一活动有多个频率时必须分开记**：不要把它们合成一条。
+     虚构示例：每天晨读、每周三次阅读会要记录为两个活动。
+   · **习惯类还要填一个 `habit` 对象**（只填在 habit_* 上，其它 fact 不要填）：
+     `type`：`routine`＝作息/日程（起床、上课、跑步）；`interaction`＝他和你的互动习惯
+       （表情包撒娇、情话、念诗、睡前摸摸）。**不要把所有习惯都叫 routine。**
+     `cadence`：`daily`（每天）/`weekly`（每周）/`monthly`（每月）/`regular`（经常、平时）/
+       `once`（今晚、明天、这次——**一次性计划不是固定习惯**）/`unknown`。
+     `period`：`morning`/`noon`/`afternoon`/`evening`/`night`/`any`/`unknown`。
+       只有**作息类且每天**的习惯才会按这个时段触发；不确定就写 `any`。
+     `cues`：他实际会说的 2–8 个触发短语（如"跑操""早八""摸摸""表情包"）。
+       **不要把"每天/早上/晚上"这类时间词写进 cues**——时段由 period 管。
+     例子：
+       `habit_morning_run`：`habit={{"type":"routine","cadence":"daily","period":"morning","cues":["跑操","跑步","早操"]}}`
+       `habit_expression_sticker`：`habit={{"type":"interaction","cadence":"daily","period":"any","cues":["表情包","撒娇","语音"]}}`
+       `habit_send_poetry`：`habit={{"type":"interaction","cadence":"regular","period":"any","cues":["念诗","诗歌","歌词"]}}`
+     ⚠️ "今晚要熬夜看比赛"只是一次性计划：要么不记，要么 `cadence":"once"`；
+       不要让它每天早上/晚上都被当成固定习惯翻出来。
    · 判据：同一个人、同一个类别下面，两件不同的事必须能用名字分开。
      后半截写不出具体的东西，就说明这条本来就不该记。
    · ⛔ **不许用 `moment` / `info` / `situation` / `experience` / `thing` 这类空壳名**：
@@ -212,11 +278,12 @@ MEMORY_V2_EXTRACT_PROMPT = """你是灰泽满私聊机器人的记忆候选提�
      - `address_terms`：**他希望灰泽满怎么称呼他**（“叫我学长”“外号是学长、机长”）；多个用「、」写进同一条，一次记全；他改口时用新 value 覆盖。
      - `preferred_name`：**只记当前首选称呼**（他明确说“以后就叫我X”“首选叫X”）；本名/网名不要塞进这里。
      - `her_nickname`：**用户对灰泽满使用或明确提出的称呼**（如“姐姐”“灰宝”）。
+      - 名字和称呼只记本人这次确实说的原文。角色扮演、条件句、引用和第三人的名字没有归属证据。
      - ⚠️ **方向别搞反**：用户直接叫灰泽满某个词（如“区泽满”“满姐”）是**他对她的称呼**，
        对应 `her_nickname`。
        她的名字和变体（灰泽满、小满、满姐、灰宝、Hazel，以及“区泽满”这类谐音）**绝不能**
        写进 `address_terms` / `preferred_name` / `real_name` / `online_name`。
-   · `preferred_name` / `address_terms` 的 value **只写名字本身**（如“星屿哥”“学长、机长”），
+   · `preferred_name` / `address_terms` 的 value **只写名字本身**（如“纸鸢”“学长、机长”），
      **不要写成“用户希望被称呼为X”这种整句**——那个句子会被当成名字注入，又长又怪。
      ⚠️ 只有用户**明确要求灰泽满这样称呼他**才记；"我是绿冻/暖冻"是粉丝身份，不是名字；
      "云子""云玩家"是网络用语（说他不懂/很云），不是名字；
@@ -224,6 +291,8 @@ MEMORY_V2_EXTRACT_PROMPT = """你是灰泽满私聊机器人的记忆候选提�
    · **用户对灰泽满的称呼**：每个称呼单独输出一条 `fact/her_nickname`，value 只写称呼本身，
      temporal_scope=`timeless`。直接喊「姐姐，早」是实际用了「姐姐」；「以后我叫你姐姐」可记为命名约定的提出。
      「可以叫你姐姐吗」只是询问，只有她在回复里明确许可或拒绝才记录该提议及她的答复。
+      「灰泽满当我姐姐」是称呼提议。「姐姐就是我的宝宝」是在说明指代。
+      「想我家宝宝了」「想我老婆了」没有交代对象是谁，不能据此补写现实伴侣关系。
      引用里的称呼、谈论第三人（如「我姐姐下班了」）都不算对她的称呼。称呼不改变她的身份或平常的自称。
      用户换着叫「姐姐」「灰宝」时，各自 upsert；只有明确纠正某个称呼的记忆或要求忘记它才 retract，
      value 必须写清要撤回的那个称呼。
@@ -252,16 +321,16 @@ MEMORY_V2_EXTRACT_PROMPT = """你是灰泽满私聊机器人的记忆候选提�
    · **ritual（固定仪式）**：用户在某个固定场景规定灰泽满以后都这样说/做——晚安、早安、
      出门、上线。key 用 `ritual_<场景>`（如 `ritual_goodnight`，每个场景一个槽，
      不同场景互不顶替），value 写成「场景：要说的内容」，如
-     `ritual_goodnight` = 「晚安/睡前/要睡：晚安+明早见」。
+     `ritual_goodnight` = 「晚安/睡前/要睡：晚安+喜欢你+爱绿冻+mua」。
      场景词写用户实际会用到的说法（用 / 分隔），不然他说“要睡了”时不会触发。
      判据：用户是在**规定以后都这样**（"要有仪式感的晚安""睡前必做""以后都…"），
      不是这一晚的玩笑。哪怕单轮看起来像寒暄，只要是在立这个规矩就记。
      **更新时**：清单里已有同一场景的 ritual，这轮只提到一半内容 → 沿用旧值、
      不要缩水（新 value 必须包含旧值里的具体内容）；只是催一句、没提内容 → 不更新。
+     反复明确索要同一种固定仪式时，不要只把它当作寒暄。
    用户明确说喜欢/不喜欢时 explicit=true；仅从互动表现推断时 explicit=false。
    ⚠️ **用户嫌她"阴阳怪气／挤兑人／说话冲／不好好讲话"，要她改语气 → `banter_tolerance=low`。**
-      （2026-10-17 实测漏了：用户 某用户 明说"以后能保证好好讲话、不要冲人、不要阴阳怪气"，
-       记忆里却只有 `address_style` 一条。这类是用户对相处方式的**明确要求**，必须记。）
+      明确提出的语气边界应独立记录，不要只归到称呼方式。
 3. commitment：灰泽满本轮明确答应用户、需要以后兑现的事。承诺只从灰泽满回复中提取，
    reply_quote 逐字复制她实际回复中明确答应或撤回的那句话，保留原标点。玩笑、复述、
    未说完的前缀、回顾先前的承诺、用户的提醒请求本身都既不是新承诺也不是撤回。
@@ -572,7 +641,7 @@ def _extraction_summary(store: "ShadowMemoryStore", user_id: str) -> str:
     visible = [
         f"{m.get('kind')}/{m.get('key')}={m.get('value')}({m.get('status')})"
         for m in memories
-        if m.get("status") not in {"superseded", "expired"}
+        if m.get("status") not in {"superseded", "expired"} and _identity_record_supported(m)
     ]
     return "；".join(visible)[:1200] or "（无）"
 
@@ -591,6 +660,8 @@ async def extract_and_ingest(
     reminder_hint: dict | None = None,
     source_turn_id: str = "",
     delivery_verified: bool = False,
+    authored_text: str | None = None,
+    preference_observed_at: datetime | None = None,
 ) -> list[dict]:
     """Run one strict shadow extraction; failures never escape to chat flow."""
     observed_at = observed_at or datetime.now()
@@ -602,8 +673,12 @@ async def extract_and_ingest(
         "turn_id": source_turn_id,
         "delivery_verified": delivery_verified,
     }
+    if authored_text is not None:
+        source["authored_text"] = authored_text
+    if preference_observed_at is not None:
+        source["preference_observed_at"] = preference_observed_at.isoformat()
     observed_nicknames = store.nickname_observations(
-        user_id, user_text, assistant_text, now=observed_at)
+        user_id, user_text if authored_text is None else authored_text, assistant_text, now=observed_at)
     if client is None:
         if not observed_nicknames:
             return []
@@ -674,6 +749,21 @@ def _iso(value: Any) -> datetime | None:
         return None
 
 
+def _preference_time(value: Any) -> datetime:
+    parsed = _iso(value)
+    if parsed is None:
+        return datetime.min
+    if parsed.tzinfo is not None:
+        return parsed.astimezone().replace(tzinfo=None)
+    return parsed
+
+
+def _preference_observed_at(memory: dict) -> datetime:
+    source = memory.get("source") or {}
+    observed = source.get("observed_at") if isinstance(source, dict) else None
+    return _preference_time(observed or memory.get("last_observed_at") or memory.get("created_at"))
+
+
 def _bounded_text(value: Any, limit: int) -> str:
     text = str(value or "").strip()
     return text[:limit]
@@ -701,38 +791,50 @@ def _direct_nickname_use(text: str, nickname: str) -> bool:
     tail = r"(?=$|[\s，,、。！？!?～~：:]|在吗|睡了吗|睡了没|早安|晚安|你好|你|我|帮我)"
     return any(
         re.match(rf"^(?:谢谢|早安|晚安|你好)?\s*{token}{tail}", line.strip(), re.I)
-        for line in _NICKNAME_QUOTED_SPEECH.sub("", text).splitlines()
+        for line in addressing.author_text(text).splitlines()
     )
 
 
+def _defined_nickname(text: str, nickname: str) -> bool:
+    return bool(nickname and addressing.her_alias_definition(text).casefold() == nickname.casefold())
+
+
 def _nickname_named(text: str, nickname: str) -> bool:
-    tail = r"(?=$|[\s，,、。！？!?」』”\"']|了|吗|吧|呀|呢|啊|这|可以)"
-    return bool(re.search(
-        rf"{_NICKNAME_NAMING}\s*[「『“\"']?{re.escape(nickname)}{tail}",
-        _NICKNAME_QUOTED_SPEECH.sub("", text), re.I))
+    tail = r"(?=$|[\s、」』”\"']|了|吗|嘛|吧|呀|呢|啊|这样|这么|可以|行不行)"
+    previous = r"你(?:以前|之前|上次|当时|曾经)?(?:答应|同意|拒绝|允许|认可|承认)(?:过)?(?:让)?我"
+    expression = (rf"^(?:(?:{_NICKNAME_USER_PREFIX}|{previous}){_NICKNAME_NAMING}"
+                  rf"|{_NICKNAME_HER_ROLE})(?:一次|一声)?\s*[「『“\"']?{re.escape(nickname)}{tail}")
+    return _defined_nickname(text, nickname) or any(
+        re.match(expression, clause, re.I) for clause in _authored_clauses(text))
 
 
 def _nickname_requested(text: str, nickname: str) -> bool:
-    return bool(re.fullmatch(
-        rf"(?:以后|这次|今天)?我?(?:以后|这次|今天)?(?:可不可以|可以|能不能|能){_NICKNAME_NAMING}"
-        rf"[「『“\"']?{re.escape(nickname)}[」』”\"']?(?:吗|么|嘛)?[？?。！!]*",
-        _NICKNAME_QUOTED_SPEECH.sub("", text).strip(), re.I,
-    ))
+    alias = rf"[「『“\"']?{re.escape(nickname)}[」』”\"']?"
+    return any(re.fullmatch(
+        rf"(?:{_NICKNAME_WHEN})*我?(?:{_NICKNAME_WHEN})*(?:可不可以|可以|能不能|能|想|想要)"
+        rf"{_NICKNAME_NAMING}(?:一次|一声)?{alias}(?:吗|么|嘛)?"
+        rf"|{_NICKNAME_HER_ROLE}{alias}(?:这样|这么)?(?:可以|可以吗|可以嘛|行不行|行吗|行嘛)",
+        clause, re.I,
+    ) for clause in _authored_clauses(text))
 
 
 def _nickname_quote_context(reply: str, quote: str) -> str:
     """补全原句，不能把「不可以这样叫」截成「可以这样叫」。"""
-    if not quote or quote not in reply:
+    if not quote or quote not in addressing.author_text(reply):
         return ""
     before, _, after = reply.partition(quote)
+    preceding_clauses = _authored_clauses(before)
+    if preceding_clauses and _NICKNAME_REPORTED_DECISION.match(preceding_clauses[-1]):
+        return ""
     prefix = re.split(r"[，,。！？!?；;\n]", before)[-1]
     suffix = re.match(r"[^，,。！？!?；;\n]*[？?]?", after)
     return (prefix + quote + (suffix[0] if suffix else "")).strip()
 
 
-def _nickname_response(quote: str, nickname: str, *, named: bool = False) -> dict:
+def _nickname_response(quote: str, nickname: str, *, named: bool = False,
+                       request_text: str = "") -> dict:
     """只把明确谈称呼的许可或拒绝写成态度，范围由同一句话决定。"""
-    if not quote or len(quote) > _MAX_NICKNAME_QUOTE or _NICKNAME_QUOTED_SPEECH.search(quote):
+    if not quote or len(quote) > _MAX_NICKNAME_QUOTE or addressing.author_text(quote) != quote:
         return {}
     alias = re.escape(nickname)
     reference = re.compile(
@@ -740,10 +842,17 @@ def _nickname_response(quote: str, nickname: str, *, named: bool = False) -> dic
         rf"(?:一次|一声)?[「『“\"']?{alias}(?=$|[」』”\"'了吧啊呀哦的])"
         r"|(?:叫|喊)(?:一次|一声)(?=$|[了吧啊呀哦]|就行|可以)", re.I)
     decisions = []
+    reported = False
     for raw in re.split(r"(?<=[。！？!?；;，,\n])", quote):
         clause = raw.strip().rstrip("。！!；;，,")
-        if re.search(r"[？?]|不是不|没有不|并非不"
+        if reported or _NICKNAME_REPORTED_DECISION.match(clause):
+            reported = raw.rstrip().endswith(("，", ","))
+            continue
+        if _NICKNAME_REVERSED_DECISION.search(clause) or re.search(r"[？?]|不是不|没有不|并非不"
                      r"|(?:谁|什么时候|哪有|哪次|哪里).{0,8}(?:让你|同意|答应|允许|准许)", clause):
+            continue
+        if named and (short := re.fullmatch(rf"{alias}(不?可以|不?行)[啊呀哦吧]?", clause)):
+            decisions.append(("declined" if "不" in short[1] else "accepted", clause))
             continue
         if reference.search(clause):
             declined = bool(_NICKNAME_DECLINE.search(clause))
@@ -756,9 +865,11 @@ def _nickname_response(quote: str, nickname: str, *, named: bool = False) -> dic
         stance, clause = ("declined" if "不" in answer[1] else "accepted"), quote
     else:
         return {}
-    if _NICKNAME_TIME_LIMIT.search(clause) or re.search(r"仅限|只限|只在|只能在|私聊|我们俩之间", clause):
+    if _NICKNAME_TIME_LIMIT.search(clause) or _NICKNAME_SCOPE_LIMIT.search(clause):
         scope = "limited"
-    elif re.search(r"(?:仅限|只限|只在|只能在)(?:私聊|群聊|我们俩之间|今天|今晚|这次)", quote):
+    elif re.search(r"仅限|只限|只在|只能在|只准|只许", quote) or (named and any(
+            _NICKNAME_TIME_LIMIT.search(part) and _nickname_requested(part, nickname)
+            for part in _authored_clauses(request_text))):
         scope = "limited"
     elif re.search(r"以后|之后都|一直|今后|从今|每次|随时", clause):
         scope = "standing"
@@ -870,7 +981,7 @@ _FUNC_CHARS = set("的了呢吧吗啊嗯哈是不没都我你他她它们这个�
 
 
 # 扩写句里常见的**泛词**：它们跟任何一条“用户/自己/今天…”的事实都能蹭上一个二字组，
-# 泛词会让无关事实虚高，把真正匹配的条目挤出预算。
+# 避免提示词包装里的泛词挤掉更相关的事实。
 # 只在 fact 相关度里剔除，不动 commitment 的严格匹配。
 _GENERIC_QUERY_TERMS = (
     "用户", "自己", "对方", "灰泽满", "hzm", "今天", "现在", "什么",
@@ -903,7 +1014,7 @@ def _strip_generic_terms(text: str) -> str:
 def _fact_relevance(query: str, record: dict) -> float:
     """fact 的相关度——在 `_relevance` 上补一档**单字兜底**。
 
-    短问候可能没有二字组能匹配，但仍能与某些事实共享一个字。
+    招呼或表情可能没有可匹配的词，常驻相处偏好不能因此丢失。
 
     2026-10-20 又发现了两种失效：
       · 扩写句里的“用户/自己”让无关事实各蹭到 0.125，和真正相关的并列 → 被 4 条上限截掉；
@@ -1284,7 +1395,7 @@ def _habit_mentioned_recently(memory: dict, meta: dict, recent_text: str) -> boo
 def _ritual_matches(memory: dict, query: str) -> bool:
     """固定仪式只在**触发场景**出现时注入。
 
-    value 约定写成「场景：内容」（如「晚安：晚安+明早见」），
+    value 约定写成「场景：内容」（如「晚安：晚安+喜欢你+爱绿冻+mua」），
     场景那半截按 +、/、逗号等切开；用户消息里出现任一个场景词才注入。
     这样“晚安仪式”不会在白天每条消息里都冒出来。
     """
@@ -1401,20 +1512,127 @@ def merge_events_into_card(card: str, events: list[dict],
     return "\n".join(lines), kept
 
 
-def _name_fact_rejection(key: str, value: str, source: dict) -> str:
-    """名字类事实的代码闸门：必须由用户明确要求称呼，且 value 本身像名字。"""
-    if key not in _NAME_KEYS:
+def _authored_clauses(text: str, *, keep_sentence_end: bool = False) -> list[str]:
+    splitter = _NAME_CLAUSE_WITH_END if keep_sentence_end else _NAME_CLAUSE
+    return [_NAME_HINT_PREFIX.sub("", part.strip()) for part in splitter.split(addressing.author_text(text))
+            if part.strip()]
+
+
+def _literal_name(text: str) -> str:
+    return _NAME_SUFFIX.sub("", text.strip()).strip().strip(_NAME_QUOTES).casefold()
+
+
+def _source_user_excerpt(source: dict | None) -> str:
+    if not isinstance(source, dict) or source.get("role") != "user":
         return ""
-    excerpt = str((source or {}).get("excerpt") or "")
-    if not _NAME_REQUEST_RE.search(excerpt):
-        return "name_requires_explicit_request"
-    if not _NAME_VALUE_OK_RE.fullmatch(value or ""):
+    return str(source.get("authored_excerpt", source.get("excerpt")) or "")
+
+
+def _name_fact_rejection(key: str, value: str, source: dict) -> str:
+    """按本名、网名、称呼各自的证据核验当前发言者和名字原文。"""
+    if not (_NAME_VALUE_OK_RE.fullmatch(value or "") or (
+            key in {"online_name", "online_id"} and re.fullmatch(r"[\w·.-]{1,32}", value))):
         return "name_value_not_a_name"
     if any(w in value for w in _NAME_VALUE_BAD_WORDS):
         return "name_value_not_a_name"
     if any(tok in (value or "").lower() for tok in _HER_NAME_TOKENS):
         return "name_looks_like_her_name"
+    excerpt = _source_user_excerpt(source)
+    clauses = _authored_clauses(excerpt, keep_sentence_end=True)
+    if key in {"real_name", "online_name", "online_id"}:
+        prefix = _REAL_NAME_PREFIX if key == "real_name" else _ONLINE_NAME_PREFIX
+        grounded = False
+        for clause in clauses:
+            match = prefix.match(clause)
+            if not match or clause.endswith(("?", "？")):
+                continue
+            body = clause[match.end():].rstrip("。！!").strip()
+            if body.strip(_NAME_QUOTES).casefold() == value.casefold() or (
+                    not body.endswith(("吗", "么", "嘛")) and _literal_name(body) == value.casefold()):
+                grounded = True
+                break
+    else:
+        # 兼容已有的自报曾用名和带“外号可以叫”的多称呼说法。
+        excerpt = "\n".join(_NAME_HISTORICAL.sub("我叫", c).replace("外号可以叫", "外号叫")
+                            for c in clauses if c.rstrip("。！？!?") not in {"我是绿冻", "我是暖冻"})
+        grounded = addressing.user_address_matches(excerpt, value)
+    return "" if grounded else "name_requires_matching_user_declaration"
+
+
+def _historical_name_record(memory: dict) -> bool:
+    key = memory.get("key")
+    if memory.get("kind") != "fact" or key not in _NAME_KEYS:
+        return False
+    if memory.get("temporal_scope") == "past":
+        return True
+    clauses = _authored_clauses(_source_user_excerpt(memory.get("source")), keep_sentence_end=True)
+    current = [clause for clause in clauses if not _NAME_HISTORICAL.match(clause)]
+    return len(current) != len(clauses) and bool(_name_fact_rejection(
+        key, str(memory.get("value") or ""), {"role": "user", "excerpt": "\n".join(current)}))
+
+
+def _address_request_supported(value: str, excerpt: str) -> bool:
+    summary = value.strip().rstrip("。！!")
+    name = _literal_name(_ADDRESS_VALUE_PREFIX.sub("", summary))
+    generic = bool(_ADDRESS_GENERIC_SUMMARY.fullmatch(summary))
+    negative = bool(re.search(r"(?:少|别|不要|不用)(?:再|老|总)?(?:叫|喊|称呼)", summary))
+    for clause in _authored_clauses(excerpt):
+        match = _USER_ADDRESS_CLAUSE.match(clause)
+        source_negative = bool(re.search(r"(?:少|别|不要|不用)(?:再|老|总)?(?:叫|喊|称呼)", clause))
+        if negative != source_negative:
+            continue
+        if generic and (_USER_GENERIC_ADDRESS.match(clause) or (
+                match and re.fullmatch(r"(?:的)?(?:名字|昵称|外号)", _literal_name(match["term"])))):
+            return True
+        if match and not generic and name == _literal_name(match["term"]):
+            return True
+    return False
+
+
+def _partner_fact_supported(key: str, value: str, excerpt: str) -> bool:
+    summary = value.strip().rstrip("。！!")
+    summary_status = _PARTNER_STATUS.fullmatch(summary)
+    for clause in _authored_clauses(excerpt):
+        declared_name = _PARTNER_NAME.fullmatch(clause)
+        declared_status = _PARTNER_STATUS.fullmatch(clause) if clause.startswith("我") else None
+        if declared_name and key.endswith("_name"):
+            if _literal_name(declared_name["name"]) == _literal_name(summary):
+                return True
+        if declared_status and summary_status:
+            same_status = (declared_status["state"] in {"没", "没有"}) == (
+                summary_status["state"] in {"没", "没有"})
+            if same_status and summary_status["role"] in {declared_status["role"], "对象", "伴侣"}:
+                return True
+        if not key.endswith("_name") and (declared_name or _PARTNER_ACTIVITY.match(clause)):
+            if summary.removeprefix("用户").removeprefix("他").removeprefix("我") == clause.removeprefix("我"):
+                return True
+    return False
+
+
+def _identity_grounding_rejection(kind: str, key: str, value: str, source: dict | None) -> str:
+    excerpt = _source_user_excerpt(source)
+    if kind == "fact" and key in _NAME_KEYS:
+        return _name_fact_rejection(key, value, source)
+    if kind == "fact" and key == "her_nickname" and not (
+            _NICKNAME_TOKEN.fullmatch(value)
+            and (_direct_nickname_use(excerpt, value) or _nickname_named(excerpt, value))):
+        return "nickname_needs_user_evidence"
+    if kind == "fact" and _PARTNER_KEY.fullmatch(key) and not _partner_fact_supported(key, value, excerpt):
+        return "partner_fact_requires_user_declaration"
+    if kind == "request" and key == "request_address" and not _address_request_supported(value, excerpt):
+        return "address_request_requires_user_direction"
+    if kind == "interaction_preference" and key == "address_style" and not any(
+            _USER_ADDRESS_CLAUSE.match(clause) or _USER_GENERIC_ADDRESS.match(clause)
+            for clause in _authored_clauses(excerpt)):
+        return "address_preference_requires_user_direction"
     return ""
+
+
+def _identity_record_supported(memory: dict) -> bool:
+    return not _identity_grounding_rejection(
+        str(memory.get("kind") or ""), str(memory.get("key") or ""),
+        str(memory.get("value") or ""), memory.get("source"),
+    )
 
 
 class ShadowMemoryStore:
@@ -1480,6 +1698,10 @@ class ShadowMemoryStore:
         turn_id = source.get("turn_id")
         if isinstance(turn_id, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,120}", turn_id):
             normalized["turn_id"] = turn_id
+        authored_text = source.get("authored_text")
+        if role == "user" and isinstance(authored_text, str):
+            normalized["authored_excerpt"] = _redact_sensitive_excerpt(
+                _bounded_text(authored_text, MAX_SOURCE_CHARS))
         if role == "assistant" and (source.get("delivery_verified") or normalized.get("turn_id")):
             normalized["delivery_verified"] = True
         return normalized
@@ -1559,25 +1781,26 @@ class ShadowMemoryStore:
             return None, "inferred_fact_blocked"
         if kind == "request" and not explicit:
             return None, "explicit_request_required"
-        if kind == "fact" and key in _NAME_KEYS and action != "retract":
-            reason = _name_fact_rejection(key, value, normalized_source)
+        if action != "retract":
+            reason = _identity_grounding_rejection(kind, key, value, normalized_source)
             if reason:
                 return None, reason
         if kind == "fact" and key == "her_nickname" and action == "retract":
-            excerpt = _NICKNAME_QUOTED_SPEECH.sub("", normalized_source["excerpt"])
+            excerpt = addressing.author_text(_source_user_excerpt(normalized_source))
             if not _NICKNAME_TOKEN.fullmatch(value) or value not in excerpt or not _NICKNAME_CORRECTION.search(excerpt):
                 return None, "nickname_retract_needs_correction"
         if kind == "fact" and key == "her_nickname" and action == "upsert":
-            user_excerpt = normalized_source["excerpt"]
-            called = _direct_nickname_use(user_excerpt, value)
-            if not _NICKNAME_TOKEN.fullmatch(value) or not (
-                called or _nickname_named(user_excerpt, value)
-            ):
-                return None, "nickname_needs_user_evidence"
+            user_excerpt = _source_user_excerpt(normalized_source)
+            called = _direct_nickname_use(user_excerpt, value) or _defined_nickname(user_excerpt, value)
             # 曾经用过的称呼是历史依据，同一个人换另一个称呼也能并存。
             temporal_scope = "past"
             valid_for = "none"
         if kind == "interaction_preference":
+            if action == "retract" and not explicit:
+                return None, "explicit_preference_retraction_required"
+            preference_observed_at = _iso(source.get("preference_observed_at"))
+            if preference_observed_at is not None:
+                normalized_source["observed_at"] = preference_observed_at.isoformat()
             if key not in _PREFERENCE_VALUES and not _is_ritual_key(key):
                 return None, "invalid_preference_dimension"
             if key in _PREFERENCE_VALUES and value not in _PREFERENCE_VALUES[key]:
@@ -1621,7 +1844,7 @@ class ShadowMemoryStore:
                 reply = assistant_source.get("excerpt", "")
                 response = _nickname_response(
                     _nickname_quote_context(reply, quote), value,
-                    named=_nickname_requested(user_excerpt, value),
+                    named=_nickname_requested(user_excerpt, value), request_text=user_excerpt,
                 )
                 if response and response["stance"] == candidate.get("stance"):
                     normalized["nickname_response"] = response
@@ -1678,14 +1901,52 @@ class ShadowMemoryStore:
                     })
                     continue
 
-                if item["action"] == "retract":
-                    changed = False
+                memory_id = self._memory_id(item["kind"], item["key"], item["value"])
+                is_preference = item["kind"] == "interaction_preference"
+                is_retraction = item["action"] == "retract"
+                preference_slot = []
+                invalidated_at = now.isoformat()
+                retracted_at = ""
+                withdrawn_before_write = False
+                existing = next((m for m in memories if m.get("id") == memory_id), None)
+                if is_preference:
+                    preference_slot = [memory for memory in memories
+                                       if memory.get("kind") == item["kind"]
+                                       and memory.get("key") == item["key"]]
+                    invalidated_at = item["source"]["observed_at"]
+                    observed_at = _preference_time(invalidated_at)
+                    retractions = user.get("preference_retractions") or {}
+                    retracted_at = retractions.get(memory_id) or ""
+                    if existing and existing.get("status") == "superseded":
+                        retracted_at = max(
+                            retracted_at, existing.get("invalidated_at") or "", key=_preference_time)
+                    withdrawn_before_write = bool(
+                        retracted_at and _preference_time(retracted_at) >= observed_at)
+                    # 同槽的明确改口按会话轮次处理，撤回只作用于指定值。
+                    newer_explicit = item["explicit"] and any(
+                        _preference_observed_at(memory) > observed_at
+                        for memory in preference_slot
+                        if memory.get("explicit")
+                        and (not is_retraction or memory.get("value") == item["value"])
+                    )
+                    if newer_explicit or (withdrawn_before_write and (is_retraction or not item["explicit"])):
+                        self._audit({
+                            "t": now.isoformat(), "user_id": user_id, "decision": "ignored",
+                            "reason": "stale_preference_observation", "key": item["key"],
+                        })
+                        continue
+                    if is_retraction:
+                        # 即使被撤回的写入还没有完成，也记住撤回。
+                        user.setdefault("preference_retractions", {})[memory_id] = invalidated_at
+
+                if is_retraction:
+                    changed = is_preference
                     for memory in memories:
                         if (memory.get("kind") == item["kind"] and memory.get("key") == item["key"]
                                 and memory.get("status") not in {"superseded", "expired"}
                                 and (not item["value"] or memory.get("value") == item["value"])):
                             memory["status"] = "superseded"
-                            memory["invalidated_at"] = now.isoformat()
+                            memory["invalidated_at"] = invalidated_at
                             changed = True
                     self._audit({
                         "t": now.isoformat(), "user_id": user_id,
@@ -1694,9 +1955,7 @@ class ShadowMemoryStore:
                     })
                     continue
 
-                memory_id = self._memory_id(item["kind"], item["key"], item["value"])
                 evidence_id = self._evidence_id(item["source"])
-                existing = next((m for m in memories if m.get("id") == memory_id), None)
                 if existing is None:
                     if item["explicit"] and item["kind"] in {"fact", "interaction_preference", "request"}:
                         status = "confirmed"
@@ -1758,10 +2017,12 @@ class ShadowMemoryStore:
                     if item["key"] == "her_nickname" and "nickname_used" not in existing:
                         existing["nickname_used"] = _direct_nickname_use(
                             (existing.get("source") or {}).get("excerpt", ""), existing["value"])
-                    existing["source"] = item["source"]
+                    # 同值推断可以累计证据，明确偏好的来源仍保留用户原话。
+                    if not is_preference or item["explicit"] or not existing.get("explicit"):
+                        existing["source"] = item["source"]
+                        existing["temporal_scope"] = item["temporal_scope"]
+                        existing["valid_for"] = item["valid_for"]
                     existing["confidence"] = max(float(existing.get("confidence", 0)), item["confidence"])
-                    existing["temporal_scope"] = item["temporal_scope"]
-                    existing["valid_for"] = item["valid_for"]
                     if item.get("habit"):
                         # 同一条习惯又被提到：用最新的结构化字段（模型修正/人工补的覆盖旧推导）。
                         existing["habit"] = item["habit"]
@@ -1782,10 +2043,19 @@ class ShadowMemoryStore:
                     if item["explicit"]:
                         existing["explicit"] = True
                         existing["status"] = "active" if item["kind"] == "commitment" else "confirmed"
-                    elif (item["kind"] == "interaction_preference"
+                        if is_preference:
+                            existing.pop("invalidated_at", None)
+                    elif (is_preference and existing["status"] == "candidate"
                           and existing["evidence_count"] >= 3
-                          and existing["session_count"] >= 2):
+                          and existing["session_count"] >= 2
+                          and not self._explicit_preferences(preference_slot, now)):
                         existing["status"] = "confirmed"
+
+                if withdrawn_before_write:
+                    # 用户曾用这条明确偏好替换更早的值，随后撤回了它。
+                    # 即使异步提取在撤回之后才完成，也要保留这次替换。
+                    existing["status"] = "superseded"
+                    existing["invalidated_at"] = retracted_at
 
                 if "nickname_used" in item:
                     existing["nickname_used"] = item["nickname_used"] or existing.get("nickname_used", False)
@@ -1824,7 +2094,7 @@ class ShadowMemoryStore:
                                 and other.get("key") == item["key"]
                                 and other.get("status") not in {"superseded", "expired"}):
                             other["status"] = "superseded"
-                            other["invalidated_at"] = now.isoformat()
+                            other["invalidated_at"] = invalidated_at
 
                 accepted.append(json.loads(json.dumps(existing, ensure_ascii=False)))
                 record = {
@@ -1864,7 +2134,33 @@ class ShadowMemoryStore:
         """
         now = now or datetime.now()
         memories = self.snapshot(user_id).get("memories", [])
-        return [memory for memory in memories if self._memory_is_active(memory, now)]
+        active = [memory for memory in memories if self._memory_is_active(memory, now)
+                  and _identity_record_supported(memory)
+                  and not _historical_name_record(memory)]
+        explicit_preferences = self._explicit_preferences(active, now)
+        return [memory for memory in active
+                if memory.get("kind") != "interaction_preference"
+                or explicit_preferences.get(memory.get("key"), memory) is memory]
+
+    @classmethod
+    def _explicit_preferences(cls, memories: list[dict], now: datetime) -> dict[str, dict]:
+        """按现有偏好维度选明确记录，兼容旧库中同时生效的冲突值。"""
+        selected = {}
+        for memory in memories:
+            if (memory.get("kind") != "interaction_preference" or not memory.get("explicit")
+                    or not cls._memory_is_active(memory, now)):
+                continue
+            key = memory.get("key")
+            previous = selected.get(key)
+            if previous is None or _preference_observed_at(memory) >= _preference_observed_at(previous):
+                selected[key] = memory
+        return selected
+
+    def usable_address_records(self, user_id: str, *, now: datetime | None = None) -> list[dict]:
+        """有本人口径的当前称呼与长期称呼请求，供称呼预算和用户卡共用。"""
+        return [memory for memory in self._active_memories(user_id, now=now)
+                if (memory.get("kind") == "fact" and memory.get("key") in _NAME_KEYS)
+                or (memory.get("kind") == "request" and memory.get("key") == "request_address")]
 
     @staticmethod
     def _memory_is_active(memory: dict, now: datetime) -> bool:
@@ -1909,15 +2205,17 @@ class ShadowMemoryStore:
             return []
         now = now or datetime.now()
         ranked = []
-        for memory in self.snapshot(user_id).get("memories") or []:
-            if not isinstance(memory, dict):
-                continue
+        memories = [memory for memory in (self.snapshot(user_id).get("memories") or [])
+                    if isinstance(memory, dict)]
+        explicit_preferences = self._explicit_preferences(memories, now)
+        for memory in memories:
             kind = memory.get("kind")
             status = memory.get("status")
             source = memory.get("source")
             if (kind not in {"fact", "interaction_preference", "request"}
                     or status not in {"confirmed", "active", "superseded", "expired"}
                     or not isinstance(source, dict)
+                    or not _identity_record_supported(memory)
                     or source.get("role") != "user"):
                 continue
             excerpt = _redact_sensitive_excerpt(_bounded_text(source.get("excerpt"), MAX_SOURCE_CHARS))
@@ -1936,8 +2234,12 @@ class ShadowMemoryStore:
             if status in {"confirmed", "active"}:
                 if not self._memory_is_active(memory, now):
                     status = "expired"
+                elif (kind == "interaction_preference"
+                      and explicit_preferences.get(key, memory) is not memory):
+                    status = "superseded"
                 else:
-                    status = "past" if memory.get("temporal_scope") == "past" else "current"
+                    status = ("past" if memory.get("temporal_scope") == "past"
+                              or _historical_name_record(memory) else "current")
             observed_at = _bounded_text(source.get("observed_at") or memory.get("last_observed_at"), 64)
             result = {
                 "turn_id": _bounded_text(source.get("turn_id"), 120),
@@ -2468,15 +2770,16 @@ class ShadowMemoryStore:
                               *, now: datetime | None = None) -> list[dict]:
         """短句可以直接记录明确的称呼用法，无需额外模型调用。"""
         known = [m["value"] for m in self._nickname_records(user_id, now)]
-        candidates = list(dict.fromkeys([*known, *_COMMON_HER_ADDRESSES]))
-        addressed = [term for term in candidates if _direct_nickname_use(user_msg, term)]
+        declared = addressing.her_alias_definition(user_msg)
+        candidates = list(dict.fromkeys([*known, *_COMMON_HER_ADDRESSES, *([declared] if declared else [])]))
+        addressed = [term for term in candidates if _direct_nickname_use(user_msg, term) or term == declared]
         named = [term for term in candidates if _nickname_named(user_msg, term)]
         terms = list(dict.fromkeys([*addressed, *named]))
         # 只有一个称呼时才把明确答复与它绑定，保留她实际说过的范围。
         response = {}
         if len(terms) == 1:
             response = _nickname_response(
-                reply.strip(), terms[0], named=_nickname_requested(user_msg, terms[0]))
+                reply.strip(), terms[0], named=_nickname_requested(user_msg, terms[0]), request_text=user_msg)
         observations = []
         for term in terms:
             if term not in addressed and not response:
@@ -2519,7 +2822,7 @@ class ShadowMemoryStore:
             nickname = m["value"]
             used = m.get("nickname_used")
             if used is None:
-                used = _direct_nickname_use((m.get("source") or {}).get("excerpt", ""), nickname)
+                used = _direct_nickname_use(_source_user_excerpt(m.get("source")), nickname)
             if list_query and not relevant and not used:
                 continue
             if matched_terms is not None:

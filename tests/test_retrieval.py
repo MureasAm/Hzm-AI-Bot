@@ -233,10 +233,10 @@ class TestCorpusKeywordGate:
         n7 挡住了，co9/co10 一起被打回红。
         """
         fp = _corpus_keyword_overlap(
-            "明天要早起，我先睡了。",
+            "宝宝我明天要早起我先去睡了",
             "粉丝问她明天会不会早起，她先表示可能性很低，又说其实很想早起")
         tp = _corpus_keyword_overlap(
-            "你直播提过以前喜欢的那个男学霸吗？",
+            "你不是以前有喜欢的男学霸吗，你直播里说的",
             "灰泽满聊到学生时代时，提到自己曾被女同学质问是不是女同，情急之下谎称喜欢一个男同学")
         assert fp > tp, (
             f"前提变了（误报 ov={fp:.3f} 不再 > 真阳性 ov={tp:.3f}）—— "
@@ -261,7 +261,7 @@ class TestCorpusKeywordGate:
         db = [target] + filler
         monkeypatch.setattr("src.plugins.chatbot.retrieval.load_vector_db", lambda: db)
         monkeypatch.setattr("src.plugins.chatbot.retrieval.load_corpus_keywords", lambda: {})
-        cands = retrieve_corpus_candidates("你直播提过以前喜欢的那个男学霸吗？",
+        cands = retrieve_corpus_candidates("你不是以前有喜欢的男学霸吗，你直播里说的",
                                           [1, 0, 0, 0], top_n=1)
         assert "0" in [c.item_id for c in cands], "语义分低但词面沾边的条目没被递过去 → 等于丢召回"
 

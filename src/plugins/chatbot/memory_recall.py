@@ -4,7 +4,8 @@ import re
 from datetime import datetime, timedelta, timezone
 
 from . import event_memory, reply_evidence
-from .memory_v2 import _redact_sensitive_excerpt
+from .addressing import author_text
+from .memory_v2 import _NAME_KEYS, _identity_record_supported, _redact_sensitive_excerpt
 
 _CST = timezone(timedelta(hours=8))
 _PAST = re.compile(
@@ -23,6 +24,23 @@ _REMINDER_DELIVERY = re.compile(r"(?:发|发出|提醒|通知)(?:过|了)|有没
 _NICKNAME = re.compile(r"(?:叫|喊|称呼)你|(?:我|他)叫过|称呼|昵称")
 _QUOTED_NICKNAME = re.compile(r'[「『“"]([\w·-]{1,20})[」』”"]')
 _COMMON_NAMES = ("姐姐", "妈妈", "灰泽满")
+_ADDRESS_HISTORY = re.compile(
+    r"(?:怎么|怎样|如何)(?:称呼|叫|喊)(我|你|灰泽满)(?!自己)"
+    r"|(?:称呼|叫|喊)(?:过)?(我|你|灰泽满)(?:为)?(?:什么|啥|哪些)"
+)
+_ALIAS_QUESTION = re.compile(
+    r"^(?:那(?:个)?|所以|请问|(?:你|我)(?:刚才)?说的)?\s*"
+    r"[「『“\"]?([\w·-]{1,20}?)[」』”\"]?\s*"
+    r"(?:是谁|(?:是)?指(?:的)?谁)(?:呀|啊|呢|来着)?[？?。]*$",
+    re.I,
+)
+_ALIAS_CONFIRMATION = re.compile(
+    r"^(?:那|所以|请问|(?:你|我)(?:刚才)?说的)?\s*"
+    r"[「『“\"]?([\w·-]{1,20}?)[」』”\"]?\s*"
+    r"(?:是(?:指|在叫)?|指的是|是不是(?:指)?)\s*(?:hzm|hazel|灰泽满|小满|你|我)"
+    r"(?:(?:呀|啊|吗|嘛|么|呢|来着)[？?。]*|[？?]+)$",
+    re.I,
+)
 _DIRECT_HISTORY = re.compile(r"原话|聊天记录|对话记录|(?:上|前)一(?:句|条|轮)")
 _QUOTE_HEADER = re.compile(r"\[引用[^\]\n]*\]")
 _SPEECH = re.compile(
@@ -88,8 +106,31 @@ def _looking_back(query: str) -> bool:
     return bool(_QUESTION.search(query) and (_PAST.search(query) or _STATUS.search(query)))
 
 
+def _clarified_alias(query: str) -> str:
+    query = author_text(query)
+    match = _ALIAS_QUESTION.fullmatch(query) or _ALIAS_CONFIRMATION.fullmatch(query)
+    return match[1] if match and match[1] not in {"你", "我", "他", "她", "那", "这"} else ""
+
+
+def _historical_address_role(query: str) -> str:
+    query = author_text(query)
+    match = _ADDRESS_HISTORY.search(query) if _looking_back(query) else None
+    if not match:
+        return ""
+    recipient = match[1] or match[2]
+    actor = _speaker(query[:match.start()])
+    if recipient == "我":
+        return "assistant" if actor in {"", "你", "灰泽满"} else ""
+    return "user" if actor in {"", "我"} else ""
+
+
+def is_address_question(query: str) -> bool:
+    """识别方向明确的历史称呼追问，以及精确到一个称呼的指代问题。"""
+    return bool(_historical_address_role(query) or _clarified_alias(query))
+
+
 def _quoted_question(query: str, reference_ids) -> bool:
-    return bool(reference_ids and _QUESTION.search(_QUOTE_HEADER.sub("", query)))
+    return bool(reference_ids and (_QUESTION.search(_QUOTE_HEADER.sub("", query)) or _clarified_alias(query)))
 
 
 def needs_recall(query: str, *, reference_ids=()) -> bool:
@@ -97,6 +138,8 @@ def needs_recall(query: str, *, reference_ids=()) -> bool:
     if _quoted_question(query, reference_ids):
         return True
     query = _QUOTE_HEADER.sub("", query)
+    if _historical_address_role(query):
+        return True
     speech = _SPEECH.search(query)
     if _PUBLIC_CONTEXT.search(query) and not re.search(r"(?:跟|和|对|给|向)(?:我|你)(?:说|讲|聊|提)", query):
         return False
@@ -254,13 +297,60 @@ _MEMORY_STATE = {
 }
 
 
+def _address_records(store, user_id: str):
+    for memory in store.snapshot(user_id).get("memories", []):
+        key = memory.get("key")
+        if memory.get("kind") != "fact" or (key != "her_nickname" and key not in _NAME_KEYS):
+            continue
+        if memory.get("status") not in {"confirmed", "active", "superseded", "retracted"}:
+            continue
+        if not _identity_record_supported(memory):
+            continue
+        aliases = [part.strip().strip("「」『』\"“”'") for part in
+                   re.split(r"[、,，/]", str(memory.get("value") or ""))]
+        yield ("user" if key == "her_nickname" else "assistant"), aliases, memory
+
+
+def _alias_identity_context(store, user_id: str, alias: str) -> str:
+    directions = {"user": "用户对灰泽满的历史称呼", "assistant": "对用户的姓名或称呼记录"}
+    lines = []
+    refs = []
+    for role, aliases, record in _address_records(store, user_id):
+        if alias.casefold() not in {name.casefold() for name in aliases}:
+            continue
+        description = f"{directions[role]}提到 {_quote(alias, 40)}。"
+        if description not in lines:
+            lines.append(description)
+        refs.extend(response["turn_id"] for response in record.get("nickname_responses", [])
+                    if response.get("turn_id"))
+        if turn_id := (record.get("source") or {}).get("turn_id"):
+            refs.append(turn_id)
+    if not lines:
+        return ""
+    turns = reply_evidence.recall_turns(user_id, turn_ids=refs, limit=3) if refs else []
+    lines.extend(_render_turn(turn) for turn in turns)
+    if not turns:
+        lines.append("该称呼的对应原话未核验。")
+    return (
+        "【原话回查】\n按这些资料里的说话人和称呼对象理解称呼。"
+        "同一个词可用于多个对象，解释具体一句时以那句话为准。\n" + "\n".join(lines)
+    )
+
+
 def _general_history(store, user_id: str, query: str, now: datetime, reference_ids=()) -> tuple[list[str], bool]:
     role, terms, since, until = ("", (), None, None) if reference_ids else _history_query(query, now)
     literal = bool(_QUOTED_TEXT.search(query))
+    address_role = _historical_address_role(query) if not reference_ids else ""
+    if address_role:
+        role = address_role
+        terms = tuple(_QUOTED_NICKNAME.findall(query)[:3]) or tuple(dict.fromkeys(
+            name for owner, aliases, _ in _address_records(store, user_id) if owner == role
+            for name in aliases if name
+        ))[:6]
     topic = " ".join(terms)
     memories = []
     events = []
-    if topic and role != "assistant" and not literal:
+    if topic and role != "assistant" and not (literal or address_role):
         memories = store.history_references(user_id, topic, limit=2)
         events = event_memory.history_references(user_id, topic, limit=2)
     refs = reference_ids or tuple(dict.fromkeys(
@@ -268,9 +358,9 @@ def _general_history(store, user_id: str, query: str, now: datetime, reference_i
     turns = reply_evidence.recall_turns(
         user_id, turn_ids=refs, terms=terms, role=role, since=since, until=until,
         limit=1 if not terms and not reference_ids and _LAST.search(query) else 3,
-        include_legacy=not reference_ids, fuzzy=not literal,
+        include_legacy=not reference_ids, fuzzy=not (literal or address_role),
         use_recent=not terms and not reference_ids and bool(
-            since is not None or _DIRECT_HISTORY.search(query) or _SPEECH.search(query)),
+            since is not None or _DIRECT_HISTORY.search(query) or _SPEECH.search(query) or address_role),
     )
     lines = []
     if since is None and until is None:
@@ -324,9 +414,13 @@ def build_recall_context(store, user_id: str, query: str, *,
     """仅在本轮明确追问时附上相关来源及独立的当前状态。"""
     looking_back = _looking_back(query)
     quoted = _quoted_question(query, reference_ids)
+    alias = _clarified_alias(query)
+    address_role = _historical_address_role(query)
+    if alias and not quoted:
+        return _alias_identity_context(store, user_id, alias)
     if not (needs_recall(query, reference_ids=reference_ids) or (looking_back and nicknames)):
         return ""
-    nickname_query = looking_back and not is_commitment_question(query) and (
+    nickname_query = looking_back and not (address_role or is_commitment_question(query)) and (
         _NICKNAME.search(query) or (nicknames and _DECISION.search(query))
     )
     speech = _SPEECH.search(query)
@@ -336,7 +430,7 @@ def build_recall_context(store, user_id: str, query: str, *,
         refs = nickname_turn_ids
         terms = nicknames or (*_QUOTED_NICKNAME.findall(query),
                               *(name for name in _COMMON_NAMES if name in query))
-    elif looking_back and _PROMISE.search(query) and not (quoted or user_speech):
+    elif looking_back and _PROMISE.search(query) and not (quoted or user_speech or address_role):
         topic = _TOPIC_NOISE.sub("", query)
         records = store.commitment_history(user_id, topic)
         refs = tuple(m["source"]["turn_id"] for m in records if (m.get("source") or {}).get("turn_id"))
@@ -359,7 +453,10 @@ def build_recall_context(store, user_id: str, query: str, *,
             lines.append("未找到可核验的对应原话。可以说明能查到的范围，避免凭摘要复述原话。")
         return (
             "【原话回查】\n这些是同一私聊的历史资料。按日期和说话人引用原话。"
-            "摘要和旧日志只作线索，当前状态以对应的有效记录为准。\n" + "\n".join(lines)
+            "摘要和旧日志只作线索，当前状态以对应的有效记录为准。"
+            + ("按引文里的说话人、称呼对象和当时的直接用法理解称呼。"
+               "同一个词可用于多个对象。" if alias or address_role else "")
+            + "\n" + "\n".join(lines)
         )
 
     turns = reply_evidence.recall_turns(

@@ -11,9 +11,9 @@ def _store(tmp_path):
         state_file=tmp_path / "state.json", audit_file=tmp_path / "audit.jsonl")
 
 
-def _source(now):
+def _source(now, text="以后多叫叫我名字"):
     return {"session_id": "s1", "observed_at": now.isoformat(),
-            "user_text": "以后多叫叫我名字", "assistant_text": "行吧。"}
+            "user_text": text, "assistant_text": "行吧。"}
 
 
 def _item(**kw):
@@ -29,15 +29,15 @@ def test_request_roundtrip_and_name(tmp_path):
     now = datetime(2026, 10, 27, 12, 0)
     store = _store(tmp_path)
     store.ingest("u", [{
-        "kind": "fact", "key": "preferred_name", "value": "小温",
+        "kind": "fact", "key": "preferred_name", "value": "纸鸢",
         "action": "upsert", "explicit": True, "confidence": 1.0,
         "temporal_scope": "timeless",
-    }], source=_source(now), now=now)
+    }], source=_source(now, "以后叫我纸鸢"), now=now)
     accepted = store.ingest("u", [_item()], source=_source(now), now=now)
     assert len(accepted) == 1 and accepted[0]["status"] == "confirmed"
     text = store.build_request_context("u", now=now)
     assert "【他对你的长期请求】" in text
-    assert "多叫他的名字" in text and "小温" in text
+    assert "多叫他的名字" in text and "纸鸢" in text
 
 
 def test_request_same_target_supersedes(tmp_path):
@@ -84,13 +84,13 @@ def test_name_budget_relaxes_with_address_request(tmp_path, monkeypatch):
     now = datetime(2026, 10, 27, 12, 0)
     store = _store(tmp_path)
     store.ingest("u", [{
-        "kind": "fact", "key": "preferred_name", "value": "小温",
+        "kind": "fact", "key": "preferred_name", "value": "纸鸢",
         "action": "upsert", "explicit": True, "confidence": 1.0,
         "temporal_scope": "timeless",
-    }], source=_source(now), now=now)
+    }], source=_source(now, "以后叫我纸鸢"), now=now)
     monkeypatch.setattr(core, "_MEMORY_V2_STORE", store)
     monkeypatch.setattr(core, "get_user_history",
-                        lambda uid: ["灰泽满：小温，晚安。", "用户：晚安"])
+                        lambda uid: ["灰泽满：纸鸢，晚安。", "用户：晚安"])
     # 没有 request：最近叫过 1 次就提醒
     assert core.name_budget_note("u") != ""
     store.ingest("u", [_item()], source=_source(now), now=now)

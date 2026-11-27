@@ -29,10 +29,10 @@ def test_perception_now_has_time_and_lunar():
 def test_build_message_list_uses_v3_contexts():
     msgs = core.build_message_list(
         "你好", [], [],
-        state_stable="【关于这个绿冻】\n称呼：小温",
+        state_stable="【关于这个绿冻】\n称呼：纸鸢",
         state_dynamic="【当前状态】\n10月27日 周二，灰泽满现在没有在直播。",
         time_hint="【本场时段】现在是深夜。",
-        prefetch_context="【预取】[{\"text\":\"名字是小温\"}]",
+        prefetch_context="【预取】[{\"text\":\"名字是纸鸢\"}]",
     )
     joined = "\n".join(m["content"] for m in msgs if isinstance(m.get("content"), str))
     assert "【关于这个绿冻】" in joined
@@ -49,6 +49,7 @@ def test_state_card_has_stable_slots(tmp_path):
     state = {"users": {"u": {"memories": [
         {"id": "a", "kind": "fact", "key": "preferred_name", "value": "学长",
          "status": "confirmed", "temporal_scope": "timeless", "explicit": True,
+         "source": {"role": "user", "excerpt": "叫我学长。"},
          "evidence_count": 1, "confidence": 0.9},
         {"id": "b", "kind": "fact", "key": "location", "value": "在广东",
          "status": "confirmed", "temporal_scope": "current", "explicit": True,
@@ -61,12 +62,15 @@ def test_state_card_has_stable_slots(tmp_path):
          "evidence_count": 1, "confidence": 0.9},
         {"id": "e", "kind": "fact", "key": "real_name", "value": "胡洋",
          "status": "confirmed", "temporal_scope": "timeless", "explicit": True,
+         "source": {"role": "user", "excerpt": "我的本名是胡洋。"},
          "evidence_count": 1, "confidence": 0.9},
         {"id": "f", "kind": "fact", "key": "online_name", "value": "千纸鸢",
          "status": "confirmed", "temporal_scope": "timeless", "explicit": True,
+         "source": {"role": "user", "excerpt": "我的网名是千纸鸢。"},
          "evidence_count": 1, "confidence": 0.9},
         {"id": "g", "kind": "fact", "key": "address_terms", "value": "学长、机长",
          "status": "confirmed", "temporal_scope": "timeless", "explicit": True,
+         "source": {"role": "user", "excerpt": "叫我学长或者机长。"},
          "evidence_count": 1, "confidence": 0.9},
         {"id": "h", "kind": "fact", "key": "relationship_trust_barrier", "value": "对人有戒备心，把灰泽满当倾诉对象",
          "status": "confirmed", "temporal_scope": "timeless", "explicit": True,
@@ -90,8 +94,9 @@ def test_profile_context_can_exclude_facts(tmp_path):
         {"id": "a", "kind": "interaction_preference", "key": "support_style",
          "value": "comfort", "status": "confirmed", "temporal_scope": "timeless",
          "explicit": True, "evidence_count": 1, "confidence": 0.9},
-        {"id": "b", "kind": "fact", "key": "preferred_name", "value": "小温",
+        {"id": "b", "kind": "fact", "key": "preferred_name", "value": "纸鸢",
          "status": "confirmed", "temporal_scope": "timeless", "explicit": True,
+         "source": {"role": "user", "excerpt": "叫我纸鸢。"},
          "evidence_count": 1, "confidence": 0.9},
     ]}}}
     p = tmp_path / "state.json"
@@ -100,10 +105,10 @@ def test_profile_context_can_exclude_facts(tmp_path):
 
     style_only = store.build_preference_context("u", "今天好累", include_facts=False)
     assert "接住情绪" in style_only
-    assert "小温" not in style_only
+    assert "纸鸢" not in style_only
 
     with_facts = store.build_preference_context("u", "今天好累", include_facts=True)
-    assert "小温" in with_facts
+    assert "纸鸢" in with_facts
 
 def test_state_card_includes_family_habits_and_recent(tmp_path):
     state = {"users": {"u": {"memories": [

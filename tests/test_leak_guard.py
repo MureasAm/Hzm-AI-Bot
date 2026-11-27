@@ -1,15 +1,16 @@
 # -*- coding: utf-8 -*-
-"""规划式泄露兜底的判据测试（2026-11-14 真实事故固化）。"""
+"""规划式泄露兜底的判据测试（使用虚构文本）。"""
+import pytest
+
 from src.plugins.chatbot.reply_style import planning_leak_reason
 
 
 def test_production_planning_leak_is_flagged():
-    # 900000001 2026-11-13 22:41 的真实泄露（节选）
+    # 虚构草稿，覆盖生成规划泄漏的标记组合。
     text = (
-        "“谢谢姐姐”这句先接住，他平时叫她姐姐或者机长，但系统要求尽量别再叫名字，"
-        "直接说事。他情绪好转了，之前是寻求安慰，现在说“好多了”。灰泽满的回应应该"
-        "温柔一点，符合“像二次元的家人”和“哄睡”的期待。“不客气，那就好。”，"
-        "或者更软一点：“嗯，那就好。姐姐的肩膀可不是白借你的。”"
+        "可以先接住这句，系统要求用角色口吻。灰泽满可以回得柔和一点，"
+        "也可以直接回答，注意默认短回复。"
+
     )
     assert planning_leak_reason(text)
 
@@ -39,6 +40,20 @@ def test_bullet_list_planning_is_flagged():
     assert planning_leak_reason(text)
 
 
+def test_list_with_internal_reply_notes_is_flagged():
+    # 保留 11 月 22 日真实泄露的结构，示例内容使用合成文本。
+    text = (
+        "面前的问题要先顺着主题接一句。\n当前用户在问晚饭。\n\n"
+        "1. 语气：偏随意。\n2. 限制：不替对方决定。\n3. 示例参考：吃面也行呀。\n\n"
+        "吃面也行呀。"
+    )
+    assert planning_leak_reason(text) == "列表式草稿"
+    markdown = text.replace("当前用户", "**当前用户**")
+    for number in (1, 2, 3):
+        markdown = markdown.replace(f"{number}. ", f"{number}) ")
+    assert planning_leak_reason(markdown) == "列表式草稿"
+
+
 def test_normal_replies_are_not_flagged():
     normal = [
         "嗯，好多了就好。那早点睡吧，明天周六在家玩一整天。",
@@ -47,6 +62,9 @@ def test_normal_replies_are_not_flagged():
         "要么先去睡，要么再聊一会儿，你自己选。",
         "灰泽满觉得你这话说得有点重了，但他应该不是故意的。",
         "那就好。……不过下次别一个人憋着。",
+        "可以这样回：\n- 「谢谢你告诉我。」\n- 「明天聊也行，你先忙。」",
+        "可以这样回复：\n- 先安慰一句，告诉对方你愿意听。\n- 再换个话题，给他一点缓冲。",
+        "约人见面可以参考这三点。\n1. 语气：轻松。\n2. 限制：说清时间。\n3. 示例参考：周五见？",
     ]
     for text in normal:
         assert planning_leak_reason(text) == "", text
@@ -103,11 +121,12 @@ def test_generate_reply_rewrites_leak(monkeypatch):
     assert fake.chat.completions.calls == 2
 
 
-def test_generate_reply_falls_back_when_rewrite_still_leaks(monkeypatch):
+def test_generate_reply_falls_back_when_rewrite_still_leaks(monkeypatch, capsys):
     core, fake = _patch_core(monkeypatch, [LEAK, LEAK])
     out = __import__("asyncio").run(core.generate_reply([{"role": "user", "content": "hi"}]))
     assert out == core._FALLBACK_REPLY
     assert fake.chat.completions.calls == 2
+    assert "主回复重写后仍混入规划/旁白，使用兜底回复" in capsys.readouterr().out
 
 
 def test_generate_reply_does_not_retry_clean_reply(monkeypatch):
@@ -115,3 +134,18 @@ def test_generate_reply_does_not_retry_clean_reply(monkeypatch):
     out = __import__("asyncio").run(core.generate_reply([{"role": "user", "content": "hi"}]))
     assert out == CLEAN
     assert fake.chat.completions.calls == 1
+
+
+@pytest.mark.parametrize("body", [
+    "1. 把电脑关掉。\n2. 拔掉电源再拆外壳。",
+    "- 去之前先打个电话。\n- 到了记得带上取件码。",
+], ids=["numbered", "bulleted"])
+@pytest.mark.parametrize("first_leaks", [False, True], ids=["first-draft", "after-rewrite"])
+async def test_generate_reply_accepts_plain_list_content(monkeypatch, body, first_leaks):
+    contents = [LEAK, body] if first_leaks else [body, CLEAN]
+    core, fake = _patch_core(monkeypatch, contents)
+
+    result = await core.generate_reply([{"role": "user", "content": "分两点讲就好"}])
+
+    assert result == body
+    assert fake.chat.completions.calls == (2 if first_leaks else 1)

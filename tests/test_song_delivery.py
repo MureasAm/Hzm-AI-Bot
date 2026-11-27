@@ -36,8 +36,8 @@ async def test_song_intent_preserves_ingress_order_when_same_second_quote_is_slo
             await release_quote.wait()
         return ""
 
-    async def fake_handle(user_id, text, *, song_text, **kwargs):
-        captured.update(text=text, song_text=song_text)
+    async def fake_handle(user_id, text, *, authored_text, **kwargs):
+        captured.update(text=text, authored_text=authored_text)
         return ""
 
     async def no_op(*args, **kwargs):
@@ -60,7 +60,7 @@ async def test_song_intent_preserves_ingress_order_when_same_second_quote_is_slo
     await win.task
     await cw._flush(win)
 
-    assert captured == {"text": "算了\n给我唱两句", "song_text": "给我唱两句\n算了"}
+    assert captured == {"text": "算了\n给我唱两句", "authored_text": "给我唱两句\n算了"}
 
 
 @pytest.mark.parametrize(("mode", "as_file", "reply_text", "label"), [
@@ -76,12 +76,12 @@ async def test_confirmed_song_is_delivered_and_available_to_the_next_turn(
     delivery = SimpleNamespace(title="星星", mode=mode, path=tmp_path / "song.wav", as_file=as_file)
     first = True
 
-    async def fake_handle(user_id, text, *, song_text, **kwargs):
+    async def fake_handle(user_id, text, *, authored_text, **kwargs):
         nonlocal first
         if first:
             first = False
             assert text == "给我唱这首\n[引用：别唱]"
-            assert song_text == "给我唱这首"
+            assert authored_text == "给我唱这首"
             reply = core.Reply(reply_text, {"song": delivery, "voice": True})
         else:
             assert session_memory.last_song(user_id) == "星星"

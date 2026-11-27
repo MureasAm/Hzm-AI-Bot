@@ -10,6 +10,7 @@ import asyncio
 import re
 import time
 from dataclasses import replace
+from datetime import datetime
 
 from .bg import spawn
 from .constants import (
@@ -36,6 +37,7 @@ from .chatlog import log_corpus_hits, log_block_hits, log_injection_trace, log_l
 from .config import get_llm_route, get_flag
 from .constants import SPLIT_DELAY_MIN_MS, SPLIT_DELAY_MAX_MS  # noqa: F401 — test_core 校验分段延迟上下限时读它
 from . import context_probe
+from . import addressing
 from . import group_memory
 from . import injection as inj
 from . import daily_memory
@@ -49,6 +51,8 @@ from . import need_triggers
 from . import wiki_lookup
 from .material_retrieval import retrieve_contextual_materials
 from .retrieval_context import RetrievalContext
+from .material_usage import MaterialUse, render_material_use
+from .turn_understanding import TurnUnderstanding, render_understanding
 from .llm_json import parse_json_object
 from .memory_context import filter_memory_hints
 from .routing import (
@@ -57,6 +61,7 @@ from .routing import (
 from .reply_style import (
     clean_reply, is_echo_reply, is_emotion_only_query, uses_time_hook, starts_with_name,
     uses_hollow_opener, repeated_formula, is_meta_silence, planning_leak_reason,
+    template_reply_reason, remove_independent_template_sentences, template_rewrite_preserves,
     extract_action_tags, Reply,
 )
 from .session_memory import (
@@ -304,6 +309,22 @@ def _split_fused(fused_items):
     return behaviors, corpus
 
 
+def _corpus_with_uses(items, material_uses):
+    """用途与原文一起计预算；保留原文供事实评测和审计，不改人格数据。"""
+    uses = {(use.source, use.item_id): use for use in material_uses or []
+            if isinstance(use, MaterialUse)}
+    annotated = []
+    for item in items:
+        use = uses.get((item.source, item.item_id))
+        if use is None:
+            annotated.append(item)
+            continue
+        original = item.extra.get('source_text', item.text)
+        annotated.append(replace(item, text=render_material_use(use) + '\n原文：' + original,
+                                 extra={**item.extra, 'source_text': original}))
+    return annotated
+
+
 # ==================== 名词库（terms/lorebook） ====================
 # load_terms 挪到了 persona.py（人格数据加载的归属地），reply_style / build_terms_note 都从 persona 取。
 from .persona import load_terms  # noqa: E402
@@ -478,7 +499,10 @@ def build_message_list(user_msg: str, fused_items: list,
                        event_context: str = "",
                        history_turns: list | None = None,
                        show_actions: bool = False, selected_terms: set | None = None,
-                       song_context: str = "") -> list:
+                       song_context: str = "", authored_text: str | None = None,
+                       material_uses: list[MaterialUse] | None = None,
+                       association_use_ids: list[str] | None = None,
+                       turn_understanding: TurnUnderstanding | None = None) -> list:
     """按优先级组装发送给模型的消息列表。
 
     fused_items 为融合后的 RetrievalItem 列表（corpus + behavior），按源分组注入。
@@ -544,6 +568,20 @@ def build_message_list(user_msg: str, fused_items: list,
         if trace is not None and values:
             trace.setdefault("items", {})[name] = values
 
+    uses = {(use.source, use.item_id): use for use in material_uses or []
+            if isinstance(use, MaterialUse)}
+
+    if turn_understanding is not None:
+        # 同一轮只向生成提供一份有效理解；旧补全/语用猜测不能在后文覆盖它。
+        query_hint = pragmatic_hint = ''
+
+    def _scoped(source, item_ids, text):
+        if not text:
+            return ''
+        notes = [render_material_use(uses[(source, str(item_id))]) for item_id in item_ids
+                 if (source, str(item_id)) in uses]
+        return '\n'.join([*dict.fromkeys(notes), text])
+
     if is_group:
         hit_blocks.append("scene_group")
         _mark("scene_group")
@@ -587,7 +625,8 @@ def build_message_list(user_msg: str, fused_items: list,
     # 偏好档案（第 5 路语义检索）：聊到相关话题才注入；与语料/记忆冲突时以偏好为准
     if preference_items:
         prefs_text = "；".join(
-            f"{p.get('category', '')}：{p.get('text', '')}" for p in preference_items
+            _scoped('preference', [p.get('id')], f"{p.get('category', '')}：{p.get('text', '')}")
+            for p in preference_items
         )
         if prefs_text:
             messages.append({"role": "system", "content": inj.T("preferences", items=prefs_text)})
@@ -597,7 +636,8 @@ def build_message_list(user_msg: str, fused_items: list,
     # 核心记忆（印象最深的结晶）：粉丝常提及的过去故事，命中才注入
     if core_stories:
         story_text = "；".join(
-            f"{s.get('category', '')}：{s.get('text', '')}" for s in core_stories
+            _scoped('core_story', [s.get('id')], f"{s.get('category', '')}：{s.get('text', '')}")
+            for s in core_stories
         )
         if story_text:
             messages.append({"role": "system", "content": inj.T("core_stories", items=story_text)})
@@ -634,12 +674,18 @@ def build_message_list(user_msg: str, fused_items: list,
                          "content": inj.T("group", "batch_note", count=group_batch_note)})
         _mark("group_batch")
 
+    understanding_note = render_understanding(turn_understanding)
+    if understanding_note:
+        messages.append({"role": "system", "content": understanding_note})
+        _mark("turn_understanding")
+
     # 名词库（terms/lorebook）：核心词 always 注入 + 命中用户消息的词注入——让模型懂"绿冻/枪神8/slg"这类词并带对的态度
     _term_hits: list = []
     terms_note = build_terms_note(user_msg, denied_terms=denied_terms,
-                                  hit_out=_term_hits if trace is not None else None,
+                                  hit_out=_term_hits,
                                   selected_terms=selected_terms)
     if terms_note:
+        terms_note = _scoped('term', _term_hits, terms_note)
         messages.append({"role": "system", "content": inj.T("terms", note=terms_note)})
         _mark("terms")
         _items("terms", _term_hits)
@@ -648,6 +694,9 @@ def build_message_list(user_msg: str, fused_items: list,
     # 为什么单独一段：terms 是"这个词什么意思"，这里补的是"这个名字牵出什么"——
     # 用户只报作品名时，模型要能自己沿「作品 → 作者 → 她的喜好」接上，不用逐本收书。
     if association_context:
+        relation_ids = (association_use_ids if association_use_ids is not None else
+                        [item_id for source, item_id in uses if source == 'association'])
+        association_context = _scoped('association', relation_ids, association_context)
         messages.append({"role": "system",
                          "content": inj.T("terms", "associations", note=association_context)})
         _mark("associations")
@@ -656,6 +705,7 @@ def build_message_list(user_msg: str, fused_items: list,
     # 萌娘百科按需背景（未知专名）：只作事实参考，不混进名词库/关联背景。
     # 放在关联背景之后、会话记忆之前——先懂词，再接话。
     if wiki_context:
+        wiki_context = _scoped('wiki', [item_id for source, item_id in uses if source == 'wiki'], wiki_context)
         messages.append({"role": "system",
                          "content": inj.T("terms", "wiki_note", note=wiki_context)})
         _mark("wiki")
@@ -910,6 +960,14 @@ def build_message_list(user_msg: str, fused_items: list,
         hit_blocks.append("reply_evidence")
         _mark("reply_evidence")
 
+    if not is_group:
+        authored = (user_transcript or user_msg) if authored_text is None else authored_text
+        direction = addressing.perspective_note(authored)
+        if direction:
+            messages.append({"role": "system", "content": direction})
+            hit_blocks.append("address_direction")
+            _mark("address_direction")
+
     # 自称方式（第 21 块，2026-10-27 用户定）：骨架里不再写整段自称规则，
     # 只在**所有注入之后、用户消息之前**留一句弱约束。实测（60 条真实消息）：
     # 名字自指 28%、第一人称 7%、才不 13%、名字+才 7%、名字起手 2%——
@@ -996,6 +1054,19 @@ _PLANNING_REWRITE_PROMPT = (
 )
 
 
+async def _request_reply(client, messages: list, *, temperature: float, tag: str) -> str:
+    response = await client.chat.completions.create(
+        model=_get_reply_model(),
+        messages=messages,
+        temperature=temperature,
+        frequency_penalty=CHAT_FREQUENCY_PENALTY,
+        max_tokens=CHAT_MAX_TOKENS,
+        **THINKING_DISABLED,
+    )
+    log_cache_usage(response, tag)
+    return extract_chat_content(response)
+
+
 async def _rewrite_planning_reply(client, messages: list, original: str, reason: str) -> str:
     """规划式泄露的兜底：带一条强约束重写一次；仍不合格就回兜底文案。
 
@@ -1005,19 +1076,12 @@ async def _rewrite_planning_reply(client, messages: list, original: str, reason:
     try:
         retry_messages = list(messages) + [
             {"role": "system", "content": _PLANNING_REWRITE_PROMPT}]
-        response = await client.chat.completions.create(
-            model=_get_reply_model(),
-            messages=retry_messages,
-            temperature=0.6,
-            frequency_penalty=CHAT_FREQUENCY_PENALTY,
-            max_tokens=CHAT_MAX_TOKENS,
-            **THINKING_DISABLED,
-        )
-        log_cache_usage(response, "主回复重写")
-        rewritten = extract_chat_content(response)
+        rewritten = await _request_reply(client, retry_messages, temperature=0.6, tag="主回复重写")
         if rewritten and not planning_leak_reason(rewritten):
             log_leak_guard(original, reason, rewritten, "rewritten")
             return rewritten
+        if rewritten:
+            print("主回复重写后仍混入规划/旁白，使用兜底回复")
         log_leak_guard(original, reason, rewritten, "still_bad")
         return _FALLBACK_REPLY
     except Exception as e:
@@ -1030,19 +1094,8 @@ async def generate_reply(messages: list) -> str:
     """调用 DeepSeek 生成回复；失败时返回兜底文案（调用方负责"别把它记进记忆"）。"""
     try:
         deepseek_client, _ = _get_reply_clients()
-        response = await deepseek_client.chat.completions.create(
-            model=_get_reply_model(),
-            messages=messages,
-            temperature=CHAT_TEMPERATURE,
-            frequency_penalty=CHAT_FREQUENCY_PENALTY,
-            max_tokens=CHAT_MAX_TOKENS,
-            **THINKING_DISABLED,
-        )
-        # ⚠️ 主回复是**最大的 token 消费者**，但以前漏了插桩——日志里那三行 `主回复`
-        #    其实是批量归纳/转发归纳/术语消歧三个小助手（2026-10-11 查明）。
-        #    不打出这一行，"缓存到底命中多少"根本没法归因。
-        log_cache_usage(response, "主回复")
-        reply = extract_chat_content(response)
+        reply = await _request_reply(
+            deepseek_client, messages, temperature=CHAT_TEMPERATURE, tag="主回复")
         leak_reason = planning_leak_reason(reply)
         if leak_reason and get_flag("LEAK_GUARD", "1") != "0":
             print(f"⚠️ 主回复混入规划/旁白（{leak_reason}），丢弃重写")
@@ -1055,6 +1108,74 @@ async def generate_reply(messages: list) -> str:
     return reply if reply else _FALLBACK_SILENT
 
 
+_TEMPLATE_REWRITE_TIMEOUT_SEC = 20.0
+_TEMPLATE_REWRITE_PROMPT = (
+    "上一条 assistant 消息是 QQ 草稿，其中可能用惯用套话来表示认同、收到、给对方的话打分，或宣告在场。"
+    "结合原对话判断每句的作用。去掉可以套到无关话题上的独立表态，从具体内容接话。"
+    "真正的认错、被请求的确认、实际的安慰与边界原样保留。需要展开的内容照常展开。"
+    "如果草稿全是空泛表态，直接回答用户真正问的事，信息不足就问一个具体问题。"
+    "保持事实、立场、承诺和原有结构。保留引用、数字、时间、动作标记，分清发言人。"
+    '输出一个 JSON 对象。无须改写时返回 {"reply": null}，否则 reply 为最后的正文字符串。'
+)
+
+
+def _template_revision_repeats(reply: str, recent_bot, user_name: str) -> bool:
+    recent = recent_bot[-2:]
+    return bool(
+        is_echo_reply(reply, recent_bot, window=8) or repeated_formula(reply, recent_bot)
+        or (uses_time_hook(reply) and any(uses_time_hook(old) for old in recent))
+        or (uses_hollow_opener(reply) and any(uses_hollow_opener(old) for old in recent))
+        or (user_name and starts_with_name(reply, user_name)
+            and any(starts_with_name(old, user_name) for old in recent))
+    )
+
+
+def _template_revision_usable(reply: str, revised: str, user_text: str, recent_bot, user_name: str) -> bool:
+    return bool(
+        revised and not is_fallback_reply(revised)
+        and not planning_leak_reason(revised) and not is_meta_silence(revised)
+        and not template_reply_reason(revised, user_text, recent_bot=recent_bot)
+        and not _template_revision_repeats(revised, recent_bot, user_name)
+        and template_rewrite_preserves(reply, revised)
+    )
+
+
+async def _maybe_rewrite_template_reply(
+    messages: list, reply: str, user_text: str, recent_bot=(), *, user_name: str = "",
+) -> str:
+    if get_flag("REPLY_STYLE_GUARD", "1") == "0":
+        return reply
+    reason = template_reply_reason(reply, user_text, recent_bot=recent_bot)
+    if not reason:
+        return reply
+    direct = remove_independent_template_sentences(reply, reason)
+    if _template_revision_usable(reply, direct, user_text, recent_bot, user_name):
+        print(f"[回复风格] {reason}: 已去掉独立套话")
+        return direct
+    try:
+        client, _ = _get_reply_clients()
+        retry_messages = [
+            *messages,
+            {"role": "assistant", "content": reply},
+            {"role": "user", "content": _TEMPLATE_REWRITE_PROMPT},
+        ]
+        result = await asyncio.wait_for(
+            _request_reply(client, retry_messages, temperature=0.6, tag="主回复去模板"),
+            timeout=_TEMPLATE_REWRITE_TIMEOUT_SEC,
+        )
+        revised = parse_json_object(result).get("reply")
+    except Exception as error:
+        print(f"[回复风格] {reason}: 复核未完成（{type(error).__name__}），保留原稿")
+        return reply
+
+    revised = revised.strip() if isinstance(revised, str) else ""
+    if _template_revision_usable(reply, revised, user_text, recent_bot, user_name):
+        print(f"[回复风格] {reason}: 已重写")
+        return revised
+    print(f"[回复风格] {reason}: 保留原稿")
+    return reply
+
+
 async def update_memory_v2_shadow_task(
     user_id: str,
     user_msg: str,
@@ -1064,6 +1185,8 @@ async def update_memory_v2_shadow_task(
     *,
     source_turn_id: str = "",
     delivery_verified: bool = False,
+    authored_text: str | None = None,
+    preference_observed_at: datetime | None = None,
 ) -> list[dict]:
     """Extract one private turn into the opt-in V2 shadow store.
 
@@ -1100,6 +1223,8 @@ async def update_memory_v2_shadow_task(
             reminder_hint=reminder_hint,
             source_turn_id=source_turn_id,
             delivery_verified=delivery_verified,
+            authored_text=authored_text,
+            preference_observed_at=preference_observed_at,
         )
     except Exception:
         return []
@@ -1191,12 +1316,12 @@ def _user_name_for(user_id: str) -> str:
     """用户希望被怎么称呼——用来判"她是不是又在拿名字当开头"。
 
     只从 V2 的 preferred_name/name/nickname 取。V2 的值常常是一整句
-    （"用户希望被称呼为星屿哥，或者lumen_example"），所以取第一个逗号前、再剥掉外壳、
+    （"用户希望被称呼为纸鸢，或者lumen_example"），所以取第一个逗号前、再剥掉外壳、
     且要求长度像名字（剥不干净的整句宁可返回空——返回错的还会**骗过**守卫）。
     （v1 卡 `user_name` 的首选层已于 2026-10-12 随 v1 清理撤掉。）
     """
     try:
-        memories = _MEMORY_V2_STORE.snapshot(user_id).get("memories", [])
+        memories = _MEMORY_V2_STORE.usable_address_records(user_id)
     except Exception:
         memories = []
     for memory in memories:
@@ -1223,20 +1348,10 @@ NAME_BUDGET_MIN_CALLS = 1
 def _has_address_request(user_id: str) -> bool:
     """这个用户有“以后多叫名字”的长期 request_address 吗？"""
     try:
-        for m in _MEMORY_V2_STORE.snapshot(user_id).get("memories", []):
-            if m.get("kind") != "request" or m.get("key") != "request_address":
-                continue
-            if m.get("status") not in {"confirmed", "active"}:
-                continue
-            exp = m.get("expires_at")
-            if exp:
-                try:
-                    from datetime import datetime as _dt
-                    if _dt.fromisoformat(str(exp)) <= _dt.now():
-                        continue
-                except (TypeError, ValueError):
-                    pass
-            return True
+        return any(
+            m.get("kind") == "request" and m.get("scope") == "standing"
+            for m in _MEMORY_V2_STORE.usable_address_records(user_id)
+        )
     except Exception:
         pass
     return False
@@ -1288,7 +1403,8 @@ async def gather_retrieval(query_text: str, retrieval_query: str, history_text: 
               "denied_terms": unconfirmed_terms.copy(),
               "approved_terms": set(), "association_context": "", "association_entities": [],
               "wiki_entities": [], "entity_mentions": {},
-              "embedding_available": True, "selection_trace": {"available": True}, "context": context}
+              "embedding_available": True, "selection_trace": {"available": True}, "context": context,
+              "material_uses": [], "association_use_ids": []}
     if not (query_text and not is_emoji_msg(query_text)) or is_emotion_only_query(retrieval_query):
         if is_user_msg:
             result["context"] = replace(context, needs=())
@@ -1308,6 +1424,7 @@ async def gather_retrieval(query_text: str, retrieval_query: str, history_text: 
             result.update(
                 context=replace(context, needs=()), fused_items=confirmed_behavior,
                 corpus_items=[], behavior_items=[], preference_items=[], core_stories=[],
+                material_uses=[], association_use_ids=[],
                 denied_terms=unconfirmed_terms, approved_terms=set(), association_context="",
                 association_entities=[], wiki_entities=[], entity_mentions={},
             )
@@ -1342,9 +1459,13 @@ async def _fill_retrieval(result: dict, query_text: str, retrieval_query: str, h
     result["l3"] = l3
     result["embedding_available"] = bool(query_vector)
     if is_user_msg and "needs_ok" in l3:
+        understanding = l3.get("understanding")
+        understanding = understanding if isinstance(understanding, TurnUnderstanding) else None
         context = replace(context, needs=tuple(l3.get("needs") or ()) if l3["needs_ok"] else (),
-                          response_task=str(l3.get("task") or "")[:240] if l3["needs_ok"] else "",
-                          response_scope=str(l3.get("scope") or "") if l3["needs_ok"] else "")
+                          response_task=((understanding.request if understanding else
+                                          str(l3.get("task") or ""))[:240] if l3["needs_ok"] else ""),
+                          response_scope=str(l3.get("scope") or "") if l3["needs_ok"] else "",
+                          understanding=understanding)
     result["context"] = context
     if not is_user_msg:
         # 动态改写广播没有某位好友的交流现场，保持原有公共素材取法。
@@ -1368,7 +1489,7 @@ async def _fill_retrieval(result: dict, query_text: str, retrieval_query: str, h
         extra_preference_ids=extra_preference_ids, behavior_candidate=fallback)
     result.update(materials)
     behavior_items = semantic_behavior + materials["behavior_items"]
-    corpus_items = materials["corpus_items"]
+    corpus_items = _corpus_with_uses(materials["corpus_items"], materials.get("material_uses"))
     if _detach_behavior_from_rrf():
         result["fused_items"] = fuse_and_truncate(corpus_items) + behavior_items
     else:
@@ -1400,7 +1521,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
                       group_thread_note: str = "", group_batch_note: str = "",
                       reply_to: str = "", *, timed_user_transcript: str = "",
                       defer_memory: bool = False, quoted_message_ids: tuple[str, ...] = (),
-                      song_text: str | None = None) -> str:
+                      song_text: str | None = None, authored_text: str | None = None) -> str:
     """处理一条用户消息，返回机器人回复。vision_desc 为图片描述；batch_summary 为批量归纳。
 
     is_group=True 时按群会话处理：user_id 传群号（会话历史按群记），
@@ -1408,6 +1529,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
 
     user_transcript 是本批完整文本（群聊带发言人和批内编号）。
     私聊的 timed_user_transcript 只用于模型请求的最后一条 user 消息。
+    authored_text 是私聊用户亲自发出的文字，用于判定称呼方向和点歌。
     defer_memory 让私聊调用方在确认发送后写入实际发出的文本。
     record_text 可覆盖落盘的正文，供群聊去掉批次标记后写入记忆。
 
@@ -1418,6 +1540,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     reply_to：她这句在回群里哪位（写进短期记忆的「灰泽满（回X）：」，只用于群聊）。
     """
     deferred_private = defer_memory and not is_group
+    preference_observed_at = datetime.now() if not is_group and not deferred_private else None
     deepseek_client, zhipu_client = _get_clients()
     aux_client, _ = aux_clients_or(_get_clients)   # 辅助链（2026-10-29）：话题探测/直播记忆判走它
 
@@ -1430,6 +1553,9 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     # --- 会话级记忆：对话前同步探测（判断话题延续/转换 + 短 query 扩充） ---
     # 必须在组装消息前完成，这样本轮注入的就是本轮自己的话题，不滞后一轮。
     query_text = user_msg.strip()
+    current_authored = query_text if authored_text is None else authored_text
+    if song_text is None:
+        song_text = authored_text
     clock_question = need_triggers.asks_current_time(query_text)
     recall_enabled = not is_group and memory_v2.injection_enabled()
     history_question = recall_enabled and memory_recall.needs_recall(
@@ -1446,18 +1572,25 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     # 短句/提醒要指代的上一句可能刚好落在被裁掉的那两条里（2026-10-20）。
     history_text = "\n".join(history_for_model) if history_for_model else ""
     show_actions = get_flag("ACTION_TAGS", "1").strip().lower() not in ("0", "false", "no", "off")
+    catalog = {}
     song_context = ""
     song_kwargs = {}
     song_options = {}
+    song_choice = None
+    # 此刻还没有写入本轮，最后一条就是上一轮。
+    _gap_sec = get_last_turn_gap_seconds(user_id)
     if not is_group and show_actions and song_text is not None:
         catalog = songs.load_songs()
         previous_reply = bot_line_text(history_for_model[-1]) if (
             history_for_model and is_bot_line(history_for_model[-1])) else ""
         song_context = inj.T("actions", "song_available" if catalog else "song_empty")
-        if song_requests.may_request_song(song_text, catalog, previous_reply):
+        choice_index = song_requests.song_choice_index(song_text)
+        if choice_index is not None:
+            if _gap_sec is None or _gap_sec <= song_requests.OFFER_MAX_AGE:
+                song_choice = song_requests.confirmed_choice(choice_index, catalog, previous_reply)
+        elif song_requests.may_request_song(song_text, catalog, previous_reply):
             song_kwargs["song_text"] = song_text
-    # 距上一轮多久（此刻还没 append 本轮，最后一条就是上一轮）。同一场对话内为空串
-    _gap_sec = get_last_turn_gap_seconds(user_id)
+    # 同一场对话内为空串。
     history_gap_note = humanize_gap(_gap_sec) if _gap_sec is not None else ""
     # 上一场会话（已过期）→「上次聊过」提示。**必须在 probe_session 之前取**——
     # probe 会把 last_active 改写成"现在"，之后再问就永远判成"没过期"。
@@ -1528,6 +1661,8 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
             if not is_group:  # 群会话不建用户记忆卡
                 spawn(update_memory_v2_shadow_task(
                     user_id, user_msg, reply, memory_scope_id,
+                    authored_text=authored_text,
+                    preference_observed_at=preference_observed_at,
                 ))
             return reply
 
@@ -1535,7 +1670,10 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     ctx = await gather_retrieval(query_text, retrieval_query, history_text,
                                  deepseek_client, zhipu_client, context=turn_context, **song_kwargs)
     turn_context = ctx.get("context", turn_context)
-    if song_kwargs and (song_request := (ctx.get("l3") or {}).get("song_request")):
+    song_request = song_choice
+    if song_kwargs and not song_request:
+        song_request = (ctx.get("l3") or {}).get("song_request")
+    if song_request:
         song_note, song_options = song_requests.plan_song(song_request, catalog, last_song(user_id))
         song_context += "\n" + song_note
     fused_items = ctx["fused_items"]
@@ -1669,7 +1807,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     if recall_enabled:
         nickname_turn_ids: list[str] = []
         nickname_hint = _MEMORY_V2_STORE.nickname_hint(
-            user_id, user_msg, history=user_history_timed, matched_terms=matched_nicknames,
+            user_id, current_authored, history=user_history_timed, matched_terms=matched_nicknames,
             source_turn_ids=nickname_turn_ids)
         recall_context = memory_recall.build_recall_context(
             _MEMORY_V2_STORE, user_id, user_msg,
@@ -1856,6 +1994,9 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         log_hits=True, trace=injection_trace,
         association_context=ctx.get("association_context", ""),
         association_entities=ctx.get("association_entities"),
+        association_use_ids=ctx.get("association_use_ids"),
+        material_uses=ctx.get("material_uses"),
+        turn_understanding=getattr(ctx.get("context"), "understanding", None),
         wiki_context=wiki_context,
         is_group=is_group, group_address_note=group_address_note,
         group_thread_note=group_thread_note, name_budget=name_budget,
@@ -1865,7 +2006,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         request_context=request_context, reminders_context=reminders_context,
         state_stable=state_stable, state_dynamic=state_dynamic,
         event_context=event_context,
-        show_actions=show_actions, song_context=song_context,
+        show_actions=show_actions, song_context=song_context, authored_text=current_authored,
     )
 
     # --- 🤖 调用大模型 ---
@@ -1968,6 +2109,11 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     # 原因见 constants.CHAT_MAX_TOKENS 的注释：守卫会把明确要展开的回答整段丢弃重写，
     # 真实聊天里变成"我要说了→其实什么都没说"；默认短回复由骨架 §06 定基调即可。
 
+    # 最终草稿只检查一次，避免每次防复读重生成时都追加模型调用。
+    if not (clock_question or history_question or reminder_req or song_request):
+        reply = await _maybe_rewrite_template_reply(
+            messages, reply, current_authored, recent_bot, user_name=user_name)
+
     # --- 🧾 条目级注入轨迹（`docs/数据迭代.md` §2）---
     # 闸和 block_hits 一致：只有真实聊天（通道 私/群）写，离线回放/实验不污染。
     if get_llm_route() in ("私", "群"):
@@ -1995,13 +2141,39 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
     # 动作标记（[[语音]] / [[表情:类别]]）先剥掉：它绝不能进记忆/转述/发送。
     # 剥出来的意图挂到 Reply 上，由 chat_window 执行（语音/表情包）。
     no_tag_reply, actions = extract_action_tags(reply)
-    if "song" in actions:
-        delivery = song_options.get(actions.pop("song"))
-        if delivery is not None and not song_requests.declined_song(no_tag_reply, delivery.mode):
-            actions["song"] = delivery
-        elif not no_tag_reply and not is_group:
-            no_tag_reply = ("这段没选好，你想听哪首呀？" if song_options
-                            else "刚刚那句没回好，能再说一下吗？")
+    song_number = actions.pop("song", None)
+    delivery = song_options.get(song_number)
+    without_promise = song_requests.remove_song_promise(
+        no_tag_reply, confirmed_request=bool(song_request),
+    ) if song_context else None
+    if delivery is not None and not song_requests.declined_song(no_tag_reply, delivery.mode):
+        actions["song"] = delivery
+    elif without_promise is not None:
+        mode = "full" if song_request and song_request["mode"] in ("full", "recent_full") else "clip"
+        selected = next(iter(song_options.values())) if len(song_options) == 1 else None
+        declined = song_requests.declined_song(no_tag_reply, mode)
+        if song_number is None and selected is not None and not declined:
+            # 用户只确认了一条录音；主模型答应了，就交给实际发送链路。
+            actions["song"] = selected
+            no_tag_reply = without_promise
+            if song_requests.find_song(no_tag_reply, catalog) == catalog[songs.song_key(selected.title)]:
+                no_tag_reply = ""
+        else:
+            if (mode == "full" and declined and not song_requests.declined_song(no_tag_reply, "clip")
+                    and selected is not None and catalog[songs.song_key(selected.title)].clip):
+                note = "想听经典两句吗？"
+            else:
+                note = song_requests.unavailable_song_reply(song_request, catalog)
+            no_tag_reply = "\n".join(part for part in (without_promise, note) if part)
+    elif song_number is not None and not no_tag_reply and not is_group:
+        no_tag_reply = ("这段没选好，你想听哪首呀？" if song_options
+                        else "刚刚那句没回好，能再说一下吗？")
+    if song_request and not song_options:
+        offer = song_requests.read_song_offer(no_tag_reply, catalog)
+        if offer is not None:
+            prefix = clean_reply(offer.prefix) if offer.prefix.strip() else ""
+            no_tag_reply = offer.render(prefix=prefix, as_file=bool(song_request.get("as_file")))
+            actions["song_offer"] = True
     # 未点名的群聊批次：模型如果把内部标记说成了回复（「没点我」「（不说话，潜水）」），
     # 视为这批她不说话——只记用户侧，不发。点名后的“关我什么事”是正常斗嘴，不拦。
     if is_group and not group_addressed and is_meta_silence(clean_reply(no_tag_reply)):
@@ -2014,7 +2186,7 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
             "user_text": record_msg, "session_id": memory_scope_id, "reminder_hint": reminder_req,
         }
         return result
-    cleaned_reply = clean_reply(no_tag_reply)
+    cleaned_reply = no_tag_reply if actions.get("song_offer") else clean_reply(no_tag_reply)
     append_user_history(user_id, record_msg, cleaned_reply,
                         user_label=_user_label, reply_label=_reply_label)
     # 预转述她这句：下一轮注入直接命中缓存，把转述开销挪出关键路径。
@@ -2027,6 +2199,8 @@ async def handle_chat(user_id: str, user_msg: str, vision_desc: str = "",
         spawn(update_memory_v2_shadow_task(
             user_id, record_msg, no_tag_reply, memory_scope_id,
             reminder_hint=reminder_req,
+            authored_text=authored_text,
+            preference_observed_at=preference_observed_at,
         ))
 
     return result

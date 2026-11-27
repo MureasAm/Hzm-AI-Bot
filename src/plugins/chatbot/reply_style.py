@@ -256,7 +256,7 @@ def is_echo_reply(reply: str, recent_bot_replies: list, min_ratio: float = 0.6,
     return False
 
 
-# 群聊模型有时会把内部点名标记写成回复。识别这样的元话语，避免对未点名消息误发。
+# 群聊模型有时会把内部点名标记写成回复；识别这类元话语，避免误发。
 _META_SILENCE_RE = re.compile(
     r"没(?:有人)?(?:点|叫|喊)(?:我|灰泽满|hzm)|没被\s*@|没有被\s*@|"
     r"保持潜水|潜水状态|静静看着|不插话|不发言|这轮不(?:说|回)|这批不(?:说|回)|"
@@ -275,7 +275,7 @@ def is_meta_silence(reply: str) -> bool:
 
 
 # ==================== 规划式泄露兜底（2026-11-14） ====================
-# 输出预算可能耗在规划稿，造成正文缺失；也可能以第三人称旁白走样。
+# 回复可能误把内部草稿当成正文，以下守卫检测这些结构。
 # 复现实验里同样形态出现过：模型把**称呼/语气/行为规则之间的取舍**当正文写出来。
 #
 # 系统提示词本来就禁止旁白和动作描写，但模型偶发不遵守（约 0.5%）。这里只做
@@ -290,7 +290,16 @@ _PLANNING_STRONG_RE = re.compile(
     r"|带着.{0,8}语气|语气回"
     r"|\b(?:The user|We need|I should|Let me|I need to)\b)"
 )
-_PLANNING_LIST_RE = re.compile(r"(?m)^\s*(?:[-*•]|\d+[.、])\s+\S")
+_PLANNING_LIST_ITEM = r"^[ \t]*(?:[-*•][ \t]+|\d+[.、)）][ \t]*)"
+_PLANNING_NOTE_LABEL_RE = re.compile(
+    rf"(?m){_PLANNING_LIST_ITEM}(?:\*\*)?(语气|限制|示例参考)(?:\*\*)?[ \t]*[：:]"
+)
+_PLANNING_USER_ANALYSIS_RE = re.compile(r"(?m)^[ \t]*(?:\*\*)?(?:当前|本轮)用户")
+_PLANNING_REPLY_STEPS_RE = re.compile(
+    r"(?m)^[ \t]*(?:可以这样回(?:复)?|回复思路)[ \t]*[：:][ \t]*\r?\n"
+    rf"{_PLANNING_LIST_ITEM}先(?:安慰一句|接住这句|回应对方情绪)[。；;]?[ \t]*\r?\n"
+    rf"{_PLANNING_LIST_ITEM}再(?:转开话题|换个话题|收住)[。；;]?[ \t]*\r?$"
+)
 
 
 def planning_leak_reason(reply: str) -> str:
@@ -305,8 +314,11 @@ def planning_leak_reason(reply: str) -> str:
     m = _PLANNING_STRONG_RE.search(t)
     if m:
         return m.group(0)
-    # 两条以上项目符号/编号列表：正常私聊不会这么排版，几乎只出现在"列备选方案"里
-    if len(_PLANNING_LIST_RE.findall(t)) >= 2:
+    # 只有分点不够。真实事故还带着本轮用户分析和一组给模型自己的起草备注。
+    if _PLANNING_REPLY_STEPS_RE.search(t) or (
+        _PLANNING_USER_ANALYSIS_RE.search(t)
+        and {"语气", "限制", "示例参考"} <= set(_PLANNING_NOTE_LABEL_RE.findall(t))
+    ):
         return "列表式草稿"
     return ""
 
@@ -592,6 +604,226 @@ def is_emotion_only_query(query: str) -> bool:
     """
     q = (query or "").strip()
     return q.startswith("用户发") and "表情" in q
+
+
+# 引用和代码在判断时跳过，改写后还要核对它们是否原样保留。
+_STYLE_LITERAL_RE = re.compile(
+    r"```[\s\S]*?```|`[^`\n]+`|「[^」\n]+」|『[^』\n]+』|“[^”\n]+”|‘[^’\n]+’|"
+    r'"[^"\n]+"|《[^》\n]+》|https?://[^\s<>"）。，；！？、]+'
+)
+_STYLE_EXACT_REQUEST_RE = re.compile(
+    r"原样|逐字|照抄|一字不[改差]|代码块|照着[^。！？!?\n]{0,24}(?:说|念|读)(?:一遍|一句)|"
+    r"(?:模仿|学学?|扮演).{0,18}(?:deepseek|大肥鱼|鱼八股)|"
+    r"(?:用|按照).{0,10}(?:deepseek|大肥鱼|鱼八股).{0,12}(?:风格|口吻|说话|腔|句式)",
+    re.IGNORECASE,
+)
+_STYLE_REQUEST_NEGATION_RE = re.compile(r"(?:别|不要|不用|不必|禁止)\s*(?:再|给我|一直)?\s*$")
+_STYLE_CLAUSE_START = r"(?:^|[。！？!?；;\n，,：:])\s*"
+_STYLE_CLAUSE_END = r"(?=$|[，,。！？!?；;：:\n…～~])"
+_STYLE_ACTOR = r"(?:灰泽满|小满|我|hzm)"
+_STYLE_SAID = r"(?:你)?这(?:一)?(?:句话|句|话|条|点|个点)"
+_STYLE_PLAYFUL_SELF_CORRECTION = r"(?![ \t]*(?:…+|\.{2,})[ \t]*[哦噢啊][，, \t]*不对)"
+_STYLE_STOCK_AGREEMENT_RE = re.compile(
+    _STYLE_CLAUSE_START
+    + rf"(?:{_STYLE_SAID}[，,]?\s*{_STYLE_ACTOR}认(?:下了|了)?|{_STYLE_ACTOR}认你这(?:句(?:话)?|条|点))"
+    + _STYLE_PLAYFUL_SELF_CORRECTION + _STYLE_CLAUSE_END,
+    re.IGNORECASE,
+)
+_STYLE_STOCK_RECEIPT_RE = re.compile(
+    _STYLE_CLAUSE_START + rf"(?:{_STYLE_SAID}|这笔账)[，,]?\s*{_STYLE_ACTOR}"
+    r"(?:接住了|接着了|收下了|记下了|记住了|记着(?:呢)?|留着)" + _STYLE_CLAUSE_END,
+    re.IGNORECASE,
+)
+_STYLE_STOCK_APPRAISAL_RE = re.compile(
+    _STYLE_CLAUSE_START + _STYLE_SAID
+    + r"(?:接得(?:很|真|挺)?(?:漂亮|稳)|说得(?:挺准|很准|真准|不轻))" + _STYLE_CLAUSE_END
+)
+_STYLE_BARE_AGREEMENT_RE = re.compile(
+    _STYLE_CLAUSE_START + rf"{_STYLE_ACTOR}认(?:了)?" + _STYLE_PLAYFUL_SELF_CORRECTION
+    + _STYLE_CLAUSE_END, re.IGNORECASE,
+)
+_STYLE_REDUNDANT_ADMISSION_RE = re.compile(
+    rf"(?P<fact>[^，,。！？!?；;：:\r\n…]+)(?P<extra>[，,][ \t]*{_STYLE_ACTOR}认(?:了|下了)?)"
+    r"(?=[，,][ \t]*(?:但|不过|只是))", re.IGNORECASE,
+)
+_STYLE_CONFIRMED_OWNERSHIP_RE = re.compile(
+    rf"(?<![不没])是[ \t]*{_STYLE_ACTOR}(?:自己|亲口)?(?:说|讲|提|定|写|发|做|答应)的[ \t]*$",
+    re.IGNORECASE,
+)
+_STYLE_UNCERTAIN_CLAIM_RE = re.compile(r"可能|也许|大概|好像|是不是|不确定|不知道|难道|如果|就算|你(?:以为|觉得)")
+_STYLE_SOLE_AGREEMENT_RE = re.compile(
+    rf"^(?:(?:行|好|嗯)[，,。！!\s]+)?{_STYLE_ACTOR}认(?:了)?[。！!～~…\s]*$", re.IGNORECASE,
+)
+_STYLE_STOCK_ASSURANCE_RE = re.compile(
+    _STYLE_CLAUSE_START + rf"(?:这(?:件)?事|这个点){_STYLE_ACTOR}心里有数" + _STYLE_CLAUSE_END,
+    re.IGNORECASE,
+)
+_STYLE_STOCK_PRESENCE_RE = re.compile(
+    _STYLE_CLAUSE_START + rf"(?:睡吧[，,]\s*{_STYLE_ACTOR}守着|{_STYLE_ACTOR}听着[，,]\s*你往下讲)"
+    + _STYLE_CLAUSE_END,
+    re.IGNORECASE,
+)
+_STYLE_STOCK_RETORT_RE = re.compile(
+    _STYLE_CLAUSE_START
+    + r"(?:你这话是在问别人[，,]\s*还是问自己|这话[，,]?\s*你自己信吗)" + _STYLE_CLAUSE_END
+)
+_STYLE_ADMISSION_RE = re.compile(
+    r"(?:是(?:我|灰泽满|小满)的(?:错|问题)|(?:我|灰泽满|小满)(?:认错|道歉|错了)|"
+    r"(?:我|灰泽满|小满|刚才|这次)(?:[^。！？!?\n]{0,14})"
+    r"(?:说错|记错|弄错|搞错|看错|算错|口误|说成|搞反|弄反))"
+)
+_STYLE_CORRECTION_RE = re.compile(
+    r"(?:你|灰泽满|小满)[^。！？!?\n]{0,12}(?:说错|记错|弄错|搞错|看错|口误|说成|搞反|认不认)|"
+    r"错了吧|敢不敢认|承认.{0,8}(?:错|责任)"
+)
+_STYLE_MEMORY_REQUEST_RE = re.compile(
+    r"帮(?:我|忙)?记|替我记|给我记|记(?:住|一下|下来)|别忘了|以后.{0,12}叫我"
+)
+_STYLE_FEEDBACK_REQUEST_RE = re.compile(
+    r"(?:我|这)(?:这|一)?(?:句(?:话)?|段(?:话)?)"
+    r".{0,12}(?:怎么样|如何|行不行|说得|接得|评价|点评)|(?:评价|点评).{0,12}(?:这句|我这)|"
+    r"我[^。！？!?\n]{0,16}(?:接梗|接得|说得).{0,8}(?:怎样|怎么样|如何|行不行)"
+)
+_STYLE_COMPANIONSHIP_REQUEST_RE = re.compile(
+    r"陪(?:陪)?我|听(?:听)?我说|你能.{0,8}(?:听|陪)|让我.{0,8}(?:说|讲)完|"
+    r"等我睡|哄我睡|想(?:跟你|和你)(?:说|讲|聊)|[讲说]给你听"
+)
+_STYLE_ANCHOR_RE = re.compile(
+    r"<reply:\d+>|\d+(?:[.:：/-]\d+)*(?:[%％])?|"
+    r"[零〇一二两三四五六七八九十百千]+(?:点钟|点半|点|分钟|小时|月|日|岁|块|场)|"
+    r"(?:今晚|明晚|昨晚|今天|明天|后天|昨天|周[一二三四五六日天])"
+)
+
+
+_STYLE_MODAL_NEGATION_RE = re.compile(
+    r"不(?:会|能|可以|肯|愿意|想|打算|准备|答应|保证|确定)|"
+    r"没(?:有|法|办法|打算|准备)|(?:未|无法)(?:确定|确认|安排)"
+)
+
+
+_STYLE_USER_ATTRIBUTION_RE = re.compile(
+    r"你(?:刚(?:刚|才)?(?:提到|说)|说的|提到的|已经说)|按你说的"
+)
+
+
+def _style_review_body(reply: str) -> str:
+    body, _ = extract_action_tags(reply)
+    body = _STYLE_LITERAL_RE.sub(" ", body).replace("**", "").strip()
+    return re.sub(r"^<reply:\d+>\s*", "", body).strip()
+
+
+def _style_explicitly_requested(pattern: re.Pattern, context: str) -> bool:
+    return any(
+        not _STYLE_REQUEST_NEGATION_RE.search(context[max(0, match.start() - 10):match.start()])
+        for match in pattern.finditer(context)
+    )
+
+
+def _redundant_admission_spans(text: str):
+    for match in _STYLE_REDUNDANT_ADMISSION_RE.finditer(text):
+        fact = match.group("fact")
+        if _STYLE_CONFIRMED_OWNERSHIP_RE.search(fact) and not _STYLE_UNCERTAIN_CLAIM_RE.search(fact):
+            yield match.span("extra")
+
+
+def template_reply_reason(reply: str, user_text: str = "", *, recent_bot=()) -> str:
+    """识别独立的固定接话，弱信号结合本轮或最近几轮的复用。"""
+    context = _STYLE_LITERAL_RE.sub(" ", user_text)
+    if _style_explicitly_requested(_STYLE_EXACT_REQUEST_RE, context):
+        return ""
+    body = _style_review_body(reply)
+    admission = _STYLE_ADMISSION_RE.search(body) or _STYLE_CORRECTION_RE.search(context)
+    if not re.search(r"认不认|承不承认|敢不敢认|肯不肯认", context) and any(_redundant_admission_spans(body)):
+        return "redundant_admission"
+    if not admission and (_STYLE_STOCK_AGREEMENT_RE.search(body) or _STYLE_SOLE_AGREEMENT_RE.fullmatch(body)):
+        return "stock_agreement"
+    memory_requested = _style_explicitly_requested(_STYLE_MEMORY_REQUEST_RE, context)
+    if _STYLE_STOCK_RECEIPT_RE.search(body) and not memory_requested:
+        return "stock_receipt"
+    if _STYLE_STOCK_APPRAISAL_RE.search(body) and not _style_explicitly_requested(_STYLE_FEEDBACK_REQUEST_RE, context):
+        return "stock_appraisal"
+    if _STYLE_STOCK_RETORT_RE.search(body):
+        return "stock_retort"
+
+    weak = []
+    if not admission and _STYLE_BARE_AGREEMENT_RE.search(body):
+        weak.append(_STYLE_BARE_AGREEMENT_RE)
+    if _STYLE_STOCK_ASSURANCE_RE.search(body) and not memory_requested:
+        weak.append(_STYLE_STOCK_ASSURANCE_RE)
+    if _STYLE_STOCK_PRESENCE_RE.search(body) and not _style_explicitly_requested(_STYLE_COMPANIONSHIP_REQUEST_RE, context):
+        weak.append(_STYLE_STOCK_PRESENCE_RE)
+    if len(weak) > 1:
+        return "repeated_stock_reply"
+    if weak:
+        pattern = weak[0]
+        match = pattern.search(body)
+        if match.start() == 0 and not any(char.isalnum() for char in body[match.end():]):
+            return "stock_reply"
+        if len(pattern.findall(body)) > 1:
+            return "repeated_stock_reply"
+        for previous in recent_bot[-4:]:
+            previous_body = _style_review_body(previous)
+            if pattern is _STYLE_BARE_AGREEMENT_RE:
+                if not _STYLE_ADMISSION_RE.search(previous_body) and (
+                    pattern.search(previous_body) or _STYLE_STOCK_AGREEMENT_RE.search(previous_body)
+                ):
+                    return "repeated_stock_reply"
+            elif pattern.search(previous_body):
+                return "repeated_stock_reply"
+    return ""
+
+
+_STYLE_COMPLETE_SENTENCE_RE = re.compile(r"[^。！？!?\r\n]+[。！!]+")
+_STYLE_REMOVABLE_SENTENCES = {
+    "stock_agreement": _STYLE_STOCK_AGREEMENT_RE,
+    "stock_receipt": _STYLE_STOCK_RECEIPT_RE,
+    "stock_appraisal": _STYLE_STOCK_APPRAISAL_RE,
+}
+
+
+def remove_independent_template_sentences(reply: str, reason: str) -> str:
+    """只删独立成句的套话，或在已经交代事实后多出来的一次表态。"""
+    pattern = _STYLE_REMOVABLE_SENTENCES.get(reason)
+    if pattern is None and reason != "redundant_admission":
+        return ""
+    masked = _STYLE_LITERAL_RE.sub(lambda match: " " * len(match.group()), reply)
+    spans = []
+    if reason == "redundant_admission":
+        spans.extend(_redundant_admission_spans(masked))
+    else:
+        for match in _STYLE_COMPLETE_SENTENCE_RE.finditer(masked):
+            start, end = match.span()
+            if reply[start:end] == match.group() and pattern.fullmatch(match.group().strip().rstrip("。！!")):
+                spans.append((start, end))
+    if not spans:
+        return ""
+    revised = reply
+    for start, end in reversed(spans):
+        revised = revised[:start] + revised[end:]
+    revised = revised.strip()
+    return revised if sum(char.isalnum() for char in _style_review_body(revised)) >= 8 else ""
+
+
+def template_rewrite_preserves(original: str, revised: str) -> bool:
+    """检查可直接核对的引用、时间、否定语气和动作。"""
+    old_body, old_actions = extract_action_tags(original)
+    new_body, new_actions = extract_action_tags(revised)
+    visible = _SPEAKER_LABEL_RE.sub("", clean_reply(new_body)).strip("。！？!?. ").casefold()
+    if (not any(char.isalnum() for char in visible) or old_actions != new_actions
+            or visible in {"keep", "null", "none", "无需改写", "保留原稿"}):
+        return False
+    # 长草稿被压成一句评价时，即使数字都还在，也可能丢掉解释。
+    if len(old_body) >= 70 and len(new_body) * 2 < len(old_body):
+        return False
+    return (
+        set(_STYLE_LITERAL_RE.findall(old_body)) == set(_STYLE_LITERAL_RE.findall(new_body))
+        and list(dict.fromkeys(_STYLE_ANCHOR_RE.findall(old_body)))
+        == list(dict.fromkeys(_STYLE_ANCHOR_RE.findall(new_body)))
+        and set(_STYLE_MODAL_NEGATION_RE.findall(old_body))
+        == set(_STYLE_MODAL_NEGATION_RE.findall(new_body))
+        and set(_STYLE_USER_ATTRIBUTION_RE.findall(new_body))
+        <= set(_STYLE_USER_ATTRIBUTION_RE.findall(old_body))
+    )
 
 
 # ==================== 动作标记（2026-11-11 试点） ====================

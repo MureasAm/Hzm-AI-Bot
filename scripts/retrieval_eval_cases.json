@@ -19,7 +19,8 @@
   "2026-11-26 经资料与实际任务核查校准：原64题全部保留且原话不变；8条边界调整为必须/允许/禁止，新增5条强正对照。新增allowed范围约束及最终批准材料的facts覆盖；活袋鼠问题明确禁止corpus77袋鼠蛋，真实袋鼠蛋回忆保留正例。旧64原件和逐条独立理由存于outputs/retrieval_followup_2026-11-26；未根据当前模型输出回填标签，未执行新在线评测。",
   "2026-11-26 袋鼠题第二次校准：保留69题及原话，仅移除as3亲历问句强制常识facts覆盖，继续禁止corpus77。旧smoke已拒绝77却仅因缺袋鼠背景词失败，原失败报告完整保留；这说明该问法应测亲历证据边界，不能据此宣称代码问题全部解决。新增1条明确问词义/澳洲关系的强正例，总70；空资料不能通过定义题。69版与逐条修订理由另存outputs/retrieval_followup_2026-11-26。",
   "2026-11-26 pref6_late独立核查后校准：保留原话，routine由必须改为可选，同时增加真实熬夜活动corpus209/342及最终facts的强制AND检查；不是全空可过。原完整70题期望及在线结果另存，不将校准当成代码提升；co9和singer强正例不放宽。最终70题中，原64的55题期望不变、9题修订，另6题新增。",
-  "2026-11-26 公开版移除原会话输入，换成保留任务语义的虚构问法。旧的线上得分不适用于这一版公开数据。"
+  "2026-11-26 公开版移除原会话输入，换成保留任务语义的虚构问法。旧的线上得分不适用于这一版公开数据。",
+  "V13 新增 8 个虚构语境对照，扩展到 78 例；未在清理后的公开用例上重跑模型评测。"
  ],
  "cases": [
   {
@@ -128,12 +129,18 @@
    "id": "b10_lengchang",
    "query": "你今天在群里的话一说完，大家都不吱声了，冷场大王。",
    "source": "脱敏模拟",
-   "why": "冷场情景已删（2026-10-04：私聊是对方先说话，冷场是她自己的感受，不属 behaviors）——这条原本是那个删除的**负例**。\n2026-10-16 加了『被阴阳或调侃时』之后，这句话成了**正例**：'成冷场大王了' 就是在拐着弯损她。\n所以改成期望命中新格。**原来那条『冷场情景别回来』的意图仍然成立**——命中的不是冷场那条。",
+   "why": "允许合适的调侃风格，但主体必须是角色，不可把群友视作被问对象。",
    "expect": {
     "behavior": {
-     "should": [
+     "allowed": [
       "被阴阳或调侃时"
+     ],
+     "must_not": [
+      "能嘴熟络同期是亲近"
      ]
+    },
+    "understanding": {
+     "focus": "character"
     }
    }
   },
@@ -519,10 +526,30 @@
    "id": "co9_male_student",
    "query": "你直播提过以前喜欢的那个男学霸吗？",
    "source": "脱敏模拟",
-   "why": "明确指向她的经历 → 该唤起（说不出是哪条，所以只要求该路非空）",
+   "why": "要求选中具备纠正依据的条目，并在最终材料保留不确定性与限定事实。",
    "expect": {
     "corpus": {
-     "should_fire": true
+     "should": [
+      "41"
+     ]
+    },
+    "facts": {
+     "should": [
+      "corpus:41"
+     ],
+     "contains": [
+      "谎称",
+      "男同学"
+     ]
+    },
+    "understanding": {
+     "focus": "character",
+     "premises_contains": [
+      [
+       "喜欢",
+       "暗恋"
+      ]
+     ]
     }
    }
   },
@@ -1092,6 +1119,219 @@
      "contains": [
       "袋鼠",
       "澳洲"
+     ]
+    }
+   }
+  },
+  {
+   "id": "ctx_user_phone_opening",
+   "query": "我自己一接电话就紧张，帮我想一句接电话的开场白；不是问你怕不怕电话。",
+   "source": "虚构语境对照",
+   "why": "用户自述自己的电话紧张并请求开场白；不能因电话同词带出角色的怕电话偏好或过往。与明确问角色电话感受的正例互为主体对照。 文本生成任务的focus可指内容主体，也可指general通用任务，两者都合理；仍禁止character偷换。第三人题仍必须正确识别小林。",
+   "expect": {
+    "understanding": {
+     "exclusions_contains": [
+      "电话"
+     ],
+     "third_parties_empty": true,
+     "focus_allowed": [
+      "user",
+      "general"
+     ]
+    },
+    "preference": {
+     "must_not": [
+      "phone"
+     ]
+    },
+    "corpus": {
+     "should_not_hit": true
+    }
+   }
+  },
+  {
+   "id": "ctx_character_phone_preference",
+   "query": "小满，你自己接陌生电话会不安吗？这里只问你，不是在说别人。",
+   "source": "虚构语境对照",
+   "why": "明确询问角色接电话感受，phone真实记载接电话带来不安、陌生电话常挂断，必须取得对应偏好；不要求不存在的某次来电经过。",
+   "expect": {
+    "understanding": {
+     "focus": "character",
+     "third_parties_empty": true
+    },
+    "preference": {
+     "should": [
+      "phone"
+     ]
+    }
+   }
+  },
+  {
+   "id": "ctx_third_party_fruit_wish",
+   "query": "我朋友小林最爱芒果，帮我给小林写一句生日祝福，不是问你的水果喜好。",
+   "source": "虚构语境对照",
+   "why": "有明确第三人小林，芒果是该朋友的偏好，任务是给他写祝福；不能把它换成角色的水果偏好或生日往事。 文本生成任务的focus可指内容主体，也可指general通用任务，两者都合理；仍禁止character偷换。第三人题仍必须正确识别小林。",
+   "expect": {
+    "understanding": {
+     "third_parties_contains": [
+      "小林"
+     ],
+     "exclusions_contains": [
+      [
+       "水果",
+       "喜好",
+       "偏好"
+      ]
+     ],
+     "focus_allowed": [
+      "third_party",
+      "general"
+     ]
+    },
+    "preference": {
+     "must_not": [
+      "fruit"
+     ]
+    },
+    "corpus": {
+     "should_not_hit": true
+    }
+   }
+  },
+  {
+   "id": "ctx_character_fruit_without_third_party",
+   "query": "小满，你自己最爱哪种水果？这里只有你和我，没有第三个人。",
+   "source": "虚构语境对照",
+   "why": "同为水果话题但对象明确是角色；fruit实际记载最爱芒果，必须取得。没有被提及的具体第三人，不能凭空补出朋友或同期。",
+   "expect": {
+    "understanding": {
+     "focus": "character",
+     "third_parties_empty": true
+    },
+    "preference": {
+     "should": [
+      "fruit"
+     ]
+    },
+    "facts": {
+     "contains": [
+      "芒果"
+     ]
+    }
+   }
+  },
+  {
+   "id": "ctx_place_definition_excludes_experience",
+   "query": "澳洲和澳大利亚是同一个地方吗？只解释名字，不聊你在那边生活的经历。",
+   "source": "虚构语境对照",
+   "why": "正向任务是解释地方名称，否定只排除个人经历，不是否定澳洲义项。world词条明确澳洲即澳大利亚，应保留基础定义，不能因‘不聊经历’把可用定义一并拒绝。",
+   "expect": {
+    "understanding": {
+     "focus": "general",
+     "exclusions_contains": [
+      [
+       "经历",
+       "生活"
+      ]
+     ],
+     "third_parties_empty": true
+    },
+    "terms": {
+     "should": [
+      "澳洲"
+     ]
+    },
+    "facts": {
+     "contains": [
+      "澳洲",
+      "澳大利亚"
+     ]
+    },
+    "corpus": {
+     "should_not_hit": true
+    }
+   }
+  },
+  {
+   "id": "ctx_past_height_report",
+   "query": "你以前说过自己的身高是多少？我问的是以前的自报，不要求你现在重新量。",
+   "source": "虚构语境对照",
+   "why": "问过去自报，corpus142明确记载她说1米6，足够提供有范围答案；不要求旧资料证明当前测量值或今天做过测量。",
+   "expect": {
+    "understanding": {
+     "focus": "character",
+     "exclusions_contains": [
+      [
+       "现在",
+       "当前",
+       "重新",
+       "重测"
+      ]
+     ]
+    },
+    "corpus": {
+     "should": [
+      "142"
+     ]
+    },
+    "facts": {
+     "contains": [
+      "身高",
+      "1米6"
+     ]
+    }
+   }
+  },
+  {
+   "id": "ctx_current_height_action_unknown",
+   "query": "你今天已经量过身高了吗？我问今天量没量，不是问以前自报过多少。",
+   "source": "虚构语境对照",
+   "why": "问今天是否实际测量。旧自报142不能证明今天做过/没做过测量，也不能替换成回答一般身高；没有该时点行为证据，不强迫yes/no事实，禁止以旧身高经历充当当下动作答案。",
+   "expect": {
+    "understanding": {
+     "focus": "character",
+     "exclusions_contains": [
+      [
+       "以前",
+       "过去",
+       "历史",
+       "自报"
+      ]
+     ]
+    },
+    "corpus": {
+     "should_not_hit": true,
+     "must_not": [
+      "142"
+     ]
+    }
+   }
+  },
+  {
+   "id": "ctx_height_premise_correction",
+   "query": "你是不是一直说自己真的只有一米四？核对你以前实际说过的身高，别顺着我的说法编。",
+   "source": "虚构语境对照",
+   "why": "一米四是用户提出、尚未核实的预设；corpus142明确自报1米6，应作为核对和纠正依据。批准该资料不表示承认用户预设，也不能推断她当前重新测量过。",
+   "expect": {
+    "understanding": {
+     "focus": "character",
+     "premises_contains": [
+      [
+       "一米四",
+       "1米4",
+       "1.4",
+       "140"
+      ]
+     ]
+    },
+    "corpus": {
+     "should": [
+      "142"
+     ]
+    },
+    "facts": {
+     "contains": [
+      "1米6"
      ]
     }
    }

@@ -1,7 +1,9 @@
 """检索评测复用共同入口，并显式报告不可用检查；全程不联网。"""
 import json
 import sys
+from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -11,12 +13,220 @@ if str(SCRIPTS) not in sys.path:
 
 import retrieval_eval as evaluation
 from src.plugins.chatbot.retrieval import RetrievalItem
+from src.plugins.chatbot.material_usage import MaterialUse
+from src.plugins.chatbot.turn_understanding import GroundedParticipant, TurnFocus, TurnUnderstanding
 
 
 def _got(**changes):
     got = {name: [] for name in ("corpus", "behavior", "preference", "core_story", "terms", "associations", "facts")}
     got.update(changes)
     return got
+
+
+@pytest.mark.parametrize("focus,expected", [("character", True), ("third_party", False)])
+def test_understanding_focus_distinguishes_character_from_third_party(focus, expected):
+    case = {"id": "role", "query": "你成冷场大王了", "expect": {
+        "understanding": {"focus": "character"}}}
+    result = evaluation.check_case(case, _got(understanding={"focus": focus}))
+    assert result["passed"] is expected
+    assert not result["checks"][0]["missing"]
+
+
+@pytest.mark.parametrize("focus,expected", [
+    ("user", True), ("general", True), ("character", False),
+    ("third_party", False), ("unclear", False),
+])
+def test_focus_alternatives_preserve_legitimate_task_ambiguity_without_role_swap(focus, expected):
+    case = {"id": "text-task-focus", "query": "帮我写我接电话的开场白", "expect": {
+        "understanding": {"focus_allowed": ["user", "general"]}}}
+    assert evaluation.check_case(case, _got(understanding={"focus": focus}))["passed"] is expected
+
+
+@pytest.mark.parametrize("changes,expected", [
+    ({}, True),
+    ({"focus": "user"}, False),
+    ({"exclusions": ["不聊天气"]}, False),
+    ({"premises": ["她身高一米六"]}, False),
+    ({"third_parties": ["小林"]}, False),
+])
+def test_understanding_requires_all_fields_and_accepts_explicit_phrase_alternatives(changes, expected):
+    case = {"id": "bounded-understanding", "query": "核对身高，不聊见没见过袋鼠", "expect": {
+        "understanding": {"focus": "character",
+                          "exclusions_contains": [["亲身经历", "是否见过"]],
+                          "premises_contains": [["身高一米四", "只有一米四"]],
+                          "third_parties_empty": True}}}
+    actual = {"focus": "character", "exclusions": ["不询问是否见过袋鼠"],
+              "premises": ["用户以为她只有一米四"], "third_parties": []}
+    actual.update(changes)
+    assert evaluation.check_case(case, _got(understanding=actual))["passed"] is expected
+
+
+@pytest.mark.parametrize("condition", [
+    {}, {"focus": "nobody"}, {"focus": ["character"]},
+    {"focus_allowed": []}, {"focus_allowed": "user"}, {"focus_allowed": ["nobody"]},
+    {"focus_allowed": ["user", None]},
+    {"exclusions_contains": []}, {"premises_contains": [[]]},
+    {"request_contains": [""]}, {"third_parties_empty": False},
+    {"unknown": "character"},
+])
+def test_invalid_understanding_contract_does_not_count_as_a_check(condition):
+    result = evaluation.check_case({"id": "invalid-understanding", "query": "q", "expect": {
+        "understanding": condition}}, _got(understanding={"focus": "character"}))
+    assert not result["passed"] and result["checks"][0]["missing"]
+
+
+@pytest.mark.parametrize("actual", [None, {}, {"focus": "character"}])
+def test_missing_understanding_or_required_field_cannot_pass(actual):
+    result = evaluation.check_case({"id": "missing-understanding", "query": "q", "expect": {
+        "understanding": {"third_parties_empty": True}}}, _got(understanding=actual))
+    assert not result["passed"] and result["checks"][0]["missing"]
+
+
+@pytest.mark.parametrize("name,expected", [("小林", True), ("阿岚", False)])
+def test_understanding_third_party_check_uses_named_participant_not_quote_bycatch(name, expected):
+    case = {"id": "participants", "query": "小林说阿岚来了", "expect": {
+        "understanding": {"third_parties_contains": ["小林"]}}}
+    actual = {"third_parties": [{"name": name, "evidence": "小林说阿岚来了"}]}
+    assert evaluation.check_case(case, _got(understanding=actual))["passed"] is expected
+
+
+@dataclass(frozen=True)
+class _ReturnedUnderstanding:
+    focus: str = "character"
+    focus_text: str = "小满"
+    request: str = "询问以前熬夜的活动"
+    exclusions: tuple = ("不推断现在习惯",)
+    premises: tuple = ()
+    third_parties: tuple = ()
+
+
+@pytest.mark.parametrize("understanding", [
+    _ReturnedUnderstanding(), {"focus": "character"},
+    TurnUnderstanding(TurnFocus.CHARACTER, "小满", "询问以前熬夜的活动", (), (),
+                      (GroundedParticipant("小林", "小林提到以前的事"),)),
+])
+async def test_snapshot_uses_returned_context_and_original_material_not_usage_notes(monkeypatch, understanding):
+    calls = []
+    item = RetrievalItem("corpus", "209", 1,
+                         text="用途提示：她现在天天熬夜。原文：她以前熬夜直播。",
+                         extra={"source_text": "她以前熬夜直播。"})
+
+    async def gather(*args, **kwargs):
+        calls.append(kwargs["context"])
+        return {"context": SimpleNamespace(understanding=understanding),
+                "fused_items": [item], "corpus_items": [item,
+                    RetrievalItem("corpus", "dropped", .1, text="预算丢弃")],
+                "preference_items": [], "core_stories": [], "approved_terms": set(),
+                "association_entities": [], "embedding_available": True,
+                "material_uses": [MaterialUse("corpus", "209", "past_example", "用途说明不是原始事实"),
+                                  MaterialUse("corpus", "dropped", "answer"),
+                                  MaterialUse("term", "未实际渲染", "definition"),
+                                  MaterialUse("association", "预算丢掉的关系", "background"),
+                                  MaterialUse("wiki", "尚未查询百科", "background")],
+                "l3": {"understanding": {"focus": "third_party"}},
+                "selection_trace": {"available": True}}
+
+    monkeypatch.setattr(evaluation, "gather_retrieval", gather)
+    monkeypatch.setattr(evaluation, "build_terms_note", lambda *args, **kwargs: "")
+    got, l3 = await evaluation.snapshot("你以前熬夜干啥", object(), object(), [])
+    assert len(calls) == 1
+    assert got["understanding"]["focus"] == "character"
+    assert type(got["understanding"]["focus"]) is str
+    if isinstance(understanding, TurnUnderstanding):
+        assert got["understanding"] == understanding.to_dict()
+    assert got["facts"] == [{"id": "corpus:209", "source": "corpus", "text": "她以前熬夜直播。"}]
+    assert [(use["source"], use["item_id"], use["purpose"]) for use in got["material_uses"]] == [
+        ("corpus", "209", "past_example")]
+    assert evaluation.check_case({"id": "annotation-is-not-fact", "query": "q", "expect": {
+        "corpus": {"contains": ["现在天天熬夜"]}}}, got)["passed"] is False
+    assert evaluation._summarize_got(got)["understanding"]["focus"] == "character"
+    assert any("understanding" in line for line in evaluation.format_snapshot(got, l3))
+
+
+async def test_snapshot_keeps_usage_for_each_actual_material_outlet(monkeypatch):
+    corpus = RetrievalItem("corpus", "142", 1, text="自报身高1米6")
+    behavior = RetrievalItem("behavior", "reaction", 1, text="风格")
+    uses = [MaterialUse(source, item_id, purpose) for source, item_id, purpose in (
+        ("corpus", "142", "answer"), ("behavior", "reaction", "interaction"),
+        ("preference", "phone", "background"), ("core_story", "exam_222", "past_example"),
+        ("term", "澳洲", "definition"), ("association", "袋鼠", "background"))]
+
+    async def gather(*args, **kwargs):
+        return {"fused_items": [corpus, behavior], "material_uses": uses,
+                "preference_items": [{"id": "phone", "text": "不喜欢电话"}],
+                "core_stories": [{"id": "exam_222", "text": "旧考试名次"}],
+                "approved_terms": {"澳洲"}, "association_use_ids": ["袋鼠"],
+                "association_entities": ["袋鼠", "澳洲"], "association_context": "袋鼠生活在澳洲",
+                "embedding_available": True, "l3": {}, "selection_trace": {"available": True}}
+
+    def terms(*args, **kwargs):
+        kwargs["hit_out"].append("澳洲")
+        return "澳洲是澳大利亚"
+
+    monkeypatch.setattr(evaluation, "gather_retrieval", gather)
+    monkeypatch.setattr(evaluation, "build_terms_note", terms)
+    got, _ = await evaluation.snapshot("合成出口观察", object(), object(), [])
+    assert {(item["source"], item["item_id"]) for item in got["material_uses"]} == {
+        (use.source, use.item_id) for use in uses}
+
+
+@pytest.mark.parametrize("behavior,focus,expected", [
+    ([], "character", True),
+    (["被阴阳或调侃时"], "character", True),
+    (["能嘴熟络同期是亲近"], "character", False),
+    ([], "third_party", False),
+    (["被阴阳或调侃时"], "third_party", False),
+])
+def test_cold_room_case_allows_optional_style_but_requires_correct_subject(behavior, focus, expected):
+    case = next(case for case in evaluation.load_cases() if case["id"] == "b10_lengchang")
+    got = _got(behavior=[RetrievalItem("behavior", value, 1) for value in behavior],
+               understanding={"focus": focus})
+    assert evaluation.check_case(case, got)["passed"] is expected
+
+
+@pytest.mark.parametrize("item_id,text,in_facts,expected", [
+    ("41", "她情急之下谎称喜欢一个男同学", True, True),
+    ("131", "她以前看不到粉丝灯牌", True, False),
+    ("41", "她喜欢一个男同学", True, False),
+    ("41", "她情急之下谎称喜欢一个男同学", False, False),
+])
+def test_male_student_case_requires_the_actual_corrective_record_and_its_limits(item_id, text, in_facts, expected):
+    case = next(case for case in evaluation.load_cases() if case["id"] == "co9_male_student")
+    item = RetrievalItem("corpus", item_id, 1, text=text)
+    got = _got(corpus=[item], understanding={"focus": "character", "premises": ["她曾喜欢男同学"]},
+               facts=[{"id": f"corpus:{item_id}", "text": text}] if in_facts else [])
+    assert evaluation.check_case(case, got)["passed"] is expected
+
+
+@pytest.mark.parametrize("case_id,focus,exclusions,premises,third_parties,source,entries,fact", [
+    ("ctx_user_phone_opening", "user", ["不问角色怕电话"], [], [], "preference", [], ""),
+    ("ctx_character_phone_preference", "character", [], [], [], "preference", [{"id": "phone"}], ""),
+    ("ctx_third_party_fruit_wish", "third_party", ["不问角色水果喜好"], [], ["小林"], "preference", [], ""),
+    ("ctx_character_fruit_without_third_party", "character", [], [], [], "preference", [{"id": "fruit"}], "最爱芒果"),
+    ("ctx_place_definition_excludes_experience", "general", ["个人生活经历"], [], [], "terms", [{"id": "澳洲"}], "澳洲是澳大利亚"),
+    ("ctx_past_height_report", "character", ["不要求现在重测"], [], [], "corpus", [RetrievalItem("corpus", "142", 1, text="自报身高1米6")], "自报身高1米6"),
+    ("ctx_current_height_action_unknown", "character", ["不问以前自报"], [], [], "corpus", [], ""),
+    ("ctx_height_premise_correction", "character", [], ["她曾说只有一米四"], [], "corpus", [RetrievalItem("corpus", "142", 1, text="自报身高1米6")], "自报身高1米6"),
+])
+def test_global_context_controls_check_materials_and_understanding(case_id, focus, exclusions, premises,
+                                                               third_parties, source, entries, fact):
+    case = next(case for case in evaluation.load_cases() if case["id"] == case_id)
+    understanding = {"focus": focus, "exclusions": exclusions, "premises": premises,
+                     "third_parties": [{"name": name, "evidence": name} for name in third_parties]}
+    got = _got(**{source: entries}, understanding=understanding,
+               facts=[{"id": "approved", "text": fact}] if fact else [])
+    assert evaluation.check_case(case, got)["passed"]
+    got["understanding"] = {**understanding, "focus": "unclear"}
+    assert not evaluation.check_case(case, got)["passed"]
+
+
+@pytest.mark.parametrize("case_id,query", [
+    ("b10_lengchang", "你今天在群里的话一说完，大家都不吱声了，冷场大王。"),
+    ("co9_male_student", "你直播提过以前喜欢的那个男学霸吗？"),
+])
+def test_revised_annotations_keep_the_public_questions(case_id, query):
+    case = next(case for case in evaluation.load_cases() if case["id"] == case_id)
+    assert case["query"] == query
 
 
 @pytest.mark.parametrize("ids,expected", [([], True), (["food"], True),
@@ -478,6 +688,28 @@ async def test_healthy_run_preserves_annotations_and_explicit_output(offline, mo
     report = json.loads(output.read_text(encoding="utf-8"))
     assert report["case_total"] == report["case_passed"] == 1
     assert report["case_degraded"] == report["check_missing"] == 0
+
+
+@pytest.mark.parametrize("degraded", [False, True])
+async def test_run_preserves_understanding_and_usage_without_hiding_degradation(offline, monkeypatch, degraded):
+    actual = {"focus": "character", "premises": ["她曾喜欢男同学"]}
+    use = {"source": "corpus", "item_id": "41", "purpose": "correction"}
+
+    async def snapshot(*args, **kwargs):
+        return _got(understanding=actual, material_uses=[use]), {
+            "_degraded": degraded,
+            "_degraded_reasons": ["l3_unavailable"] if degraded else []}
+
+    monkeypatch.setattr(evaluation, "snapshot", snapshot)
+    case = {"id": "understanding-report", "query": "合成报告", "expect": {
+        "understanding": {"focus": "character"}}}
+    assert await evaluation.run([case], verbose=False) == int(degraded)
+    report = json.loads((offline / "eval_report.json").read_text(encoding="utf-8"))
+    result = report["results"][0]
+    assert result["understanding"] == actual and result["material_uses"] == [use]
+    assert result["retrieval_passed"] and result["passed"] is (not degraded)
+    assert report["source_stats"]["understanding"] == {
+        "pass": int(not degraded), "total": 1, "degraded": int(degraded)}
 
 
 async def test_snapshot_error_is_counted_and_later_cases_still_run(offline, monkeypatch):

@@ -44,7 +44,7 @@
 
 ## 问题记录.md 的字段（都在行首写「字段：值」，缺的脚本会问你）
 
-    用户说：今天怎么没有开播呀？     ← 必填（这条消息本身）
+    用户说：今天怎么没更新呀？     ← 必填（这条消息本身；此处用虚构示例）
     她答：搬家的事还没弄完，今天真播不了            ← 生成层判据的来源
     应该是：不该拿两个月前的旧事当成现在的理由      ← 人话写就行
     层：生成                                        ← 检索 / 生成（不写就替你别猜并说明）
@@ -382,6 +382,17 @@ def describe_expect(expect: dict) -> str:
     """把 expect 翻成人话；必须、允许和禁止条件同时展示。"""
     parts = []
     for route, cond in (expect or {}).items():
+        if route == "understanding":
+            for key, value in cond.items():
+                if key == "focus":
+                    parts.append(f"understanding 主体须为 {value}")
+                elif key == "focus_allowed":
+                    parts.append(f"understanding 主体仅允许 {value}")
+                elif key.endswith("_contains"):
+                    parts.append(f"understanding {key[:-9]} 必要短语组覆盖（组间全部、组内任一）{value}")
+                elif key.endswith("_empty") and value is True:
+                    parts.append(f"understanding {key[:-6]} 须为空")
+            continue
         if "should" in cond:
             parts.append(f"{route} 该命中 {cond['should']}")
         if "contains" in cond:

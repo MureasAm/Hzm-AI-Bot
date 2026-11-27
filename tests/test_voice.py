@@ -127,6 +127,9 @@ class TestTtsText:
     def test_whitespace_removed(self):
         assert v._tts_text(" 好了  就这样 ") == "好了就这样"
 
+    def test_english_word_boundaries_kept(self):
+        assert v._tts_text(" 这个 API   key 我先留着 ") == "这个API key我先留着"
+
     def test_dash_becomes_pause(self):
         """破折号 → 逗号。
 
@@ -224,7 +227,7 @@ def _wav_segments(segs, rate=16000):
 
     tone=方波(±8000，≈正常语音窗 RMS 数千)；noise=低幅交替(±400，≈线上 32kHz 的底噪
     RMS 300~500——**恰好骑在旧阈值 300 上**，旧代码裁静音对它完全空转)；
-    silence=全 0。
+    quiet=低于活跃阈值的语音尾段，silence=全 0。
     """
     a = array.array("h")
     for kind, sec in segs:
@@ -234,6 +237,8 @@ def _wav_segments(segs, rate=16000):
                 a.append(0)
             elif kind == "tone":
                 a.append(8000 if (i // 20) % 2 else -8000)
+            elif kind == "quiet":
+                a.append(650 if (i // 20) % 2 else -650)
             else:
                 a.append(400 if (i // 20) % 2 else -400)
     return a, rate
@@ -266,7 +271,7 @@ def _dur(path):
 
 
 class TestCleanWav:
-    """_clean_wav：裁首尾静音 + 压句中超长空洞，并回报 (有效秒数, 总秒数)。"""
+    """裁首尾静音、保护轻尾音、压长空洞，并返回有效语音和判定时长。"""
 
     def test_trims_leading_and_trailing_silence(self, tmp_path):
         p = tmp_path / "x.wav"
@@ -275,6 +280,18 @@ class TestCleanWav:
         # 原 1.2s → 裁后只剩 音段(0.5s) + 两侧边距(~0.1s)，远小于原长、也大于纯音段
         assert _dur(p) < orig - 0.5
         assert _dur(p) >= 0.5
+
+    def test_keeps_quiet_syllable_and_trims_long_noise_tail(self, tmp_path):
+        p = tmp_path / "quiet-ending.wav"
+        _write_wav(p, [("tone", 0.5), ("quiet", 0.2), ("noise", 4.0)], rate=32000)
+
+        speech, _ = v._clean_wav(p)
+
+        samples, rate = v._read_mono_wav(p)
+        expected_tail, _ = _wav_segments([("quiet", 0.2)], rate)
+        assert samples[rate // 2:rate // 2 + len(expected_tail)] == expected_tail
+        assert _dur(p) < 1.0
+        assert speech == pytest.approx(0.5)
 
     def test_trims_noise_tail_above_old_threshold(self, tmp_path):
         """回归（2026-10-11）：底噪 400 骑在旧阈值 300 上 → 旧代码一个字都裁不掉。
@@ -424,7 +441,7 @@ _LONG = "灰泽满今天直播聊得特别开心，下次有空我们再一起�
 
 def _cache_path(text):
     h = hashlib.md5(v._tts_text(text).encode("utf-8")).hexdigest()
-    return v.VOICE_CACHE_DIR / f"voice_{h}.wav"
+    return v.VOICE_CACHE_DIR / "v5-turbo" / "tail-v2" / f"voice_{h}.wav"
 
 
 class TestExpectSeconds:
@@ -600,6 +617,7 @@ def voice_env(monkeypatch, tmp_path):
     monkeypatch.setattr(v, "SOVITS_REF_DIR", refs)
     monkeypatch.setattr(v, "VOICE_CACHE_DIR", tmp_path / "cache")
     monkeypatch.setattr(v, "get_voice_enabled", lambda: True)
+    monkeypatch.setenv("SOVITS_PROFILE", "v5-turbo")
     return refs
 
 
@@ -683,6 +701,50 @@ class TestCacheKey:
 
 
 class TestSynthesize:
+    async def test_turbo_profile_uses_its_own_cache_and_verified_parameters(self, voice_env, monkeypatch):
+        text = "晚安呀"
+        box = _fake_httpx(monkeypatch, [_wav_bytes([("tone", 0.75)])])
+        monkeypatch.setenv("SOVITS_PROFILE", "v2")
+        old = await v._synthesize(text)
+        monkeypatch.setenv("SOVITS_PROFILE", "v5-turbo")
+        turbo = await v._synthesize(text)
+
+        assert old and turbo and old != turbo
+        assert Path(turbo) == _cache_path(text)
+        assert box["n"] == 2 and "cfg_rate" not in box["json"][0]
+        assert box["json"][1]["sample_steps"] == 4
+        assert box["json"][1]["cfg_rate"] == 0.0
+        assert box["json"][1]["use_cuda_graph"] is False
+        assert box["json"][1]["use_flash_attention"] is False
+
+    async def test_old_cache_is_regenerated_with_quiet_ending(self, voice_env, monkeypatch):
+        text = "晚安呀"
+        digest = hashlib.md5(text.encode("utf-8")).hexdigest()
+        legacy = v.VOICE_CACHE_DIR / f"voice_{digest}.wav"
+        legacy.parent.mkdir(parents=True)
+        _write_wav(legacy, [("tone", 0.75), ("quiet", 0.05)])
+        old_bytes = legacy.read_bytes()
+        box = _fake_httpx(monkeypatch, [_wav_bytes([("tone", 0.75), ("quiet", 0.2)])])
+
+        path = await v._synthesize(text)
+        assert path and Path(path) != legacy
+        assert _dur(Path(path)) == pytest.approx(0.95)
+        assert await v._synthesize(text) == path
+        assert box["n"] == 1
+        assert legacy.read_bytes() == old_bytes
+
+    async def test_short_truncated_candidate_retries(self, voice_env, monkeypatch):
+        # 保留的轻声尾段不会把只读了半句的候选抬过完整度门槛。
+        text = "晚安呀"
+        box = _fake_httpx(monkeypatch, [
+            _wav_bytes([("tone", 0.4), ("quiet", 0.2)]),
+            _wav_bytes([("tone", 0.75)]),
+        ])
+
+        path = await v._synthesize(text)
+        assert path and _dur(Path(path)) == pytest.approx(0.75)
+        assert box["n"] == 2
+
     async def test_cache_hit_good_skips_http(self, voice_env, monkeypatch):
         expect = v._expect_seconds(v._tts_text(_LONG))
         cached = _cache_path(_LONG)
@@ -692,15 +754,15 @@ class TestSynthesize:
         assert await v._synthesize(_LONG) == str(cached)
         assert box["n"] == 0, "合格缓存不该再打 TTS"
 
-    async def test_cache_hit_cleans_legacy_noise_tail(self, voice_env, monkeypatch):
-        """老缓存是旧阈值下裁的（底噪尾巴还在）→ 复检顺手治好，不必再打 TTS。"""
+    async def test_cache_hit_cleans_noise_tail(self, voice_env, monkeypatch):
+        """带底噪长尾的缓存可以在复检时清理。"""
         expect = v._expect_seconds(v._tts_text(_LONG))
         cached = _cache_path(_LONG)
         cached.parent.mkdir(parents=True, exist_ok=True)
         _write_wav(cached, [("tone", expect), ("noise", 2.0)])
         box = _fake_httpx(monkeypatch, [b""])
         out = await v._synthesize(_LONG)
-        assert box["n"] == 0, "合格的老缓存不该重合成"
+        assert box["n"] == 0, "合格的缓存不该重合成"
         assert _dur(Path(out)) < expect + 0.5, "顺手把底噪尾巴裁掉"
 
     async def test_cache_hit_bad_regenerates(self, voice_env, monkeypatch):
@@ -725,6 +787,20 @@ class TestSynthesize:
         out = await v._synthesize(_LONG)
         assert box["n"] == 2
         assert v._speech_seconds(Path(out)) > 3.0
+
+    @pytest.mark.parametrize("profile,retry_text", [
+        ("v5-turbo", "嗯你刚刚是在叫我嘛？"),
+        ("v2", "嗯？你刚刚是在叫我嘛？"),
+    ])
+    async def test_leading_interjection_retry(self, voice_env, monkeypatch, profile, retry_text):
+        monkeypatch.setenv("SOVITS_PROFILE", profile)
+        text = "嗯？你刚刚是在叫我嘛？"
+        box = _fake_httpx(monkeypatch, [
+            _wav_bytes([("tone", 14.0)]),
+            _wav_bytes([("tone", 2.5)]),
+        ])
+        assert await v._synthesize(text)
+        assert [payload["text"] for payload in box["json"]] == [text, retry_text]
 
     async def test_retries_when_result_hollow(self, voice_env, monkeypatch):
         """回归（2026-10-11 的 bug）：结果"有效语音够、总长被撑爆"时旧代码提前 break ——
@@ -775,6 +851,7 @@ class TestSynthesize:
         box = _fake_httpx(monkeypatch, [_wav_bytes([("tone", 5.0)])])
         await v._synthesize(text)
         assert box["json"][0]["text_lang"] == "en"
+        assert box["json"][0]["text"] == "Hello everyone this is a test of the voice system"
         assert box["json"][0]["prompt_lang"] == "zh"   # 参考音频是中文的
 
     async def test_chinese_uses_zh_text_lang(self, voice_env, monkeypatch):

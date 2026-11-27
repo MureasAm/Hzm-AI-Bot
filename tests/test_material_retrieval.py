@@ -5,7 +5,6 @@ from types import SimpleNamespace
 import pytest
 
 from src.plugins.chatbot import material_retrieval as materials
-from src.plugins.chatbot.corpus_judge import CORPUS_JUDGE_PROMPT
 from src.plugins.chatbot.retrieval import RetrievalItem
 from src.plugins.chatbot.retrieval_context import RetrievalContext
 
@@ -121,7 +120,7 @@ async def test_reference_resolution_can_supply_a_term_candidate(pool, monkeypatc
     assert result['approved_terms'] == {'考'}
 
 
-async def test_corpus_batch_keeps_original_fact_criteria_and_the_shared_context(pool):
+async def test_corpus_batch_has_one_use_contract_and_the_shared_context(pool):
     context = RetrievalContext('那后来呢', history='用户在问她过去的那件事',
                                response_task='追问她本人的过往', response_scope='conversation')
     client = ChoosingClient({('corpus', 'past')})
@@ -129,11 +128,10 @@ async def test_corpus_batch_keeps_original_fact_criteria_and_the_shared_context(
     request = next(request for request in client.requests
                    if {c['来源'] for c in json.loads(request['messages'][-1]['content']).get('候选材料', [])} == {'corpus'})
     policy = request['messages'][0]['content']
-    assert CORPUS_JUDGE_PROMPT.split('只输出 JSON：', 1)[0].format(
-        query='下方本轮语境的原话、最近对话和独立任务理解', candidates='下方候选材料') in policy
     assert '只输出 JSON：{"keep": [编号' not in policy
     assert '"evidence"' in policy and policy.count('只输出JSON：') == 1
     assert '独立任务' in policy and '候选' in policy
+    assert all(purpose in policy for purpose in ('answer', 'past_example', 'correction'))
     assert [item.item_id for item in result['corpus_items']] == ['past']
     assert all(payload['本轮语境'] == json.loads(context.note()) for payload in client.seen)
 
@@ -262,3 +260,106 @@ async def test_valid_negative_review_deletes_fact_without_degrading_other_materi
     assert not result['corpus_items'] and result['preference_items']
     assert result['selection_trace']['available']
     assert result['selection_trace']['verification'] == {'past': {'entailed': True, 'answers': False}}
+    assert [(use.source, use.item_id) for use in result['material_uses']] == [('preference', 'animals')]
+
+
+async def test_approved_material_uses_keep_verified_fact_and_distinct_source_purposes(pool):
+    client = ChoosingClient({('corpus', 'past'), ('core_story', 'story'), ('preference', 'animals'),
+                             ('term', '猫'), ('association', '书名')})
+    result = await materials.retrieve_contextual_materials(RetrievalContext('说说你和猫的往事'), [1], client)
+    uses = {(use.source, use.item_id): use for use in result['material_uses']}
+    assert set(uses) == {('corpus', 'past'), ('core_story', 'story'), ('preference', 'animals'),
+                         ('term', '猫'), ('association', '书名')}
+    assert uses[('corpus', 'past')].purpose == 'past_example'
+    assert uses[('corpus', 'past')].fact == '她过去养猫'
+    assert uses[('corpus', 'past')].quote == '她过去养猫'
+    assert uses[('core_story', 'story')].purpose == 'past_example'
+    assert uses[('preference', 'animals')].purpose == 'background'
+    assert uses[('term', '猫')].purpose == 'definition'
+    assert uses[('association', '书名')].purpose == 'background'
+    assert result['corpus_items'][0].text == '她过去养猫'
+    assert result['association_use_ids'] == ['书名']
+
+
+async def test_rejected_or_failed_review_never_leaves_material_use(pool):
+    class RejectedCorpus(ChoosingClient):
+        async def create(self, **kwargs):
+            payload = json.loads(kwargs['messages'][-1]['content'])
+            if '待核对事实' in payload:
+                raise RuntimeError('unavailable verifier')
+            return await super().create(**kwargs)
+
+    result = await materials.retrieve_contextual_materials(RetrievalContext('你养过猫吗'), [1],
+        RejectedCorpus({('corpus', 'past'), ('preference', 'animals')}))
+    assert [(use.source, use.item_id) for use in result['material_uses']] == [('preference', 'animals')]
+    empty = await materials.retrieve_contextual_materials(RetrievalContext('只改写这句话'), [1], ChoosingClient(set()))
+    assert empty['material_uses'] == [] and empty['association_use_ids'] == []
+
+
+async def test_association_use_ids_only_describe_groups_surviving_join_budget(pool, monkeypatch):
+    monkeypatch.setattr(materials, 'match_entities', lambda *args: ['大段关系', '短关系'])
+    monkeypatch.setattr(materials, 'resolve_associations', lambda query, seeds: {
+        'note': '长' * 301 if seeds[0] == '大段关系' else '作者写过这本书', 'entities': [], 'preference_ids': []})
+    result = await materials.retrieve_contextual_materials(RetrievalContext('那本书呢'), [1],
+        ChoosingClient({('association', '大段关系'), ('association', '短关系')}))
+    assert result['association_context'] == '作者写过这本书'
+    assert result['association_use_ids'] == ['短关系']
+
+
+async def test_correction_use_keeps_qualified_fact_without_rewriting_original_material(pool, monkeypatch):
+    source = '她回忆学生时代，为应付盘问临时说喜欢一个同学，但并未说他是什么身份。'
+    fact = '她此前为应付盘问临时说喜欢同学，未说明其身份'
+    quote = '为应付盘问临时说喜欢一个同学，但并未说他是什么身份'
+    monkeypatch.setattr(materials, 'retrieve_corpus_candidates', lambda *args: [
+        RetrievalItem('corpus', 'excuse', .8, text=source)])
+
+    class CorrectionClient(ChoosingClient):
+        async def create(self, **kwargs):
+            response = await super().create(**kwargs)
+            payload = json.loads(response.choices[0].message.content)
+            for proof in payload.get('evidence', []):
+                proof.update(fact=fact, quote=quote, purpose='correction')
+            response.choices[0].message.content = json.dumps(payload)
+            return response
+
+    client = CorrectionClient({('corpus', 'excuse')})
+    result = await materials.retrieve_contextual_materials(
+        RetrievalContext('你以前喜欢的那位是不是班长'), [1], client)
+    use, = result['material_uses']
+    assert (use.source, use.item_id, use.purpose) == ('corpus', 'excuse', 'correction')
+    assert use.fact == fact and use.quote == quote
+    assert result['corpus_items'][0].text == source
+    assert client.verifications[0]['待核对事实'][0]['purpose'] == 'correction'
+
+
+async def test_wiki_and_fallback_behavior_also_return_only_their_approved_uses(pool):
+    behavior = RetrievalItem('behavior', '短回应', 1, text='当前互动的语气参考')
+    result = await materials.retrieve_contextual_materials(
+        RetrievalContext('陌生作者是谁', entities=('陌生作者',)), [1],
+        ChoosingClient({('wiki', '陌生作者'), ('behavior', '短回应')}), behavior_candidate=behavior)
+    assert {(use.source, use.item_id, use.purpose) for use in result['material_uses']} == {
+        ('wiki', '陌生作者', 'background'), ('behavior', '短回应', 'interaction')}
+
+
+async def test_association_budget_includes_actual_usage_note_and_skips_whole_overbudget_relation(pool, monkeypatch):
+    from src.plugins.chatbot.material_usage import render_material_use
+    long_relation = '长' * 270
+    short_relation = '作者写过这本书'
+    monkeypatch.setattr(materials, 'match_entities', lambda *args: ['长关系', '短关系'])
+    monkeypatch.setattr(materials, 'resolve_associations', lambda query, seeds: {
+        'note': long_relation if seeds[0] == '长关系' else short_relation,
+        'entities': [], 'preference_ids': []})
+    result = await materials.retrieve_contextual_materials(RetrievalContext('这本书呢'), [1],
+        ChoosingClient({('association', '长关系'), ('association', '短关系')}))
+    uses = [use for use in result['material_uses'] if use.source == 'association']
+    notes = list(dict.fromkeys(render_material_use(use) for use in uses))
+    rendered = '\n'.join([*notes, result['association_context']])
+    assert len(rendered) <= 300
+    assert result['association_context'] == short_relation
+    assert result['association_use_ids'] == ['短关系']
+    assert [use.item_id for use in uses] == ['短关系']
+    monkeypatch.setattr(materials, 'match_entities', lambda *args: ['长关系'])
+    empty = await materials.retrieve_contextual_materials(RetrievalContext('这本书呢'), [1],
+        ChoosingClient({('association', '长关系')}))
+    assert empty['association_context'] == '' and empty['association_use_ids'] == []
+    assert not [use for use in empty['material_uses'] if use.source == 'association']

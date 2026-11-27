@@ -13,6 +13,7 @@ import asyncio
 import random
 import re
 import time
+from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -309,11 +310,13 @@ async def _flush(win: _UserWindow) -> None:
     set_llm_route("群" if not win.is_private else "私")
     # ⚠️ 先取快照，**不要**把 pending 清空。这一批什么时候算“处理完”？
     #    回复真的生成并记入短期记忆之后才从 pending 里删（_commit_batch）。
-    #    生成中若收到新消息，取消本轮时也不能丢掉原有待处理消息。
+    #    新消息取消生成时，未提交的输入仍应保留给下一批。
     msgs = list(win.pending)
     # 与 msgs 对齐的元信息；测试里手工设置 pending 时没有 meta，用空 dict 兜底。
     metas = [win.pending_meta[i] if i < len(win.pending_meta) else {} for i in range(len(msgs))]
     turn_id = uuid4().hex if win.is_private else ""
+    # 语音可能在下一轮之后才发完，相处偏好仍按本轮开始的时间处理。
+    preference_observed_at = datetime.now() if turn_id else None
     bot = win.bot
     is_private = win.is_private
     incoming = tuple(
@@ -479,7 +482,7 @@ async def _flush(win: _UserWindow) -> None:
         # 引用或转发的补全可能让较早的点歌晚于取消入队；QQ 同秒消息按入口次序判。
         ordered = sorted(zip(msgs, metas),
                          key=lambda pair: (pair[1].get("ts") or 0, pair[1].get("authored_order") or 0))
-        record_kwargs["song_text"] = _combine_text(
+        record_kwargs["authored_text"] = _combine_text(
             (meta.get("authored_text", text),) for (_, text, _), meta in ordered
         )
     else:
@@ -521,9 +524,10 @@ async def _flush(win: _UserWindow) -> None:
     # clean_reply 返回普通 str，会把这个属性丢掉，所以先取出来。
     actions = getattr(reply, "actions", {}) or {}
     song = actions.get("song") if is_private else None
+    song_offer = is_private and actions.get("song_offer")
     memory_context = getattr(reply, "memory_context", None) if turn_id else None
     memory_text = (memory_context or {}).get("user_text") or user_transcript
-    reply = clean_reply(reply)  # 去括号前缀 + 整条至多 1 个括号
+    reply = str(reply) if song_offer else clean_reply(reply)
     acknowledged: list[str] = []
     evidence_complete = True
     finalized = False
@@ -563,6 +567,8 @@ async def _flush(win: _UserWindow) -> None:
             source_turn_id=turn_id if ((acknowledged and evidence_complete)
                                        or (not delivered and incoming_saved)) else "",
             delivery_verified=bool(delivered),
+            authored_text=record_kwargs.get("authored_text"),
+            preference_observed_at=preference_observed_at,
         ))
 
     if song is not None and win.generation != my_gen:
@@ -624,7 +630,7 @@ async def _flush(win: _UserWindow) -> None:
     try:
         # 用户要语音时短句也尝试；合成或发送失败后再发文字。
         voice_ok = False
-        if song is None and should_voice(reply, force=(
+        if song is None and not song_offer and should_voice(reply, force=(
             voice_requested(combined) or bool(actions.get("voice"))
             or session_memory.voice_preference_active(win.target_id)
         )):
@@ -643,9 +649,12 @@ async def _flush(win: _UserWindow) -> None:
                 session_memory.log_action_event(win.target_id, "voice", ok=voice_ok)
 
         if not voice_ok and reply:
-            parts = split_reply(reply) if SPLIT_REPLY_ENABLED else [reply]
-            # 拆分后每段再清一次，内联括号可能落在某段开头。
-            parts = [clean_reply(part) for part in parts]
+            if song_offer:
+                # 备选名单一次送达，保留曲名中的括号和符号。
+                parts = [reply]
+            else:
+                parts = split_reply(reply) if SPLIT_REPLY_ENABLED else [reply]
+                parts = [clean_reply(part) for part in parts]
             for i, part in enumerate(parts):
                 if i == 0 and reply_mid:
                     message_id = await _send(win, part, reply_mid=reply_mid)

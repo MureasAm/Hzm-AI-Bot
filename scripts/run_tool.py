@@ -769,7 +769,7 @@ def _run_memory_hygiene(args):
 def _add_history_channel_ab(sub):
     p = sub.add_parser("history-channel-ab",
                        help="历史注入 A/B：assistant 原句 vs 转述 system vs 混合")
-    p.add_argument("--users", default="900000001,900000001")
+    p.add_argument("--users", required=True)
     p.add_argument("--turns", type=int, default=10)
     p.add_argument("--samples", type=int, default=1)
     p.add_argument("--arms", default="ABC", help="要跑哪几组，如 ABC / AB / B")

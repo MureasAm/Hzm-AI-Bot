@@ -58,7 +58,7 @@ async def test_contextual_prompt_has_one_complete_output_contract(song_text):
     prompt = client.calls[0]['messages'][0]['content']
     assert prompt.count('【唯一输出合同】') == 1
     contract = json.loads(prompt.split('【唯一输出合同】\n', 1)[1].split('\n', 1)[0])
-    expected = {'behavior', 'same_request', 'reminder', 'task', 'scope'}
+    expected = {'behavior', 'same_request', 'reminder', 'task', 'scope', 'understanding'}
     if song_text:
         expected.add('song_request')
     assert set(contract) == expected
@@ -161,7 +161,7 @@ async def test_explicit_null_is_a_successful_no_behavior_decision():
     result = await routing.classify_l3(
         _Client('{"behavior": null}'), "你好", "", BEHAVIORS, context=CONTEXT,
     )
-    assert result == {**EMPTY, "classification_ok": True, "needs": [], "needs_ok": False, "task": "", "scope": ""}
+    assert result == {**EMPTY, "classification_ok": True, "needs": [], "needs_ok": False, "task": "", "scope": "", "understanding": None, "understanding_ok": False}
 
 
 @pytest.mark.asyncio
@@ -193,14 +193,14 @@ async def test_network_failure_marks_classification_unavailable():
     result = await routing.classify_l3(
         _Client(error=RuntimeError("offline")), "你好", "", BEHAVIORS, context=CONTEXT,
     )
-    assert result == {**EMPTY, "classification_ok": False, "needs": [], "needs_ok": False, "task": "", "scope": ""}
+    assert result == {**EMPTY, "classification_ok": False, "needs": [], "needs_ok": False, "task": "", "scope": "", "understanding": None, "understanding_ok": False}
 
 
 @pytest.mark.asyncio
 async def test_empty_input_marks_classification_unavailable():
     client = _Client('{"behavior": null}')
     result = await routing.classify_l3(client, "", "", BEHAVIORS, context=CONTEXT)
-    assert result == {**EMPTY, "classification_ok": False, "needs": [], "needs_ok": False, "task": "", "scope": ""}
+    assert result == {**EMPTY, "classification_ok": False, "needs": [], "needs_ok": False, "task": "", "scope": "", "understanding": None, "understanding_ok": False}
     assert client.calls == []
 
 
@@ -384,3 +384,111 @@ async def test_shared_semantic_guidance_reaches_each_contextual_decision(step, m
         "主体", "互动对象", "实际意图", "引用", "否定", "假设", "过去/现在",
         "可能出错", "用户自述", "第三人", "真实互动",
     ))
+
+
+def _understanding(**updates):
+    value = {'focus': 'character', 'focus_text': '对话中的角色', 'request': '回应用户对她的评价',
+             'exclusions': [], 'premises': ['对方提到的表现尚未核实'], 'third_parties': []}
+    value.update(updates)
+    return value
+
+
+def _understood_response(**updates):
+    value = {'behavior': None, 'same_request': None, 'reminder': None,
+             'task': '回应评价，不把问题前提当事实', 'scope': 'conversation',
+             'understanding': _understanding()}
+    value.update(updates)
+    return json.dumps(value, ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+async def test_contextual_understanding_is_typed_and_prompt_binds_people_before_task():
+    from src.plugins.chatbot.turn_understanding import TurnUnderstanding
+    client = _Client(_understood_response())
+    result = await routing.classify_l3(client, '今天你在小群里成冷场大王了', '', BEHAVIORS, context=CONTEXT)
+    assert result['understanding_ok'] is True and isinstance(result['understanding'], TurnUnderstanding)
+    assert result['understanding'].to_dict() == _understanding()
+    prompt = client.calls[0]['messages'][0]['content']
+    assert all(text in prompt for text in ('先绑定人物', '待核实前提', '不能当作既成事实',
+                                         '只约束被排除的用途', '连续原文'))
+    assert client.calls[0]['max_tokens'] >= 700 and len(client.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_missing_understanding_is_compatible_without_a_semantic_retry():
+    client = _Client('{"behavior":null,"task":"原有有效任务","scope":"conversation"}')
+    result = await routing.classify_l3(client, '原话', '', BEHAVIORS, context=CONTEXT)
+    assert result['needs_ok'] and result['classification_ok']
+    assert result['understanding'] is None and result['understanding_ok'] is False
+    assert len(client.calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('invalid', [None, {}, {'focus': 'invalid'}, _understanding(
+    third_parties=[{'name': '未出现的人', 'evidence': '本轮原话'}])])
+async def test_invalid_present_understanding_uses_one_format_repair_preserving_valid_fields(invalid):
+    client = _SequenceClient([
+        _understood_response(behavior='被夸', understanding=invalid),
+        _understood_response(behavior='不存在', task='不覆盖第一轮任务'),
+    ])
+    result = await routing.classify_l3(client, '本轮原话', '', BEHAVIORS, context=CONTEXT)
+    assert len(client.calls) == 2
+    assert result['classification_ok'] and result['behavior'] == '被夸'
+    assert result['task'] == '回应评价，不把问题前提当事实'
+    assert result['understanding_ok'] and result['understanding'].request == '回应用户对她的评价'
+
+
+@pytest.mark.asyncio
+async def test_second_invalid_understanding_does_not_erase_independent_behavior_or_task():
+    client = _SequenceClient([_understood_response(behavior='被夸', understanding={}),
+                              _understood_response(understanding=[])])
+    result = await routing.classify_l3(client, '原话', '', BEHAVIORS, context=CONTEXT)
+    assert len(client.calls) == 2
+    assert result['needs_ok'] and result['classification_ok'] and result['behavior'] == '被夸'
+    assert result['understanding'] is None and not result['understanding_ok']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('response_understanding', ['missing', _understanding()])
+async def test_relation_behavior_without_grounded_third_party_is_valid_null(response_understanding):
+    behavior = {'name': '谈及熟人', 'trigger': '聊到她熟的人', 'requires_third_party': True}
+    data = json.loads(_understood_response(behavior='谈及熟人'))
+    if response_understanding == 'missing':
+        del data['understanding']
+    else:
+        data['understanding'] = response_understanding
+    client = _Client(json.dumps(data))
+    result = await routing.classify_l3(client, '你今天表现怎么样', '', [behavior], context=CONTEXT)
+    assert result['classification_ok'] is True and result['behavior'] == ''
+    assert len(client.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_relation_behavior_allows_grounded_history_participant_after_format_repair():
+    behavior = {'name': '谈及熟人', 'trigger': '聊到她熟的人', 'requires_third_party': True}
+    client = _SequenceClient([
+        _understood_response(behavior='谈及熟人', understanding={}),
+        _understood_response(behavior=None, understanding=_understanding(third_parties=[
+            {'name': '阿青', 'evidence': '阿青是她的旧室友'},
+        ])),
+    ])
+    result = await routing.classify_l3(client, '那她后来呢', '阿青是她的旧室友', [behavior], context=CONTEXT)
+    assert result['classification_ok'] and result['behavior'] == '谈及熟人'
+    assert result['understanding_ok'] and len(client.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_legacy_relation_behavior_is_unchanged_and_has_no_new_fields():
+    behavior = {'name': '谈及熟人', 'trigger': '聊到她熟的人', 'requires_third_party': True}
+    client = _Client(_understood_response(behavior='谈及熟人'))
+    result = await routing.classify_l3(client, '原话', '', [behavior])
+    assert result == {**EMPTY, 'behavior': '谈及熟人'}
+    assert 'understanding' not in client.calls[0]['messages'][0]['content']
+    assert client.calls[0]['max_tokens'] == 420
+
+
+def test_relation_requirements_live_in_behavior_data():
+    from src.plugins.chatbot.persona import load_persona_rules
+    rules = {row['name']: row for row in load_persona_rules()}
+    for name in ('能嘴熟络同期是亲近', '被套话点名排名他人时端水'):
+        assert rules[name]['requires_third_party'] is True
