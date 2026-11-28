@@ -321,6 +321,17 @@ class TestCleanWav:
         v._clean_wav(p)
         assert _dur(p) >= 1.9
 
+    def test_shortens_only_a_long_gap_after_opening_interjection(self, tmp_path):
+        p = tmp_path / "opening.wav"
+        _write_wav(p, [("tone", 0.3), ("silence", 1.2), ("tone", 0.7),
+                       ("silence", 1.0), ("tone", 0.5)])
+
+        speech, total = v._clean_wav(p, check_opening_interjection=True)
+
+        assert speech == pytest.approx(1.5)
+        assert total == pytest.approx(2.8, abs=0.05)
+        assert v._clean_wav(p, check_opening_interjection=True) == (speech, total)
+
     def test_all_silence_untouched(self, tmp_path):
         p = tmp_path / "x.wav"
         dur = _write_wav(p, [("silence", 1.0)])
@@ -802,13 +813,32 @@ class TestSynthesize:
         assert await v._synthesize(text)
         assert [payload["text"] for payload in box["json"]] == [text, retry_text]
 
+    @pytest.mark.parametrize("profile,reply,attempts", [
+        ("v5-turbo", "诶，等一下……你刚刚是不是在逗我呀？", 2),
+        ("v5-turbo", "诶……等一下，你刚刚是不是在逗我呀？", 1),
+        ("v2", "诶，等一下……你刚刚是不是在逗我呀？", 1),
+    ])
+    async def test_opening_interjection_drawl_retries(self, voice_env, monkeypatch, profile, reply, attempts):
+        monkeypatch.setenv("SOVITS_PROFILE", profile)
+        drawl = [("tone", 1.25), ("silence", 1.2), ("tone", 2.2)]
+        normal = [("tone", 0.35), ("silence", 0.3), ("tone", 2.2)]
+        box = _fake_httpx(monkeypatch, [_wav_bytes(drawl), _wav_bytes(normal)])
+
+        out = await v._synthesize(reply)
+        assert out
+        assert [payload["text"] for payload in box["json"]] == [reply] * attempts
+        if attempts == 2:
+            assert Path(out) != _cache_path(reply)
+            assert await v._synthesize(reply) == out
+            assert box["n"] == attempts
+
     async def test_retries_when_result_hollow(self, voice_env, monkeypatch):
         """回归（2026-10-11 的 bug）：结果"有效语音够、总长被撑爆"时旧代码提前 break ——
 
         `best_sec >= need` 只看了一半（漏了 total），于是第 2 次循环一进来就收工，
         **重试从来没真正发生过**。这里把清理结果钉成空洞，要求三次都得试。
         """
-        monkeypatch.setattr(v, "_clean_wav", lambda p: (4.0, 30.0))
+        monkeypatch.setattr(v, "_clean_wav", lambda p, **kwargs: (4.0, 30.0))
         box = _fake_httpx(monkeypatch, [b"a", b"b", b"c"])
         await v._synthesize(_LONG)
         assert box["n"] == 3, "空洞结果必须继续重试，不能提前收工"

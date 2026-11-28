@@ -427,10 +427,14 @@ def _chain_layers(global_config, prefix=""):
     prefix（2026-10-29）：`"aux_"` 时读的是 `AUX_API_*` / `AUX_FALLBACK*` 那一套，
     给辅助调用单独拼一条链（主链是 deepseek，辅助链是 gemini，分开才不互相影响）。
     """
-    primary_client = _mk_client(
-        getattr(global_config, f"{prefix or 'openai_'}api_key", None) or "missing",
-        getattr(global_config, f"{prefix or 'openai_'}api_base", DEEPSEEK_BASE_URL),
-    )
+    api_key = getattr(global_config, f"{prefix or 'openai_'}api_key", None) or "missing"
+    api_base = getattr(global_config, f"{prefix or 'openai_'}api_base", DEEPSEEK_BASE_URL)
+    if prefix == "reply_" and str(api_base).rstrip("/") == "https://u-ai.me/v1beta":
+        from .gemini_native import GeminiNativeClient
+
+        primary_client = GeminiNativeClient(api_base, api_key, timeout=LLM_TIMEOUT_SEC)
+    else:
+        primary_client = _mk_client(api_key, api_base)
     layers = [(primary_client, None, "")]      # model=None = 用调用方传进来的那个（= 那个模型的模型名）
     for m in str(getattr(global_config, f"{prefix or 'openai_'}llm_fallback_models", "") or "").split(","):
         m = m.strip()
@@ -581,10 +585,9 @@ def _get_reply_clients():
         return _reply_clients_cache
     _global_config = get_driver().config
     zhipu_api_key = getattr(_global_config, "zhipu_api_key", None)
+    layers = _chain_layers(_global_config, prefix="reply_")
     _reply_clients_cache = (
-        _ClientProxy(_mk_client(getattr(_global_config, "reply_api_key", None),
-                                getattr(_global_config, "reply_api_base", DEEPSEEK_BASE_URL)),
-                     _chain_layers(_global_config, prefix="reply_")),
+        _ClientProxy(layers[0][0], layers),
         _mk_client(zhipu_api_key, ZHIPU_BASE_URL) if zhipu_api_key else None,
     )
     return _reply_clients_cache

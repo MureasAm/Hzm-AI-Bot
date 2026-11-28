@@ -644,10 +644,15 @@ _STYLE_BARE_AGREEMENT_RE = re.compile(
 )
 _STYLE_REDUNDANT_ADMISSION_RE = re.compile(
     rf"(?P<fact>[^，,。！？!?；;：:\r\n…]+)(?P<extra>[，,][ \t]*{_STYLE_ACTOR}认(?:了|下了)?)"
-    r"(?=[，,][ \t]*(?:但|不过|只是))", re.IGNORECASE,
+    r"(?=$|[。！!\r\n]|[，,][ \t]*(?:但|不过|只是))", re.IGNORECASE,
 )
 _STYLE_CONFIRMED_OWNERSHIP_RE = re.compile(
     rf"(?<![不没])是[ \t]*{_STYLE_ACTOR}(?:自己|亲口)?(?:说|讲|提|定|写|发|做|答应)的[ \t]*$",
+    re.IGNORECASE,
+)
+_STYLE_CONFIRMED_SELF_CORRECTION_RE = re.compile(
+    rf"(?:{_STYLE_ACTOR}[ \t]*(?:刚才|刚刚|前面)?|(?:刚才|刚刚|前面)[ \t]*{_STYLE_ACTOR}?)"
+    r"[ \t]*(?:其实|确实)?(?:就是|只是|是)?[ \t]*(?:嘴硬(?:了|一下)?|口误|(?:说|记|弄|看|听|算)?错了)",
     re.IGNORECASE,
 )
 _STYLE_UNCERTAIN_CLAIM_RE = re.compile(r"可能|也许|大概|好像|是不是|不确定|不知道|难道|如果|就算|你(?:以为|觉得)")
@@ -721,8 +726,10 @@ def _style_explicitly_requested(pattern: re.Pattern, context: str) -> bool:
 
 def _redundant_admission_spans(text: str):
     for match in _STYLE_REDUNDANT_ADMISSION_RE.finditer(text):
-        fact = match.group("fact")
-        if _STYLE_CONFIRMED_OWNERSHIP_RE.search(fact) and not _STYLE_UNCERTAIN_CLAIM_RE.search(fact):
+        fact = match.group("fact").strip()
+        if _STYLE_UNCERTAIN_CLAIM_RE.search(fact):
+            continue
+        if _STYLE_CONFIRMED_OWNERSHIP_RE.search(fact) or _STYLE_CONFIRMED_SELF_CORRECTION_RE.fullmatch(fact):
             yield match.span("extra")
 
 

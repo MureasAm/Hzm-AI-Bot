@@ -12,7 +12,7 @@
 
 ## 一些功能与特点
 
-当前项目版本：**V13（2026-11-28）**。
+当前项目版本：**V13.1（2026-11-29）**。
 
 自 2026 年 9 月起，她一直在真实的 QQ 环境里运行：日志覆盖 47 天、约 4.4 万轮对话。
 
@@ -56,7 +56,7 @@ Tips：此处的模型呈现只是暂时参考，为了考虑成本和质量会�
 |:---|:---|
 | 机器人框架 | NoneBot2 + OneBot V11 |
 | QQ 接入 | NapCatQQ |
-| 主链模型 | apigoto `deepseek-flash` → apigoto `glm-5.3-flash` → DeepSeek 官方 |
+| 主回复模型 | `REPLY_*` 可独立配置；支持指定中转的 Gemini 原生接口，保留 HTTP 失败降级 |
 | 辅助链 | apigoto `glm-5.3-flash` → DeepSeek 官方 |
 | 视觉模型 | apigoto `glm-5.3-flash` |
 | Embedding | 智谱 `embedding-3` |
@@ -104,7 +104,7 @@ Tips：人格蒸馏的处理主要在前期，目前还在稳定功能与提高�
 
 ```
 bot.py                  # 启动入口
-src/plugins/chatbot/    # 运行时核心（48 个模块）
+src/plugins/chatbot/    # 运行时核心（49 个模块）
   core / chat_window / retrieval / routing / injection_registry
   memory_v2 / event_memory / daily_memory / session_memory / group_memory
   context_probe / vision / voice / bili_bridge / weibo_bridge / proactive
@@ -145,6 +145,7 @@ docs/                   # 6 份正文 + 历史存档区
 | V11.1 | 主回复模型链可独立配置；周表 OCR 和定时提醒；私聊历史默认使用原生对话轮次（11-14 ~ 11-19） |
 | V12 | 检索按原文证据筛选；减少迟到示例复读；私聊点唱与两种发送方式；公开样例脱敏（11-26） |
 | V13 | 统一理解本轮谈的是谁、要什么，再决定资料能怎么用；完善原话回查、提醒交付状态、点歌续选和语音合成。（11-28） |
+| V13.1 | 主回复支持指定 Gemini 原生线路，减少 V5 Turbo 开头语气词异常停顿，收窄重复认错文案清理。（11-29） |
 
 ## 最后
 让模型角色扮演一个正在角色扮演的人，有一点点很好笑的感觉

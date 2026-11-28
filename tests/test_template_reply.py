@@ -113,11 +113,23 @@ async def test_removes_redundant_admission_after_stated_fact_without_extra_call(
     assert calls == []
 
 
+async def test_removes_only_trailing_duplicate_admission_without_extra_call(monkeypatch):
+    calls = _mock_reply_client(monkeypatch, None)
+    draft = "现在没开播，刚才是嘴硬，灰泽满认了。[[语音]]"
+
+    reply = await core._maybe_rewrite_template_reply([], draft, "看页面你刚才确实没在播啊。", recent_bot=())
+
+    assert reply == "现在没开播，刚才是嘴硬。[[语音]]"
+    assert calls == []
+
+
 @pytest.mark.parametrize(("draft", "user_text"), [
     ("四点可能是我说的，我认，但我先翻翻记录。", "刚才是你说的吗？"),
     ("四点不是我说的，我认，但那份表是我发的。", "你刚才说的？"),
     ("四点是我说的，我认，但还得等对面确定。", "这次四点你认不认？"),
     ("那我认，但这个时间我记得很清楚。", "你怎么看？"),
+    ("好吧，这局灰泽满认输了。", "骰子你输了喔。"),
+    ("没在播，刚才是嘴硬，灰泽满认了。", "嘴硬你认不认？"),
 ])
 def test_substantive_admissions_keep_their_function(draft, user_text):
     assert not reply_style.template_reply_reason(draft, user_text)

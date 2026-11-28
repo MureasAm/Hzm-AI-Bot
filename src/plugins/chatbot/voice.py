@@ -381,12 +381,13 @@ def _wav_duration(wav_path: Path) -> float:
         return 0.0
 
 
-def _clean_wav(wav_path: Path) -> tuple[float, float]:
+def _clean_wav(wav_path: Path, *, check_opening_interjection: bool = False) -> tuple[float, float]:
     """就地清理刚合成的 wav，并回报质量：**裁掉首尾静音 + 压掉句中超长空洞**。
 
     返回 (有效语音秒数, 不含额外尾音保护区的时长)。额外边距不计入完整度判定。
     格式不符 / 整段无声 → 原样不动（宁可发原件，
     也不能把语音裁没）；解析失败返回 (0.0, 原总长)。
+    V5 的「诶，」开头会缩短第一处过长空白。单独的片头拖音返回 (0.0, 0.0) 触发重试。
 
     坏合成有两种形态，这里一起治：
     - "说两句 + 十几秒空尾"（首尾裁剪治它）；
@@ -416,8 +417,19 @@ def _clean_wav(wav_path: Path) -> tuple[float, float]:
             while j <= last and not loud[j]:
                 j += 1
             gap_lo, gap_hi = wins[i][0], wins[j - 1][1]
-            half = int(rate * _GAP_KEEP_SEC / 2)
-            if gap_hi - gap_lo >= rate * _GAP_SEC and gap_lo + half < gap_hi - half:
+            gap_sec = (gap_hi - gap_lo) / rate
+            cut_gap = gap_sec >= _GAP_SEC
+            keep_sec = _GAP_KEEP_SEC
+            if check_opening_interjection and gap_sec >= 0.25:
+                check_opening_interjection = False
+                opening_sec = (gap_lo - wins[first][0]) / rate
+                # 只看开头短有声段后的第一个停顿。已有样本的拖音段约 1.25 秒，后接 1.3 秒空白。
+                if 0.9 <= opening_sec <= 2.0 and gap_sec >= 0.50:
+                    return 0.0, 0.0
+                if opening_sec <= 0.70 and gap_sec >= 0.65:
+                    cut_gap, keep_sec = True, 0.30
+            half = int(rate * keep_sec / 2)
+            if cut_gap and gap_lo + half < gap_hi - half:
                 keeps.append((cur, gap_lo + half))
                 cur = gap_hi - half
             i = j
@@ -570,16 +582,19 @@ async def _synthesize(reply_text: str, deadline: float | None = None) -> str | N
     # 短句参考用独立前缀。旧 WAV 已裁掉的轻尾音无法恢复，新目录按需重合成。
     pool = _ref_pool(reply_text)
     ref_path = pool[0] if pool else None
-    h = hashlib.md5(text.encode("utf-8")).hexdigest()
     stem = "voice_short" if ref_path is not None and ref_path.stem == "ref_short" else "voice"
     use_turbo = get_flag("SOVITS_PROFILE", "v5-turbo") != "v2"
+    # 用原文区分普通逗号和有意加长的破折号、问号或省略号。
+    check_opening_interjection = use_turbo and bool(re.match(r"^\s*[诶欸][，,]\s*[一-鿿]", reply_text))
+    cache_key = f"opening-interjection\0{text}" if check_opening_interjection else text
+    h = hashlib.md5(cache_key.encode("utf-8")).hexdigest()
     cache_dir = VOICE_CACHE_DIR / "v5-turbo" if use_turbo else VOICE_CACHE_DIR
     cached = cache_dir / "tail-v2" / f"{stem}_{h}.wav"
     expect = _expect_seconds(text)
     if cached.exists():
         # 缓存读回**必须复检**：不然历史坏条子（空洞/截断，3400+ 个文件里的那些）
         # 会被永久复用。复检顺手清一遍（幂等），不合格就重合成、覆盖它。
-        sec, total = _clean_wav(cached)
+        sec, total = _clean_wav(cached, check_opening_interjection=check_opening_interjection)
         if (_is_acceptable(sec, total, expect, len(text))
                 and _peak_amplitude(cached) >= _SILENT_PEAK):
             return str(cached)
@@ -633,7 +648,7 @@ async def _synthesize(reply_text: str, deadline: float | None = None) -> str | N
                 with TemporaryDirectory(dir=cached.parent) as scratch:
                     candidate = Path(scratch) / "candidate.wav"
                     candidate.write_bytes(resp.content)
-                    sec, total = _clean_wav(candidate)
+                    sec, total = _clean_wav(candidate, check_opening_interjection=check_opening_interjection)
                     peak = _peak_amplitude(candidate)
                     if peak >= _SILENT_PEAK and _is_acceptable(sec, total, expect, len(text)):
                         os.replace(candidate, cached)

@@ -477,6 +477,30 @@ class TestChainLayerBuilding:
         assert layers[2][3] is None
 
 
+class TestNativeReplyChain:
+    def test_uai_native_is_scoped_to_reply_primary(self):
+        from src.plugins.chatbot.gemini_native import GeminiNativeClient
+
+        profile = SimpleNamespace(
+            reply_api_base="https://u-ai.me/v1beta",
+            reply_api_key="reply-key",
+            reply_model="gemini-3.1-flash-lite",
+            reply_fallback1_api_base="https://s3.ink/v1",
+            reply_fallback1_api_key="fallback-key",
+            reply_fallback1_model="deepseek-v4.1-flash",
+            aux_api_base="https://u-ai.me/v1",
+            aux_api_key="aux-key",
+            aux_model="gemini-3.1-flash-lite",
+        )
+        first, fallback = config._chain_layers(profile, prefix="reply_")
+        assert isinstance(first[0], GeminiNativeClient)
+        assert first[2] == "gemini-3.1-flash-lite（u-ai.me）"
+        assert str(fallback[0].base_url).rstrip("/") == "https://s3.ink/v1"
+        assert fallback[1] == "deepseek-v4.1-flash"
+        (aux,) = config._chain_layers(profile, prefix="aux_")
+        assert not isinstance(aux[0], GeminiNativeClient)
+
+
 class TestServedByIsVisible:
     """三个端点之后，**日志和账本必须看得出这轮是哪个站答的**（2026-10-15）。
 
